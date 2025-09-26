@@ -4,12 +4,13 @@ require("dotenv").config();
 const sendEmail = async ({ to, subject, text, html, attachments }) => {
   try {
     const transporter = nodemailer.createTransport({
-      host: "smtp.hostinger.com", // 👈 likely SMTP for cPanel
-      port: 465,
-      secure: true, // true for 465 (SSL), false for 587 (TLS)
+      service: "gmail",
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false,
       },
     });
 
