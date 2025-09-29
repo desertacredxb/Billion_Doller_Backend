@@ -1,7 +1,8 @@
 const axios = require("axios");
 
-// Commission rates per symbol
+// Commission rates per symbol (in USD per lot)
 const COMMISSION_RATES = {
+  // Forex Majors
   EURUSD: 2,
   GBPUSD: 2,
   USDJPY: 2,
@@ -28,10 +29,22 @@ const COMMISSION_RATES = {
   NZDCAD: 2,
   NZDCHF: 2,
   CHFJPY: 2,
+
+  // Metals
   XAUUSD: 2.7,
   XAGUSD: 20,
+
+  // Crypto Perpetuals
+  BTCUSDPERP: 3,
+  ADAUSDPERP: 2,
+  BNBUSDPERP: 1,
+  ETHUSDPERP: 1,
+  SOLUSDPERP: 1,
+  SUIUSDPERP: 1,
+  XRPUSDPERP: 1,
 };
 
+// Broker’s share percentage
 const IB_SHARE_PERCENTAGE = 0.33;
 
 /**
