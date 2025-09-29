@@ -2,6 +2,7 @@
 const IB = require("../models/Broker.model");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
+const { calculateClientCommission } = require("../utils/commissionService");
 
 /**
  * 📌 Register IB Request (User Side)
@@ -220,10 +221,65 @@ const referralCode = async (req, res) => {
   }
 };
 
+/**
+ * Update IB commission for all their clients
+ */
+const updateIBCommission = async (req, res) => {
+  const { ibId, sdate, edate } = req.body;
+
+  if (!ibId || !sdate || !edate) {
+    return res
+      .status(400)
+      .json({ success: false, message: "ibId, sdate, edate required" });
+  }
+
+  try {
+    // Find IB in IB collection
+    const ib = await IB.findById(ibId);
+    if (!ib || ib.status !== "approved") {
+      return res
+        .status(404)
+        .json({ success: false, message: "IB not found or not approved" });
+    }
+
+    // Find all clients referred by this IB
+    const clients = await User.find({ referredBy: ibId });
+
+    let totalCommissionEarned = 0;
+
+    for (const client of clients) {
+      const clientCommission = await calculateClientCommission(
+        client.accountNumber,
+        sdate,
+        edate
+      );
+
+      if (clientCommission > 0) {
+        totalCommissionEarned += clientCommission;
+      }
+    }
+
+    // Update IB's share (optional)
+    ib.yourShare += totalCommissionEarned;
+    await ib.save();
+
+    res.status(200).json({
+      success: true,
+      message: "IB commission updated successfully",
+      totalCommissionAdded: totalCommissionEarned,
+      currentYourShare: ib.yourShare,
+    });
+  } catch (err) {
+    console.error("Error updating IB commission:", err.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 module.exports = {
   registerIB,
   getAllIBRequests,
   approveIBByEmail,
   rejectIBByEmail,
   referralCode,
+  updateIBCommission,
 };

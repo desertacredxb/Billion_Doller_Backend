@@ -7,6 +7,7 @@ const {
   approveIBByEmail,
   rejectIBByEmail,
   referralCode,
+  updateIBCommission,
 } = require("../controllers/ibController");
 
 // User side
@@ -17,5 +18,6 @@ router.get("/", getAllIBRequests);
 router.put("/:email/approve", approveIBByEmail);
 router.put("/:email/reject", rejectIBByEmail);
 router.get("/:email", referralCode);
+router.post("/update-commission", updateIBCommission);
 
 module.exports = router;
