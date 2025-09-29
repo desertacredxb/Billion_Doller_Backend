@@ -176,3 +176,99 @@ exports.addBalance = async (req, res) => {
     });
   }
 };
+
+exports.getTransactions = async (req, res) => {
+  const { accountno, sdate, edate } = req.body;
+
+  if (!accountno || !sdate || !edate) {
+    return res.status(400).json({
+      success: false,
+      message: "accountno, sdate, and edate are required",
+    });
+  }
+
+  try {
+    const { data } = await axios({
+      method: "post",
+      url: "https://api.moneyplantfx.com/WSMoneyplant.aspx",
+      params: {
+        type: "SNDPTransaction",
+      },
+      headers: {
+        "Content-Type": "application/json",
+      },
+      data: {
+        accountno,
+        sdate,
+        edate,
+      },
+    });
+
+    if (data.response === "failed") {
+      return res.status(400).json({
+        success: false,
+        message: data.message || "No transaction data found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: data.message,
+      data: data.data,
+    });
+  } catch (error) {
+    console.error("Get Transactions error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong while fetching transactions.",
+    });
+  }
+};
+
+exports.getDeals = async (req, res) => {
+  const { accountno, sdate, edate } = req.body;
+
+  if (!accountno || !sdate || !edate) {
+    return res.status(400).json({
+      success: false,
+      message: "accountno, sdate, and edate are required",
+    });
+  }
+
+  try {
+    const { data } = await axios({
+      method: "post",
+      url: "https://api.moneyplantfx.com/WSMoneyplant.aspx",
+      params: {
+        type: "SNDPDeal",
+      },
+      headers: {
+        "Content-Type": "application/json",
+      },
+      data: {
+        accountno,
+        sdate,
+        edate,
+      },
+    });
+
+    if (data.response === "failed") {
+      return res.status(400).json({
+        success: false,
+        message: data.message || "No deals found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: data.message,
+      data: data.data,
+    });
+  } catch (error) {
+    console.error("Get Deals error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong while fetching deals.",
+    });
+  }
+};
