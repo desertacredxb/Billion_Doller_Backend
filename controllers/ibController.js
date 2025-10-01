@@ -3,6 +3,7 @@ const IB = require("../models/Broker.model");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const { calculateClientCommission } = require("../utils/commissionService");
+const axios = require("axios");
 
 /**
  * 📌 Register IB Request (User Side)
