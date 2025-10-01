@@ -225,25 +225,25 @@ const referralCode = async (req, res) => {
  * Update IB commission for all their clients
  */
 const updateIBCommission = async (req, res) => {
-  const { ibId, sdate, edate } = req.body;
+  const { email, sdate, edate } = req.body;
 
-  if (!ibId || !sdate || !edate) {
+  if (!email || !sdate || !edate) {
     return res
       .status(400)
-      .json({ success: false, message: "ibId, sdate, edate required" });
+      .json({ success: false, message: "email, sdate, edate required" });
   }
 
   try {
-    // Find IB in IB collection
-    const ib = await IB.findById(ibId);
-    if (!ib || ib.status !== "approved") {
+    // Find IB in User collection
+    const ib = await User.findOne({ email }); // Assuming IB is also a User
+    if (!ib || !ib.isApprovedIB) {
       return res
         .status(404)
         .json({ success: false, message: "IB not found or not approved" });
     }
 
     // Find all clients referred by this IB
-    const clients = await User.find({ referredBy: ibId });
+    const clients = await User.find({ referredBy: email });
 
     let totalCommissionEarned = 0;
 
@@ -259,15 +259,14 @@ const updateIBCommission = async (req, res) => {
       }
     }
 
-    // Update IB's share (optional)
-    ib.yourShare += totalCommissionEarned;
+    // Update IB's commission field in User model
+    ib.commission = totalCommissionEarned;
     await ib.save();
 
     res.status(200).json({
       success: true,
       message: "IB commission updated successfully",
-      totalCommissionAdded: totalCommissionEarned,
-      currentYourShare: ib.yourShare,
+      totalCommission: ib.commission,
     });
   } catch (err) {
     console.error("Error updating IB commission:", err.message);
