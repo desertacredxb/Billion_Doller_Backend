@@ -224,6 +224,7 @@ const referralCode = async (req, res) => {
 /**
  * Update IB commission for all their clients
  */
+
 const updateIBCommission = async (req, res) => {
   const { email, sdate, edate } = req.body;
 
@@ -234,39 +235,59 @@ const updateIBCommission = async (req, res) => {
   }
 
   try {
-    // Find IB in User collection
-    const ib = await User.findOne({ email }); // Assuming IB is also a User
-    if (!ib || !ib.isApprovedIB) {
+    // 1️⃣ Find the IB record
+    const ibRecord = await IB.findOne({ email });
+    if (!ibRecord) {
       return res
         .status(404)
-        .json({ success: false, message: "IB not found or not approved" });
+        .json({ success: false, message: "IB record not found" });
     }
 
-    // Find all clients referred by this IB
-    const clients = await User.find({ referredBy: email });
+    const referralCode = ibRecord.referralCode;
+    if (!referralCode) {
+      return res
+        .status(400)
+        .json({ success: false, message: "IB does not have a referral code" });
+    }
 
+    // 2️⃣ Find all users with the same referral code and populate accounts
+    const clients = await User.find({ referralCode }).populate("accounts");
+    console.log(`Found ${clients.length} clients for IB ${email}`);
+
+    // 3️⃣ Calculate total commission
     let totalCommissionEarned = 0;
 
     for (const client of clients) {
-      const clientCommission = await calculateClientCommission(
-        client.accountNumber,
-        sdate,
-        edate
-      );
+      if (!client.accounts || client.accounts.length === 0) continue;
 
-      if (clientCommission > 0) {
-        totalCommissionEarned += clientCommission;
+      for (const acc of client.accounts) {
+        const clientCommission = await calculateClientCommission(
+          acc.accountNo, // Use account number from populated Account
+          sdate,
+          edate
+        );
+
+        if (clientCommission > 0) {
+          totalCommissionEarned += clientCommission;
+        }
       }
     }
 
-    // Update IB's commission field in User model
-    ib.commission = totalCommissionEarned;
-    await ib.save();
+    // 4️⃣ Update IB's commission in User model
+    const ibUser = await User.findOne({ email });
+    if (!ibUser) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User record for IB not found" });
+    }
+
+    ibUser.commission = totalCommissionEarned;
+    await ibUser.save();
 
     res.status(200).json({
       success: true,
       message: "IB commission updated successfully",
-      totalCommission: ib.commission,
+      totalCommission: ibUser.commission,
     });
   } catch (err) {
     console.error("Error updating IB commission:", err.message);
