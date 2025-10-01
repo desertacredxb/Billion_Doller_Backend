@@ -224,7 +224,6 @@ const referralCode = async (req, res) => {
 /**
  * Update IB commission for all their clients
  */
-
 const updateIBCommission = async (req, res) => {
   const { email, sdate, edate } = req.body;
 
@@ -295,6 +294,75 @@ const updateIBCommission = async (req, res) => {
   }
 };
 
+const withdrawCommission = async (req, res) => {
+  try {
+    const { email, accountno, amount, orderid } = req.body;
+
+    if (!email || !accountno || !amount || !orderid) {
+      return res.status(400).json({
+        success: false,
+        message: "email, accountno, amount, and orderid are required",
+      });
+    }
+
+    orderid = "ORD" + Date.now();
+
+    // 🔹 Get the user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    // 🔹 Check commission balance
+    if (user.commission < 75) {
+      return res.status(400).json({
+        success: false,
+        message: "Minimum $75 commission required to withdraw",
+      });
+    }
+
+    if (amount > user.commission) {
+      return res.status(400).json({
+        success: false,
+        message: "Withdrawal amount exceeds available commission",
+      });
+    }
+
+    // 🔹 Call MoneyPlant FX API to add balance
+    const response = await axios.post(
+      "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+      { accountno, amount, orderid },
+      { headers: { "Content-Type": "application/json" } }
+    );
+
+    const { response: status, message } = response.data;
+
+    if (status === "success") {
+      // 🔹 Deduct commission and save withdrawal date
+      user.commission -= amount;
+      user.lastWithdrawalDate = new Date();
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Withdrawal successful",
+        newCommission: user.commission,
+        lastWithdrawalDate: user.lastWithdrawalDate,
+      });
+    } else {
+      return res.status(400).json({ success: false, message });
+    }
+  } catch (error) {
+    console.error("Commission withdrawal error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong. Please try again later.",
+    });
+  }
+};
+
 module.exports = {
   registerIB,
   getAllIBRequests,
@@ -302,4 +370,5 @@ module.exports = {
   rejectIBByEmail,
   referralCode,
   updateIBCommission,
+  withdrawCommission,
 };

@@ -23,6 +23,7 @@ const userSchema = new mongoose.Schema(
     referralCode: { type: String },
     isApprovedIB: { type: Boolean, default: false },
     commission: { type: Number, default: 0 }, // Total commission earned by IB
+    lastWithdrawalDate: { type: Date, default: null },
     otp: { type: String, default: null },
     otpExpires: { type: Date, default: null },
     isVerified: { type: Boolean, default: false },
