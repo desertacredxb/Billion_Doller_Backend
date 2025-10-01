@@ -301,7 +301,7 @@ const withdrawCommission = async (req, res) => {
     if (!email || !accountno || !amount) {
       return res.status(400).json({
         success: false,
-        message: "email, accountno, amount, and orderid are required",
+        message: "email, accountno and amount are required",
       });
     }
 
@@ -358,7 +358,7 @@ const withdrawCommission = async (req, res) => {
     console.error("Commission withdrawal error:", error.message);
     return res.status(500).json({
       success: false,
-      message: "Something went wrong. Please try again later.",
+      message: error.message,
     });
   }
 };
