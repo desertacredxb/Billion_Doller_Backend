@@ -296,9 +296,9 @@ const updateIBCommission = async (req, res) => {
 
 const withdrawCommission = async (req, res) => {
   try {
-    const { email, accountno, amount, orderid } = req.body;
+    const { email, accountno, amount } = req.body;
 
-    if (!email || !accountno || !amount || !orderid) {
+    if (!email || !accountno || !amount) {
       return res.status(400).json({
         success: false,
         message: "email, accountno, amount, and orderid are required",
