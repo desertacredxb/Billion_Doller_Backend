@@ -95,7 +95,18 @@ const registerIB = async (req, res) => {
 const getAllIBRequests = async (req, res) => {
   try {
     const ibRequests = await IB.find().sort({ createdAt: -1 });
-    res.json(ibRequests);
+    // Attach commission from User schema
+    const result = await Promise.all(
+      ibRequests.map(async (ib) => {
+        const user = await User.findOne({ email: ib.email }, "commission");
+        return {
+          ...ib.toObject(),
+          commission: user ? user.commission : null, // add commission field
+        };
+      })
+    );
+
+    res.json(result);
   } catch (err) {
     console.error("❌ Error fetching IB requests:", err);
     res.status(500).json({ message: "Server error" });
