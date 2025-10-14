@@ -8,7 +8,7 @@ const Account = require("../models/account.model"); // Ensure you import Account
 
 exports.handlePaymentCallback = async (req, res) => {
   try {
-    const txn = req.body.transaction; // ✅ correct structure
+    const txn = req.body.transaction;
 
     if (!txn || !txn.id) {
       return res
@@ -16,7 +16,7 @@ exports.handlePaymentCallback = async (req, res) => {
         .json({ success: false, message: "Invalid callback data" });
     }
 
-    // 1. Check if transaction already processed
+    // 1️⃣ Check if transaction already processed
     const existing = await Transaction.findOne({ transactionId: txn.id });
     if (existing) {
       return res
@@ -24,7 +24,7 @@ exports.handlePaymentCallback = async (req, res) => {
         .json({ success: true, message: "Duplicate callback ignored" });
     }
 
-    // 2. Save transaction
+    // 2️⃣ Save transaction
     const transaction = new Transaction({
       transactionId: txn.id,
       status: txn.status,
@@ -45,41 +45,88 @@ exports.handlePaymentCallback = async (req, res) => {
 
     await transaction.save();
 
-    // 3. If payment is completed, call MoneyPlant API
+    // 3️⃣ If payment is completed, proceed
     if (txn.status === "completed") {
-      const accountno = txn.merchant_user_id; // maps to trading accountno
-      const amount = Number(txn.amount);
-      const orderid = "ORD" + Date.now().toString().slice(-10); // <=16 char
+      const accountno = txn.merchant_user_id;
+      const amountINR = Number(txn.amount);
+      const orderid = "ORD" + Date.now().toString().slice(-10);
+
+      // 💱 Convert INR → USD
+      const usdRate = await fetchRate();
+      const amountUSD = (amountINR * usdRate).toFixed(2);
+
+      console.log(
+        `💱 Converted ₹${amountINR} → $${amountUSD} (rate ${usdRate})`
+      );
 
       try {
+        // 4️⃣ Update balance in MoneyPlant API
         const mpResponse = await axios.post(
           "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-          { accountno, amount, orderid },
+          { accountno, amount: amountUSD, orderid },
           { headers: { "Content-Type": "application/json" } }
         );
 
+        console.log("💰 MoneyPlant Response:", mpResponse.data);
+
+        // 5️⃣ Send confirmation email
+        const account = await Account.findOne({
+          accountNo: accountno,
+        }).populate("user");
+
+        if (account) {
+          await sendEmail({
+            to: account.user.email,
+            subject: "Deposit Successful - Balance Updated",
+            html: `
+              <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+                <p>Dear ${account.user.fullName || "Customer"},</p>
+                <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg" 
+                     alt="Deposit Confirmed" 
+                     style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+                <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
+
+                <p><strong>Transaction Details:</strong></p>
+                <ul>
+                  <li><strong>Order ID:</strong> ${orderid}</li>
+                  <li><strong>Amount Deposited:</strong> ₹${amountINR} (≈ $${amountUSD})</li>
+                  <li><strong>Status:</strong> Successful</li>
+                  <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
+                </ul>
+
+                <p>The amount has been credited to your trading account <strong>${accountno}</strong>.</p>
+                <p>If you did not initiate this transaction, please contact our support team immediately.</p>
+
+                <br/>
+                <p>Best Regards,<br/>The Support Team</p>
+              </div>
+            `,
+          });
+        }
+
         return res.status(200).json({
           success: true,
-          message: "Transaction saved and balance updated",
+          message: "Transaction saved, balance updated, and email sent",
           moneyplant: mpResponse.data,
         });
       } catch (err) {
-        console.error("MoneyPlant AddBalance error:", err.message);
+        console.error("❌ MoneyPlant or Email Error:", err.message);
         return res.status(500).json({
           success: false,
-          message: "Transaction saved but balance update failed",
+          message: "Transaction saved but post-processing failed",
           error: err.message,
         });
       }
     }
 
-    // 4. If not completed
+    // 6️⃣ If not completed
     return res.status(200).json({
       success: true,
       message: "Transaction saved but payment not completed",
     });
   } catch (error) {
-    console.error("Error in callback:", error);
+    console.error("❌ Callback Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
