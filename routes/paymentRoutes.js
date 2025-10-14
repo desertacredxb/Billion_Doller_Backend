@@ -50,7 +50,7 @@ router.post("/deposit", async (req, res) => {
     }
 
     // Generate unique txn ID (<= 20 chars recommended for some systems)
-    const merchant_txn_id = "TRXN" + Date.now();
+    const merchant_txn_id = "ORDDP" + Date.now();
 
     const response = await axios.post(
       "https://digipay247.pgbackend.xyz/payin/generate",
@@ -97,7 +97,7 @@ router.post("/ramee/deposit", async (req, res) => {
     }
 
     // 1️⃣ Generate unique orderid
-    const orderid = "ORD" + Date.now();
+    const orderid = "ORDRP" + Date.now();
 
     // 2️⃣ Find account (to save reference)
     const account = await Account.findOne({ accountNo });
