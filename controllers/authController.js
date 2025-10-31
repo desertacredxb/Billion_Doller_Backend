@@ -702,3 +702,59 @@ exports.approveBankDetails = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// Reject user KYC manually (by admin)
+exports.rejectUserKyc = async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    // 1️⃣ Find the user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    // 2️⃣ Update KYC status
+    user.isKycVerified = false; // mark unverified
+    user.hasSubmittedDocuments = false; // reset submission flag
+    await user.save();
+
+    // 3️⃣ Send rejection email
+    await sendEmail({
+      to: user.email,
+      subject: "KYC Verification Rejected - Please Re-upload Documents",
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+          <h2 style="color: #d9534f;">KYC Verification Rejected</h2>
+          <p>Dear ${user.fullName || "User"},</p>
+          <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_Account_Rejected_Due_to_KYC_exjpm2.jpg" 
+               alt="KYC Rejected" 
+               style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+          
+          <p>We regret to inform you that your submitted KYC documents could not be verified successfully.</p>
+          <p>Please log in to your account and re-upload valid and clear documents for verification.</p>
+          <p>Once you re-upload, our team will review your documents within 24–48 hours.</p>
+          
+          <br/>
+          <p>Best regards,<br/>The Compliance Team</p>
+        </div>
+      `,
+    });
+
+    // 4️⃣ Respond to admin
+    res.json({
+      success: true,
+      message: `KYC for ${email} has been rejected and the user has been notified.`,
+      user: {
+        email: user.email,
+        fullName: user.fullName,
+        isKycVerified: user.isKycVerified,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Error rejecting user KYC:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
