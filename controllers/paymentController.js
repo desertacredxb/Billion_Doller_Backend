@@ -60,6 +60,14 @@ exports.handlePaymentCallback = async (req, res) => {
       );
 
       try {
+        const order = new Order({
+          accountNo: accountno,
+          orderid,
+          amount: amountINR,
+          status: "SUCCESS",
+        });
+        await order.save();
+
         // 4️⃣ Update balance in MoneyPlant API
         const mpResponse = await axios.post(
           "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
