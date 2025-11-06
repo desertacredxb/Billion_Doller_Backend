@@ -45,6 +45,13 @@ router.post("/deposit", async (req, res) => {
       });
     }
 
+    const account = await Account.findOne({ accountNo: merchant_user_id });
+    if (!account) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Account not found" });
+    }
+
     // Ensure valid token
     if (!DIGIPAY_TOKEN || Date.now() > TOKEN_EXPIRY) {
       await digiPayLogin();
@@ -74,6 +81,7 @@ router.post("/deposit", async (req, res) => {
       payment_url: response.data.data.url,
       transaction_id: response.data.data.transaction_id,
       merchant_txn_id, // helpful to return for client reference
+      name: account.user?.fullName || "Unknown",
     });
   } catch (err) {
     console.error("Deposit error:", err.response?.data || err.message);
