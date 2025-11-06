@@ -13,6 +13,7 @@ const Withdrawal = require("../models/withdrawal");
 const Account = require("../models/account.model");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
+const checkMargin = require("../middleware/checkMargin");
 
 router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
@@ -180,7 +181,7 @@ async function fetchRate() {
 const RAMEEPAY_WITHDRAWAL_API = "https://apis.rameepay.io/withdrawal/account";
 
 // Save withdrawal request as Pending
-router.post("/request", async (req, res) => {
+router.post("/request", checkMargin, async (req, res) => {
   try {
     const { account, ifsc, name, mobile, amount, note, accountNo } = req.body;
 
