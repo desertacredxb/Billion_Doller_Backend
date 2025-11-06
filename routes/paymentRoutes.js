@@ -34,6 +34,7 @@ async function digiPayLogin() {
 }
 
 // Deposit route
+// ✅ DIGIPAY Deposit Route
 router.post("/deposit", async (req, res) => {
   try {
     const { amount, merchant_user_id } = req.body;
@@ -45,43 +46,64 @@ router.post("/deposit", async (req, res) => {
       });
     }
 
-    const account = await Account.findOne({ accountNo: merchant_user_id });
+    // 1️⃣ Find account and populate user
+    const account = await Account.findOne({
+      accountNo: merchant_user_id,
+    }).populate("user", "fullName email");
     if (!account) {
       return res
         .status(404)
         .json({ success: false, message: "Account not found" });
     }
 
-    // Ensure valid token
+    // 2️⃣ Ensure valid token
     if (!DIGIPAY_TOKEN || Date.now() > TOKEN_EXPIRY) {
       await digiPayLogin();
     }
 
-    // Generate unique txn ID (<= 20 chars recommended for some systems)
+    // 3️⃣ Generate unique transaction/order id
     const merchant_txn_id = "ODP" + Date.now();
 
+    // 4️⃣ Create a new Order (before hitting DigiPay)
+    const newOrder = new Order({
+      orderid: merchant_txn_id,
+      account: account._id, // ✅ link to Account
+      accountNo: account.accountNo,
+      amount,
+      status: "PENDING",
+    });
+    await newOrder.save();
+
+    // 5️⃣ Call DigiPay API
     const response = await axios.post(
       "https://digipay247.pgbackend.xyz/payin/generate",
       {
-        gateway_id: 23, // or configurable
-        amount: parseInt(amount, 10), // ensure integer
+        gateway_id: 23, // configurable
+        amount: parseInt(amount, 10),
         merchant_txn_id,
         merchant_user_id,
       },
       {
-        headers: {
-          Authorization: `Bearer ${DIGIPAY_TOKEN}`,
-        },
+        headers: { Authorization: `Bearer ${DIGIPAY_TOKEN}` },
       }
     );
 
+    // 6️⃣ Return payment info
     return res.json({
+      success: true,
       status: response.data.status,
       message: response.data.message,
       payment_url: response.data.data.url,
       transaction_id: response.data.data.transaction_id,
-      merchant_txn_id, // helpful to return for client reference
-      name: account.user?.fullName || "Unknown",
+      merchant_txn_id,
+      order: {
+        orderid: newOrder.orderid,
+        amount: newOrder.amount,
+        status: newOrder.status,
+        createdAt: newOrder.createdAt,
+        accountNo: newOrder.accountNo,
+        name: account.user?.fullName || "Unknown", // ✅ name now works
+      },
     });
   } catch (err) {
     console.error("Deposit error:", err.response?.data || err.message);
