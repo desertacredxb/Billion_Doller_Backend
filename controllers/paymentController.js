@@ -49,7 +49,7 @@ exports.handlePaymentCallback = async (req, res) => {
     if (txn.status === "completed") {
       const accountno = txn.merchant_user_id;
       const amountINR = Number(txn.amount);
-      const orderid = "ORD" + Date.now().toString().slice(-10);
+      const orderid = txn.merchant_txn_id;
 
       // 💱 Convert INR → USD
       const usdRate = await fetchRate();
