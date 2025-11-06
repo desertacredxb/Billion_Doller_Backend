@@ -19,6 +19,7 @@ const {
   deleteUser,
   approveBankDetails,
   rejectUserKyc,
+  userByReferralCode,
 } = require("../controllers/authController");
 const upload = require("../middleware/cloudinaryUploader");
 
@@ -56,5 +57,6 @@ router.put("/:email/verify-kyc", verifyKyc);
 router.get("/unverified", getUnverifiedUsers);
 router.delete("/delete/:email", deleteUser);
 router.post("/reject/:email", rejectUserKyc);
+router.get("/userByRef/:referralCode", userByReferralCode);
 
 module.exports = router;

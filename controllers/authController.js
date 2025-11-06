@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const Account = require("../models/account.model");
+const IB = require("../models/Broker.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../utils/sendEmail");
@@ -756,5 +757,43 @@ exports.rejectUserKyc = async (req, res) => {
   } catch (error) {
     console.error("❌ Error rejecting user KYC:", error);
     res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
+
+exports.userByReferralCode = async (req, res) => {
+  try {
+    const { referralCode } = req.params;
+
+    if (!referralCode) {
+      return res.status(400).json({ message: "Referral code is required." });
+    }
+
+    // Step 1️⃣: Find the IB by referral code
+    const ib = await IB.findOne({ referralCode });
+    if (!ib) {
+      return res
+        .status(404)
+        .json({ message: "IB not found with this referral code." });
+    }
+
+    // Step 2️⃣: Find the User by the IB's email
+    const user = await User.findOne({ email: ib.email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found for this IB." });
+    }
+
+    // Step 3️⃣: Return both IB and User data
+    return res.status(200).json({
+      success: true,
+      ib,
+      user,
+    });
+  } catch (error) {
+    console.error("Error fetching user by referral code:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching user by referral code.",
+      error: error.message,
+    });
   }
 };
