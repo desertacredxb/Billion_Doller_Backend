@@ -517,9 +517,12 @@ router.get("/deposit/:accountNo", async (req, res) => {
     // Find all deposits for this account, sorted by latest first
     const deposits = await Order.find({ accountNo }).sort({ createdAt: -1 });
 
+    // ✅ Return success with empty array if no deposits
     if (!deposits || deposits.length === 0) {
-      return res.status(404).json({
-        success: false,
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        deposits: [],
         message: "No deposits found for this account",
       });
     }
@@ -545,8 +548,10 @@ router.get("/withdrawal/:accountNo", async (req, res) => {
     });
 
     if (!withdrawals || withdrawals.length === 0) {
-      return res.status(404).json({
-        success: false,
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        withdrawals: [],
         message: "No withdrawals found for this account",
       });
     }
