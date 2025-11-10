@@ -31,7 +31,7 @@ const COMMISSION_RATES = {
   CHFJPY: 4.5,
 
   // Metals
-  XAUUSD: 12,
+  XAUUSD: 4,
   XAGUSD: 45,
 
   // Crypto Perpetuals
