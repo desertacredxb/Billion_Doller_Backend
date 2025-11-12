@@ -162,7 +162,7 @@ exports.handleRameeCallback = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Invalid payload" });
     }
-
+    console.log(data);
     // 1. Decrypt RameePay response
     const txn = decryptData(data);
     console.log("🔓 Decrypted Webhook:", txn);
