@@ -9,6 +9,7 @@ const Account = require("../models/account.model"); // Ensure you import Account
 exports.handlePaymentCallback = async (req, res) => {
   try {
     const txn = req.body.transaction;
+    console.log(txn);
 
     if (!txn || !txn.id) {
       return res
@@ -254,3 +255,105 @@ exports.handleRameeCallback = async (req, res) => {
     return res.status(500).json({ success: false, error: error.message });
   }
 };
+
+// exports.handleCryptoCallback = async (req, res) => {
+//   try {
+//     const { data, agentCode } = req.body;
+
+//     if (!data || !agentCode) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Invalid payload" });
+//     }
+//     console.log(data);
+//     // 1. Decrypt RameePay response
+//     const txn = decryptData(data);
+//     console.log("🔓 Decrypted Webhook:", txn);
+
+//     if (txn.status === "SUCCESS") {
+//       const orderid = txn.merchantid;
+//       const amount = txn.payAmount;
+
+//       // 2. Find order mapping from DB
+//       const order = await Order.findOne({ orderid });
+//       if (!order) {
+//         console.error("❌ Order not found in DB:", orderid);
+//         return res
+//           .status(404)
+//           .json({ success: false, message: "Order not found" });
+//       }
+
+//       const accountno = order.accountNo;
+
+//       // 3. Update status in DB
+//       if (txn.status === "SUCCESS") {
+//         order.status = "SUCCESS";
+//       } else if (txn.status === "FAILED") {
+//         order.status = "FAILED";
+//       }
+//       await order.save();
+
+//       // ✅ 4. Convert INR → USD
+//       const usdRate = await fetchRate();
+//       const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
+
+//       console.log(`💱 Converted: ₹${amount} → $${amountUSD} (rate ${usdRate})`);
+
+//       // 5. Call MoneyPlant API
+//       try {
+//         const mpResponse = await axios.post(
+//           "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+//           { accountno, amount: amountUSD, orderid },
+//           { headers: { "Content-Type": "application/json" } }
+//         );
+
+//         console.log("💰 MoneyPlant Response:", mpResponse.data);
+//         // const AccountNo=accountno
+//         // ✅ 6. Send confirmation email to user
+//         const account = await Account.findOne({
+//           accountNo: accountno,
+//         }).populate("user");
+//         console.log(account);
+//         if (account) {
+//           await sendEmail({
+//             to: account.user.email,
+//             subject: "Deposit Successful - Balance Updated",
+//             html: `
+//               <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+//                 <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+//                 <p>Dear ${account.user.fullName || "Customer"},</p>
+//                 <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg"
+//          alt="Withdrawal Processed"
+//          style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+//                 <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
+
+//                 <p><strong>Transaction Details:</strong></p>
+//                 <ul>
+//                   <li><strong>Order ID:</strong> ${orderid}</li>
+//                   <li><strong>Amount Deposited:</strong> ₹${amount} (≈ $${amountUSD})</li>
+//                   <li><strong>Status:</strong> Successful</li>
+//                   <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
+//                 </ul>
+
+//                 <p>The amount has been credited to your trading account <strong>${accountno}</strong>.</p>
+
+//                 <p>If you did not initiate this transaction, please contact our support team immediately.</p>
+
+//                 <br/>
+//                 <p>Best Regards,<br/>The Support Team</p>
+//               </div>
+//             `,
+//           });
+//         }
+//       } catch (err) {
+//         console.error("❌ MoneyPlant Error:", err.message);
+//       }
+//     }
+
+//     // 7. Acknowledge webhook
+//     return res.status(200).json({ success: true });
+//   } catch (error) {
+//     console.error("❌ Callback Error:", error);
+//     return res.status(500).json({ success: false, error: error.message });
+//   }
+// };

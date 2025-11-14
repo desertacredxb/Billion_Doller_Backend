@@ -116,6 +116,7 @@ router.post("/deposit", async (req, res) => {
 
 const AGENT_CODE = process.env.RAMEEPAY_AGENT_CODE;
 const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
+// const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
 
 router.post("/ramee/deposit", async (req, res) => {
   try {
@@ -163,6 +164,7 @@ router.post("/ramee/deposit", async (req, res) => {
     const { data } = await axios.post(RAMEEPAY_API, body, {
       headers: { "Content-Type": "application/json" },
     });
+    console.log(data);
 
     // 6️⃣Decrypt response if exists
     let decryptedResponse = {};
@@ -195,6 +197,85 @@ router.post("/ramee/deposit", async (req, res) => {
     });
   }
 });
+
+// router.post("/crypto/deposit", async (req, res) => {
+//   try {
+//     const { accountNo, amount } = req.body;
+
+//     if (!accountNo || !amount) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Missing fields" });
+//     }
+
+//     // 1️⃣ Generate unique orderid
+//     const orderid = "OCP" + Date.now();
+
+//     // 2️⃣ Find account (to save reference)
+//     const account = await Account.findOne({ accountNo });
+//     if (!account) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Account not found" });
+//     }
+
+//     // 3️⃣ Save new order
+//     const newOrder = new Order({
+//       orderid,
+//       account: account._id, // ✅ link to Account
+//       accountNo: account.accountNo, // backup string
+//       amount,
+//       status: "PENDING", // default
+//     });
+//     await newOrder.save();
+
+//     // 4️⃣ Prepare payload for RameePay (only orderid & amount required)
+//     const orderData = { orderid, amount };
+
+//     // Encrypt payload
+//     const encryptedData = encryptData(orderData);
+
+//     const body = {
+//       reqData: encryptedData,
+//       agentCode: AGENT_CODE,
+//     };
+
+//     //  5️⃣ Send to RameePay
+//     const { data } = await axios.post(RAMEEPAY_Crypto_API, body, {
+//       headers: { "Content-Type": "application/json" },
+//     });
+
+//     // 6️⃣Decrypt response if exists
+//     let decryptedResponse = {};
+//     if (data.data) {
+//       decryptedResponse = decryptData(data.data);
+//       console.log("✅ Decrypted Response:", decryptedResponse);
+//     }
+
+//     // 7️⃣ Return response to frontend
+//     res.json({
+//       success: true,
+//       message: "Order created & sent to RameePay",
+//       order: {
+//         orderid: newOrder.orderid,
+//         amount: newOrder.amount,
+//         status: newOrder.status,
+//         createdAt: newOrder.createdAt,
+//         accountNo: newOrder.accountNo,
+//         name: account.user?.fullName || "Unknown", // ✅ now included
+//       },
+//       raw: data,
+//       decrypted: decryptedResponse,
+//     });
+//   } catch (err) {
+//     console.error("❌ Deposit Error:", err.response?.data || err.message);
+//     res.status(500).json({
+//       success: false,
+//       error: "ServerError",
+//       message: err.message,
+//     });
+//   }
+// });
 
 async function fetchRate() {
   try {
