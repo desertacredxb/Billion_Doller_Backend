@@ -5,6 +5,7 @@ const router = express.Router();
 const {
   handlePaymentCallback,
   handleRameeCallback,
+  handleCryptoCallback,
 } = require("../controllers/paymentController");
 const { encryptData, decryptData } = require("../utils/rameeCrypto");
 require("dotenv").config();
@@ -17,6 +18,7 @@ const checkMargin = require("../middleware/checkMargin");
 
 router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
+router.post("/crypto/callback", handleCryptoCallback);
 
 let DIGIPAY_TOKEN = null;
 let TOKEN_EXPIRY = null;
