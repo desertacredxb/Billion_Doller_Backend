@@ -8,6 +8,7 @@ const moneyplantRoutes = require("./routes/moneyplant.routes");
 const ticketRoutes = require("./routes/ticketRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const IBRoutes = require("./routes/IBRoutes");
+const axios = require("axios");
 
 require("dotenv").config();
 connect();
@@ -25,6 +26,15 @@ app.use("/api/ib", IBRoutes);
 
 app.use("/", (req, res) => {
   res.send("I ..I...AM ...IRONMAN🫰");
+});
+
+app.get("/check-ip", async (req, res) => {
+  try {
+    const { data: ip } = await axios.get("https://api.ipify.org");
+    res.send({ ip });
+  } catch (e) {
+    res.status(500).send({ error: e.message });
+  }
 });
 
 const PORT = process.env.PORT || 5000;
