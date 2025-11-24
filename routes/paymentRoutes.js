@@ -7,7 +7,12 @@ const {
   handleRameeCallback,
   handleCryptoCallback,
 } = require("../controllers/paymentController");
-const { encryptData, decryptData } = require("../utils/rameeCrypto");
+const {
+  encryptData,
+  decryptData,
+  decryptDataCrypto,
+  encryptDataCrypto,
+} = require("../utils/rameeCrypto");
 require("dotenv").config();
 const Order = require("../models/Order");
 const Withdrawal = require("../models/withdrawal");
@@ -117,6 +122,7 @@ router.post("/deposit", async (req, res) => {
 });
 
 const AGENT_CODE = process.env.RAMEEPAY_AGENT_CODE;
+const CRYPTO_AGENT_CODE = process.env.CRYPTO_AGENT_CODE;
 const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
 const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
 
@@ -229,28 +235,31 @@ router.post("/crypto/deposit", async (req, res) => {
       amount,
       status: "PENDING", // default
     });
-    await newOrder.save();
+    // await newOrder.save();
 
     // 4️⃣ Prepare payload for RameePay (only orderid & amount required)
     const orderData = { orderid, amount };
 
     // Encrypt payload
-    const encryptedData = encryptData(orderData);
+    const encryptedData = encryptDataCrypto(orderData);
+    console.log("Encrypted Data:", encryptedData);
 
     const body = {
-      reqData: encryptedData,
-      agentCode: AGENT_CODE,
+      Data: encryptedData,
+      agentCode: CRYPTO_AGENT_CODE,
     };
+    console.log(body);
 
     //  5️⃣ Send to RameePay
     const { data } = await axios.post(RAMEEPAY_Crypto_API, body, {
       headers: { "Content-Type": "application/json" },
     });
+    console.log(data);
 
     // 6️⃣Decrypt response if exists
     let decryptedResponse = {};
     if (data.data) {
-      decryptedResponse = decryptData(data.data);
+      decryptedResponse = decryptDataCrypto(data.data);
       console.log("✅ Decrypted Response:", decryptedResponse);
     }
 

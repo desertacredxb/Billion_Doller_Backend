@@ -1,6 +1,6 @@
 const axios = require("axios");
 const Transaction = require("../models/Transaction");
-const { decryptData } = require("../utils/rameeCrypto");
+const { decryptData, decryptDataCrypto } = require("../utils/rameeCrypto");
 const Order = require("../models/Order");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
@@ -267,7 +267,7 @@ exports.handleCryptoCallback = async (req, res) => {
     }
     console.log(data);
     // 1. Decrypt RameePay response
-    const txn = decryptData(data);
+    const txn = decryptDataCrypto(data);
     console.log("🔓 Decrypted Webhook:", txn);
 
     if (txn.status === "SUCCESS") {
