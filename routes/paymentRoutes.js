@@ -235,7 +235,7 @@ router.post("/crypto/deposit", async (req, res) => {
       amount,
       status: "PENDING", // default
     });
-    // await newOrder.save();
+    await newOrder.save();
 
     // 4️⃣ Prepare payload for RameePay (only orderid & amount required)
     const orderData = { orderid, amount };
