@@ -36,7 +36,7 @@ function decryptData(encryptedText) {
 
 function encryptDataCrypto(data) {
   try {
-    const iv = CRYPTO_IV; // ✔ must be 12 bytes
+    const iv = crypto.randomBytes(12); // ✔ must be 12 bytes
     console.log(iv);
     const jsonString = JSON.stringify(data);
     console.log(jsonString);
@@ -68,9 +68,9 @@ function decryptDataCrypto(base64Data) {
   try {
     const combined = Buffer.from(base64Data, "base64");
 
-    const iv = combined.slice(0, 16); // ✔ first 12 bytes
-    const authTag = combined.slice(16, 32); // ✔ next 16 bytes
-    const encryptedData = combined.slice(32);
+    const iv = combined.slice(0, 12); // ✔ first 12 bytes
+    const authTag = combined.slice(12, 28); // ✔ next 16 bytes
+    const encryptedData = combined.slice(28);
 
     const decipher = crypto.createDecipheriv("aes-256-gcm", CRYPTO_KEY, iv);
     decipher.setAuthTag(authTag);
