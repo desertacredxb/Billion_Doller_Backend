@@ -183,6 +183,8 @@ const rejectIBByEmail = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
     // 🔹 Send rejection email
+    user.referralCode = "";
+    await user.save();
     console.log(user.email);
     await sendEmail({
       to: user.email,
