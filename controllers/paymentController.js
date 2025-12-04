@@ -61,13 +61,14 @@ exports.handlePaymentCallback = async (req, res) => {
       );
 
       try {
-        const order = new Order({
-          accountNo: accountno,
-          orderid,
-          amount: amountINR,
-          status: "SUCCESS",
-        });
-        await order.save();
+        const order = await Order.findOne({ orderid });
+
+        if (!order) {
+          console.error("⚠ No matching order found for callback:", orderid);
+        } else {
+          order.status = "SUCCESS";
+          await order.save();
+        }
 
         // 4️⃣ Update balance in MoneyPlant API
         const mpResponse = await axios.post(
