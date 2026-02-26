@@ -21,6 +21,14 @@ const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const checkMargin = require("../middleware/checkMargin");
 
+const rateLimit = require("express-rate-limit");
+
+const withdrawalLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 2,
+  message: "Too many withdrawal attempts. Please wait.",
+});
+
 router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
 router.post("/crypto/callback", handleCryptoCallback);
@@ -92,7 +100,7 @@ router.post("/deposit", async (req, res) => {
       },
       {
         headers: { Authorization: `Bearer ${DIGIPAY_TOKEN}` },
-      }
+      },
     );
 
     // 6️⃣ Return payment info
@@ -291,7 +299,7 @@ router.post("/crypto/deposit", async (req, res) => {
 async function fetchRate() {
   try {
     const res = await axios.get(
-      "https://api.frankfurter.app/latest?amount=1&from=INR&to=USD"
+      "https://api.frankfurter.app/latest?amount=1&from=INR&to=USD",
     );
     return res.data.rates.USD; // 1 INR = ? USD
   } catch (err) {
@@ -303,7 +311,10 @@ async function fetchRate() {
 const RAMEEPAY_WITHDRAWAL_API = "https://apis.rameepay.io/withdrawal/account";
 
 // Save withdrawal request as Pending
-router.post("/request", checkMargin, async (req, res) => {
+router.post("/request", withdrawalLimiter, checkMargin, async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { account, ifsc, name, mobile, amount, note, accountNo } = req.body;
 
@@ -311,6 +322,69 @@ router.post("/request", checkMargin, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "Missing fields" });
+    }
+
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid withdrawal amount" });
+    }
+
+    // 🔒 1️⃣ BLOCK MULTIPLE PENDING
+    const existingPending = await Withdrawal.findOne(
+      { accountNo, status: "Pending" },
+      null,
+      { session },
+    );
+
+    if (existingPending) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "You already have a pending withdrawal request.",
+      });
+    }
+
+    // 5 MINUTE COOLDOWN
+    const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
+      session,
+    }).sort({ createdAt: -1 });
+
+    if (lastWithdrawal) {
+      const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
+      const fiveMinutes = 5 * 60 * 1000;
+
+      if (diff < fiveMinutes) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "You can only request withdrawal once every 5 minutes.",
+        });
+      }
+    }
+
+    // DAILY LIMIT (3 per day)
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const todayCount = await Withdrawal.countDocuments(
+      {
+        accountNo,
+        createdAt: { $gte: startOfDay },
+      },
+      { session },
+    );
+
+    if (todayCount >= 3) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Daily withdrawal limit reached (3 per day).",
+      });
     }
 
     const orderid = `WDR${Date.now()}`;
@@ -326,7 +400,7 @@ router.post("/request", checkMargin, async (req, res) => {
         amount: -Math.abs(amountUSD),
         orderid,
       },
-      { headers: { "Content-Type": "application/json" } }
+      { headers: { "Content-Type": "application/json" } },
     );
 
     // 🔹 Save withdrawal record in Pending state
@@ -434,7 +508,7 @@ router.post("/approve/:id", async (req, res) => {
         console.error(
           "Expected string in data.data, got:",
           typeof data.data,
-          data.data
+          data.data,
         );
         decryptedResponse = data.data; // fallback, store raw object
       }
@@ -486,7 +560,7 @@ router.post("/approve/:id", async (req, res) => {
           amount: +Math.abs(amountUSD),
           orderid: refundOrderId,
         },
-        { headers: { "Content-Type": "application/json" } }
+        { headers: { "Content-Type": "application/json" } },
       );
 
       withdrawal.status = "Failed";
@@ -547,7 +621,7 @@ router.post("/reject/:id", async (req, res) => {
         amount: +Math.abs(amountUSD),
         orderid: refundOrderId,
       },
-      { headers: { "Content-Type": "application/json" } }
+      { headers: { "Content-Type": "application/json" } },
     );
 
     withdrawal.status = "Rejected";
@@ -579,7 +653,7 @@ router.post("/reject/:id", async (req, res) => {
     console.error(
       "❌ Reject withdrawal error:",
       err.message,
-      err.response?.data
+      err.response?.data,
     );
     res.status(500).json({
       success: false,
