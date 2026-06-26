@@ -33,7 +33,7 @@ router.get("/user/:email", getUserByEmail);
 router.put(
   "/profile-image/:email",
   upload.single("profileImage"),
-  uploadProfileImage
+  uploadProfileImage,
 );
 
 router.put("/update-profile/:email", updateUserProfile);
@@ -46,7 +46,7 @@ router.put(
     { name: "addressProof", maxCount: 1 },
     { name: "selfieProof", maxCount: 1 },
   ]),
-  updateDocuments
+  updateDocuments,
 );
 
 router.put("/bank/:email", updateBankDetails);
