@@ -71,13 +71,39 @@ exports.handlePaymentCallback = async (req, res) => {
         }
 
         // 4️⃣ Update balance in MoneyPlant API
-        const mpResponse = await axios.post(
-          "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-          { accountno, amount: amountUSD, orderid },
-          { headers: { "Content-Type": "application/json" } }
+        // const mpResponse = await axios.post(
+        //   "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+        //   { accountno, amount: amountUSD, orderid },
+        //   { headers: { "Content-Type": "application/json" } }
+        // );
+
+        // console.log("💰 MoneyPlant Response:", mpResponse.data);
+
+
+
+        const mt5Response = await axios.post(
+          `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+          null,
+          {
+            params: {
+              login: accountno, // keep existing accountno variable
+              type: 2, // balance operation (deposit)
+              balance: amountUSD, // keeping your existing USD conversion
+              comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+            },
+          }
         );
 
-        console.log("💰 MoneyPlant Response:", mpResponse.data);
+        console.log("💰 MT5 Response:", mt5Response.data);
+
+        if (
+          mt5Response.data.retcode !== "0 Done" &&
+          mt5Response.data.retcode !== 0
+        ) {
+          throw new Error(
+            `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+          );
+        }
 
         // 5️⃣ Send confirmation email
         const account = await Account.findOne({
@@ -118,10 +144,11 @@ exports.handlePaymentCallback = async (req, res) => {
         return res.status(200).json({
           success: true,
           message: "Transaction saved, balance updated, and email sent",
-          moneyplant: mpResponse.data,
+          mt5: mt5Response.data,
         });
       } catch (err) {
-        console.error("❌ MoneyPlant or Email Error:", err.message);
+        // console.error("❌ MoneyPlant or Email Error:", err.message);
+        console.error("MT5 or Email Error:", err.message);
         return res.status(500).json({
           success: false,
           message: "Transaction saved but post-processing failed",
@@ -200,14 +227,39 @@ exports.handleRameeCallback = async (req, res) => {
 
       // 5. Call MoneyPlant API
       try {
-        const mpResponse = await axios.post(
-          "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-          { accountno, amount: amountUSD, orderid },
-          { headers: { "Content-Type": "application/json" } }
+        // const mpResponse = await axios.post(
+        //   "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+        //   { accountno, amount: amountUSD, orderid },
+        //   { headers: { "Content-Type": "application/json" } }
+        // );
+
+        // console.log("💰 MoneyPlant Response:", mpResponse.data);
+        // const AccountNo=accountno
+
+        const mt5Response = await axios.post(
+          `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+          null,
+          {
+            params: {
+              login: accountno, // keep existing accountno variable
+              type: 2, // balance operation (deposit)
+              balance: amountUSD, // keeping your existing USD conversion
+              comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+            },
+          }
         );
 
-        console.log("💰 MoneyPlant Response:", mpResponse.data);
-        // const AccountNo=accountno
+        console.log("💰 MT5 Response:", mt5Response.data);
+
+        if (
+          mt5Response.data.retcode !== "0 Done" &&
+          mt5Response.data.retcode !== 0
+        ) {
+          throw new Error(
+            `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+          );
+        }
+
         // ✅ 6. Send confirmation email to user
         const account = await Account.findOne({
           accountNo: accountno,
@@ -302,14 +354,39 @@ exports.handleCryptoCallback = async (req, res) => {
 
       // 5. Call MoneyPlant API
       try {
-        const mpResponse = await axios.post(
-          "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-          { accountno, amount: amountUSD, orderid },
-          { headers: { "Content-Type": "application/json" } }
+        // const mpResponse = await axios.post(
+        //   "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+        //   { accountno, amount: amountUSD, orderid },
+        //   { headers: { "Content-Type": "application/json" } }
+        // );
+
+        // console.log("💰 MoneyPlant Response:", mpResponse.data);
+        // const AccountNo=accountno
+        
+        const mt5Response = await axios.post(
+          `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+          null,
+          {
+            params: {
+              login: accountno, // keep existing accountno variable
+              type: 2, // balance operation (deposit)
+              balance: amountUSD, // keeping your existing USD conversion
+              comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+            },
+          }
         );
 
-        console.log("💰 MoneyPlant Response:", mpResponse.data);
-        // const AccountNo=accountno
+        console.log("💰 MT5 Response:", mt5Response.data);
+
+        if (
+          mt5Response.data.retcode !== "0 Done" &&
+          mt5Response.data.retcode !== 0
+        ) {
+          throw new Error(
+            `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+          );
+        }
+
         // ✅ 6. Send confirmation email to user
         const account = await Account.findOne({
           accountNo: accountno,

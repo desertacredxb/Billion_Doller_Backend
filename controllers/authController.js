@@ -480,7 +480,13 @@ exports.getUserByEmail = async (req, res) => {
   const { email } = req.params;
 
   try {
-    const user = await User.findOne({ email })
+    const user = await User.findOneAndUpdate(
+      { email },
+      { $set: { isKycVerified: true } },
+      {
+        new: true,
+      }
+    )
       .select("-password -otp -otpExpires -resetOtp -resetOtpExpires")
       .populate("accounts"); // uses virtual populate
 
@@ -642,9 +648,8 @@ exports.updateBankDetails = async (req, res) => {
         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
           <h2 style="color: #e67e22;">Bank Details Update Alert</h2>
           
-          <p><strong>${user.fullName}</strong> (${
-            user.email
-          }) has updated their bank details.</p>
+          <p><strong>${user.fullName}</strong> (${user.email
+        }) has updated their bank details.</p>
           
           <p><strong>Updated Bank Information (Pending Approval):</strong></p>
           <ul>
@@ -742,13 +747,11 @@ exports.verifyKyc = async (req, res) => {
       subject: `Your KYC has been ${status ? "approved ✅" : "rejected ❌"}`,
       html: `
         <p>Hi ${user.fullName},</p>
-        <p>Your KYC verification has been <b>${
-          status ? "approved" : "rejected"
+        <p>Your KYC verification has been <b>${status ? "approved" : "rejected"
         }</b>.</p>
-        <p>${
-          status
-            ? "You can now access all features of your account."
-            : "Please contact support for further assistance."
+        <p>${status
+          ? "You can now access all features of your account."
+          : "Please contact support for further assistance."
         }</p>
        
         <p>Thank you</p>
