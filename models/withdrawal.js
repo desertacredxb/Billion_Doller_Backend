@@ -9,9 +9,10 @@ const withdrawalSchema = new mongoose.Schema(
     mobile: String,
     amount: Number,
     note: String,
-    accountNo: { type: String, required: true },
+    accountNo: { type: String },
     bankName: { type: String, default: "" },
-
+    isManual: { type: Boolean, default: false },
+    upiId: { type: String, default: null },
     // 🔹 Use string enum instead of boolean
     status: {
       type: String,

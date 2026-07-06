@@ -175,12 +175,28 @@ exports.handleManualPaymentRequest = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { ifsc, name, mobile, amount, note, accountNo, bankName } = req.body;
+    const { ifsc, name, mobile, amount, note, accountNo, bankName, paymentMethod, upiId } = req.body;
 
-    if (!ifsc || !name || !mobile || !amount || !accountNo) {
+    if (!name || !mobile || !amount) {
       return res
         .status(400)
         .json({ success: false, message: "Missing fields" });
+    }
+
+    const method = paymentMethod === "upi" ? "upi" : "bank";
+
+    if (method === "bank" && (!ifsc || !bankName || !accountNo)) {
+      return res.status(400).json({
+        success: false,
+        message: "IFSC, Bank Name, and Account Number are required for bank transfer",
+      });
+    }
+
+    if (method === "upi" && !upiId) {
+      return res.status(400).json({
+        success: false,
+        message: "UPI ID is required",
+      });
     }
 
     const numericAmount = parseFloat(amount);
@@ -255,16 +271,18 @@ exports.handleManualPaymentRequest = async (req, res) => {
     // 🔹 Save withdrawal record in Pending state
     const withdrawalRecord = new Withdrawal({
       orderid,
-      bankName,
-      ifsc,
       name,
       mobile,
       amount,
       note,
       accountNo,
       status: "Pending",
+      isManual: true,
+      bankName: method === "bank" ? bankName : "",
+      ifsc: method === "bank" ? ifsc : "",
+      upiId: method === "upi" ? upiId : null,
     });
-    console.log("Saving withdrawal record:", withdrawalRecord);
+    // console.log("Saving withdrawal record:", withdrawalRecord);
     await withdrawalRecord.save();
 
     // ✅ Send email to admin
@@ -284,9 +302,13 @@ exports.handleManualPaymentRequest = async (req, res) => {
         <li><strong>Name:</strong> ${name}</li>
         <li><strong>Order ID:</strong> ${orderid}</li>
         <li><strong>Amount:</strong> ₹${amount} (≈ $${amountUSD})</li>
-        <li><strong>Bank Name:</strong> ${bankName}</li>
-        <li><strong>Account Number:</strong> ${accountNo}</li>
-        <li><strong>IFSC:</strong> ${ifsc}</li>
+        <li><strong>Payment Method:</strong> ${method === "upi" ? "UPI" : "Bank Transfer"}</li>
+          ${method === "bank"
+          ? `<li><strong>Bank Name:</strong> ${bankName}</li>
+       <li><strong>Account Number:</strong> ${accountNo}</li>
+       <li><strong>IFSC:</strong> ${ifsc}</li>`
+          : `<li><strong>UPI ID:</strong> ${upiId}</li>`
+        }
         <li><strong>Mobile:</strong> ${mobile}</li>
         <li><strong>Note:</strong> ${note || "N/A"}</li>
       </ul>

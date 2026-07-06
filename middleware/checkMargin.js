@@ -6,7 +6,15 @@ const axios = require("axios");
  */
 const checkMargin = async (req, res, next) => {
   try {
-    const { accountNo } = req.body;
+    const { accountNo, paymentMethod } = req.body;
+
+    // console.log("checkMargin Middleware: accountNo:", accountNo, "paymentMethod:", paymentMethod);
+
+    const method = paymentMethod === "upi" ? "upi" : "bank";
+
+    if (method === "upi") {
+          return next();
+    }
 
     if (!accountNo) {
       return res
