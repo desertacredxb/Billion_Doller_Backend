@@ -84,108 +84,6 @@ exports.register = async (req, res) => {
   }
 };
 
-// exports.verifyOTP = async (req, res) => {
-//   const { email, otp } = req.body;
-
-//   try {
-//     const user = await User.findOne({ email });
-
-//     if (!user) return res.status(400).json({ message: "User not found" });
-
-//     if (!user.otp || !user.otpExpires || new Date() > user.otpExpires)
-//       return res
-//         .status(400)
-//         .json({ message: "OTP expired. Please register again." });
-
-//     if (user.otp !== otp)
-//       return res.status(400).json({ message: "Invalid OTP" });
-
-//     // OTP matched – now activate
-//     user.isVerified = true;
-//     user.otp = null;
-//     user.otpExpires = null;
-
-//     await user.save();
-
-//     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-//       expiresIn: "7d",
-//     });
-//     await sendEmail({
-//       to: user.email,
-//       subject: "Welcome to Billion Dollar FX 🎉",
-//       html: `
-//     <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
-//       <h2 style="color: #00CFFF;">Welcome, ${user.fullName}!</h2>
-
-//       <p>We’re excited to have you on board with <strong>Billion Dollar FX</strong>.</p>
-
-//       <p>Your account has been successfully created. You can now log in and start exploring the platform.</p>
-
-//       <p style="color:#d9534f; font-weight:bold;">
-//         🔔 To activate your account fully, please go to <strong>Settings</strong> and upload your documents and bank details for KYC verification.
-//       </p>
-
-//       <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/welcome_to_billiondollarfx_bn6rs2.jpg"
-//            alt="Welcome Image" style="width:600px; max-width:100%; height:auto; display:block; margin:20px auto;" />
-
-//       <p>If you have any questions or need assistance, our support team is here to help.</p>
-
-//       <p>We look forward to seeing you succeed in your trading journey 🚀</p>
-
-//       <br/>
-//       <p>Best Regards,<br/><strong>The Billion Dollar FX Team</strong></p>
-//     </div>
-//   `,
-//     });
-
-//     await sendEmail({
-//       to: "support@billiondollarfx.com",
-//       subject: "🔔 New User Registered on Billion Dollar FX",
-//       html: `
-//     <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
-//       <h2 style="color: #00CFFF;">New User Registration Alert</h2>
-
-//       <p>A new user has just registered on <strong>Billion Dollar FX</strong>.</p>
-
-//       <p><strong>User Details:</strong></p>
-//       <ul>
-//         <li><strong>Full Name:</strong> ${user.fullName}</li>
-//         <li><strong>Email:</strong> ${user.email}</li>
-//         <li><strong>Phone:</strong> ${user.phone || "Not Provided"}</li>
-//         <li><strong>Registration Date:</strong> ${new Date().toLocaleString()}</li>
-//       </ul>
-
-//       <p>
-//         Please log in to the admin panel to verify their account.
-//         If the user has not yet uploaded their <strong>documents</strong> or <strong>bank details</strong>,
-//         kindly reach out to them and request the necessary information for KYC verification.
-//       </p>
-
-//       <p style="margin-top:20px;">
-//         ✅ Next Step: <strong>Check user’s profile in the admin dashboard.</strong>
-//       </p>
-
-//       <br/>
-//       <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
-//     </div>
-//   `,
-//     });
-
-//     res.status(201).json({
-//       message: "User verified & registered",
-//       token,
-//       user: user.fullName,
-//       user: user.email,
-//     });
-//   } catch (err) {
-//     res
-//       .status(500)
-//       .json({ message: "OTP verification failed", error: err.message });
-//   }
-// };
-
-// Assuming User is your Mongoose model. Ensure your User schema allows storing `mt5Login`
-
 exports.verifyOTP = async (req, res) => {
   const { email, otp } = req.body;
 
@@ -202,137 +100,84 @@ exports.verifyOTP = async (req, res) => {
     if (user.otp !== otp)
       return res.status(400).json({ message: "Invalid OTP" });
 
-    // --- INTEGRATE METATRADER 5 WEB API ---
-    // 1. Prepare query string configuration safely on the server side
-    const mt5Query = new URLSearchParams({
-      login: "0", // Server automatically allocates a login from the available range [cite: 37]
-      group: "demoforex", // Required trading group [cite: 48]
-      name: user.fullName.substring(0, 127), // Trim to max safety limit of 128 characters [cite: 49, 50]
-      country: user.nationality || "", // User country [cite: 53]
-      city: user.city || "", // User city [cite: 54]
-      state: user.state || "", // User state [cite: 55]
-      phone: user.phone || "", // User phone [cite: 59]
-      email: user.email, // User email [cite: 61]
-      leverage: "100", // Required default leverage size between 1 and 500 [cite: 69]
-    });
-
-    // 2. Pass sensitive passwords securely inside the JSON request body
-    // The documentation mandates a Master password (PassMain) [cite: 38] and an Investor password (Passinvestor)[cite: 42].
-    // Since your UI only collects one password, we securely generate a derivative for the investor password.
-    // Ensure the passwords meet complexity requirements (lowercase, uppercase, numbers, special characters)[cite: 38, 42].
-    const mt5Payload = {
-      PassMain: user.password || "Ar#pqkj1", // Fallback template from documentation if plaintext isn't retained [cite: 39]
-      Passinvestor: user.password
-        ? user.password.substring(0, 12) + "Inv!"
-        : "2Ar4pqki!",
-    };
-
-    let mt5Login = "N/A";
-
-    try {
-      // Connect to your MT5 trade server instance via its internal endpoint
-      const mt5Res = await axios.post(
-        `${process.env.MT5_WEB_API_URL}/api/user/add?${mt5Query.toString()}`,
-        mt5Payload,
-      );
-
-      console.log("MT5 Response:", mt5Res.data);
-
-      const mt5Data = mt5Res.data;
-
-      // Validate successful execution record checking against '0 Done' or numerical 0 [cite: 11, 23, 94]
-      if (mt5Data.retcode === "0 Done" || mt5Data.retcode === 0) {
-        mt5Login = mt5Data.answer?.Login || mt5Data.Login || "Allocated"; // Extract login parameter [cite: 25, 95]
-      } else {
-        // Map specific trade server failures gracefully
-        let reason = `Error code: ${mt5Data.retcode}`;
-        if (mt5Data.retcode === 3006)
-          reason = "Password complexity failed trading group rules.";
-        [cite, 103];
-        if (mt5Data.retcode === 3002)
-          reason = "Trade server has run out of available accounts.";
-        [cite, 97];
-
-        console.error(`MT5 Trade Server Error: ${reason}`);
-        return res.status(422).json({
-          message: `OTP verified, but failed to provision your live trading account. Reason: ${reason}`,
-        });
-      }
-    } catch (mt5Err) {
-      console.error(
-        "Failed communicating with MT5 Trade Server Gateway:",
-        mt5Err.message,
-      );
-      return res.status(502).json({
-        message:
-          "OTP verified, but your trading network account provision connection timed out.",
-      });
-    }
-
-    // OTP matched and MT5 account provisioning succeeded – now activate
+    // OTP matched – now activate
     user.isVerified = true;
     user.otp = null;
     user.otpExpires = null;
-    user.mt5Login = mt5Login; // Save the newly allocated login ID into your local database tracker
 
     await user.save();
 
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
-
-    // Send Welcome Email to User
     await sendEmail({
       to: user.email,
       subject: "Welcome to Billion Dollar FX 🎉",
       html: `
     <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
       <h2 style="color: #00CFFF;">Welcome, ${user.fullName}!</h2>
+
       <p>We’re excited to have you on board with <strong>Billion Dollar FX</strong>.</p>
-      <p>Your trading profile has been created successfully. Your assigned MT5 Login ID is: <strong>${mt5Login}</strong>.</p>
+
+      <p>Your account has been successfully created. You can now log in and start exploring the platform.</p>
+
       <p style="color:#d9534f; font-weight:bold;">
         🔔 To activate your account fully, please go to <strong>Settings</strong> and upload your documents and bank details for KYC verification.
       </p>
-      <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/welcome_to_billiondollarfx_bn6rs2.jpg" 
+
+      <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/welcome_to_billiondollarfx_bn6rs2.jpg"
            alt="Welcome Image" style="width:600px; max-width:100%; height:auto; display:block; margin:20px auto;" />
+
       <p>If you have any questions or need assistance, our support team is here to help.</p>
+
       <p>We look forward to seeing you succeed in your trading journey 🚀</p>
+
       <br/>
       <p>Best Regards,<br/><strong>The Billion Dollar FX Team</strong></p>
     </div>
   `,
     });
 
-    // Notify Support
     await sendEmail({
       to: "support@billiondollarfx.com",
       subject: "🔔 New User Registered on Billion Dollar FX",
       html: `
     <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
       <h2 style="color: #00CFFF;">New User Registration Alert</h2>
+
       <p>A new user has just registered on <strong>Billion Dollar FX</strong>.</p>
+
       <p><strong>User Details:</strong></p>
       <ul>
         <li><strong>Full Name:</strong> ${user.fullName}</li>
         <li><strong>Email:</strong> ${user.email}</li>
         <li><strong>Phone:</strong> ${user.phone || "Not Provided"}</li>
-        <li><strong>MT5 Login Allocated:</strong> ${mt5Login}</li>
         <li><strong>Registration Date:</strong> ${new Date().toLocaleString()}</li>
       </ul>
-      <p>Please log in to the admin panel to verify their account details.</p>
+
+      <p>
+        Please log in to the admin panel to verify their account.
+        If the user has not yet uploaded their <strong>documents</strong> or <strong>bank details</strong>,
+        kindly reach out to them and request the necessary information for KYC verification.
+      </p>
+
+      <p style="margin-top:20px;">
+        ✅ Next Step: <strong>Check user’s profile in the admin dashboard.</strong>
+      </p>
+
       <br/>
       <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
     </div>
   `,
     });
 
-    // Fix: Cleaned up JSON double structural mapping anomaly from original file
     res.status(201).json({
-      message: "User verified & registered on trading server",
+      message: "User verified & registered",
       token,
-      fullName: user.fullName,
-      email: user.email,
-      mt5Login: mt5Login,
+      user: {
+        fullName: user.fullName,
+        email: user.email,
+      },
     });
   } catch (err) {
     res
@@ -340,6 +185,163 @@ exports.verifyOTP = async (req, res) => {
       .json({ message: "OTP verification failed", error: err.message });
   }
 };
+
+// Assuming User is your Mongoose model. Ensure your User schema allows storing `mt5Login`
+
+// exports.verifyOTP = async (req, res) => {
+//   const { email, otp } = req.body;
+
+//   try {
+//     const user = await User.findOne({ email });
+
+//     if (!user) return res.status(400).json({ message: "User not found" });
+
+//     if (!user.otp || !user.otpExpires || new Date() > user.otpExpires)
+//       return res
+//         .status(400)
+//         .json({ message: "OTP expired. Please register again." });
+
+//     if (user.otp !== otp)
+//       return res.status(400).json({ message: "Invalid OTP" });
+
+//     // --- INTEGRATE METATRADER 5 WEB API ---
+//     // 1. Prepare query string configuration safely on the server side
+//     const mt5Query = new URLSearchParams({
+//       login: "0", // Server automatically allocates a login from the available range [cite: 37]
+//       group: "demoforex", // Required trading group [cite: 48]
+//       name: user.fullName.substring(0, 127), // Trim to max safety limit of 128 characters [cite: 49, 50]
+//       country: user.nationality || "", // User country [cite: 53]
+//       city: user.city || "", // User city [cite: 54]
+//       state: user.state || "", // User state [cite: 55]
+//       phone: user.phone || "", // User phone [cite: 59]
+//       email: user.email, // User email [cite: 61]
+//       leverage: "100", // Required default leverage size between 1 and 500 [cite: 69]
+//     });
+
+//     // 2. Pass sensitive passwords securely inside the JSON request body
+//     // The documentation mandates a Master password (PassMain) [cite: 38] and an Investor password (Passinvestor)[cite: 42].
+//     // Since your UI only collects one password, we securely generate a derivative for the investor password.
+//     // Ensure the passwords meet complexity requirements (lowercase, uppercase, numbers, special characters)[cite: 38, 42].
+//     const mt5Payload = {
+//       PassMain: user.password || "Ar#pqkj1", // Fallback template from documentation if plaintext isn't retained [cite: 39]
+//       Passinvestor: user.password
+//         ? user.password.substring(0, 12) + "Inv!"
+//         : "2Ar4pqki!",
+//     };
+
+//     let mt5Login = "N/A";
+
+//     try {
+//       // Connect to your MT5 trade server instance via its internal endpoint
+//       const mt5Res = await axios.post(
+//         `${process.env.MT5_WEB_API_URL}/api/user/add?${mt5Query.toString()}`,
+//         mt5Payload,
+//       );
+
+//       console.log("MT5 Response:", mt5Res.data);
+
+//       const mt5Data = mt5Res.data;
+
+//       // Validate successful execution record checking against '0 Done' or numerical 0 [cite: 11, 23, 94]
+//       if (mt5Data.retcode === "0 Done" || mt5Data.retcode === 0) {
+//         mt5Login = mt5Data.answer?.Login || mt5Data.Login || "Allocated"; // Extract login parameter [cite: 25, 95]
+//       } else {
+//         // Map specific trade server failures gracefully
+//         let reason = `Error code: ${mt5Data.retcode}`;
+//         if (mt5Data.retcode === 3006)
+//           reason = "Password complexity failed trading group rules.";
+//         [cite, 103];
+//         if (mt5Data.retcode === 3002)
+//           reason = "Trade server has run out of available accounts.";
+//         [cite, 97];
+
+//         console.error(`MT5 Trade Server Error: ${reason}`);
+//         return res.status(422).json({
+//           message: `OTP verified, but failed to provision your live trading account. Reason: ${reason}`,
+//         });
+//       }
+//     } catch (mt5Err) {
+//       console.error(
+//         "Failed communicating with MT5 Trade Server Gateway:",
+//         mt5Err.message,
+//       );
+//       return res.status(502).json({
+//         message:
+//           "OTP verified, but your trading network account provision connection timed out.",
+//       });
+//     }
+
+//     // OTP matched and MT5 account provisioning succeeded – now activate
+//     user.isVerified = true;
+//     user.otp = null;
+//     user.otpExpires = null;
+//     user.mt5Login = mt5Login; // Save the newly allocated login ID into your local database tracker
+
+//     await user.save();
+
+//     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+//       expiresIn: "7d",
+//     });
+
+//     // Send Welcome Email to User
+//     await sendEmail({
+//       to: user.email,
+//       subject: "Welcome to Billion Dollar FX 🎉",
+//       html: `
+//     <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+//       <h2 style="color: #00CFFF;">Welcome, ${user.fullName}!</h2>
+//       <p>We’re excited to have you on board with <strong>Billion Dollar FX</strong>.</p>
+//       <p>Your trading profile has been created successfully. Your assigned MT5 Login ID is: <strong>${mt5Login}</strong>.</p>
+//       <p style="color:#d9534f; font-weight:bold;">
+//         🔔 To activate your account fully, please go to <strong>Settings</strong> and upload your documents and bank details for KYC verification.
+//       </p>
+//       <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/welcome_to_billiondollarfx_bn6rs2.jpg" 
+//            alt="Welcome Image" style="width:600px; max-width:100%; height:auto; display:block; margin:20px auto;" />
+//       <p>If you have any questions or need assistance, our support team is here to help.</p>
+//       <p>We look forward to seeing you succeed in your trading journey 🚀</p>
+//       <br/>
+//       <p>Best Regards,<br/><strong>The Billion Dollar FX Team</strong></p>
+//     </div>
+//   `,
+//     });
+
+//     // Notify Support
+//     await sendEmail({
+//       to: "support@billiondollarfx.com",
+//       subject: "🔔 New User Registered on Billion Dollar FX",
+//       html: `
+//     <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+//       <h2 style="color: #00CFFF;">New User Registration Alert</h2>
+//       <p>A new user has just registered on <strong>Billion Dollar FX</strong>.</p>
+//       <p><strong>User Details:</strong></p>
+//       <ul>
+//         <li><strong>Full Name:</strong> ${user.fullName}</li>
+//         <li><strong>Email:</strong> ${user.email}</li>
+//         <li><strong>Phone:</strong> ${user.phone || "Not Provided"}</li>
+//         <li><strong>MT5 Login Allocated:</strong> ${mt5Login}</li>
+//         <li><strong>Registration Date:</strong> ${new Date().toLocaleString()}</li>
+//       </ul>
+//       <p>Please log in to the admin panel to verify their account details.</p>
+//       <br/>
+//       <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
+//     </div>
+//   `,
+//     });
+
+//     // Fix: Cleaned up JSON double structural mapping anomaly from original file
+//     res.status(201).json({
+//       message: "User verified & registered on trading server",
+//       token,
+//       fullName: user.fullName,
+//       email: user.email,
+//       mt5Login: mt5Login,
+//     });
+//   } catch (err) {
+//     res
+//       .status(500)
+//       .json({ message: "OTP verification failed", error: err.message });
+//   }
+// };
 
 exports.login = async (req, res) => {
   const { email, password } = req.body;

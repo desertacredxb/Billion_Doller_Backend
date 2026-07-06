@@ -34,6 +34,9 @@ const accountSchema = new mongoose.Schema(
     },
     moneyPlantPassword: {
       type: String,
+    },
+    mt5Password: {
+      type: String,
       required: true,
     },
   },

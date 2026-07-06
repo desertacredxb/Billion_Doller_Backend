@@ -7,7 +7,7 @@ const {
   handlePaymentCallback,
   handleRameeCallback,
   handleCryptoCallback,
-} = require("../controllers/paymentController");
+  handleManualPaymentRequest} = require("../controllers/paymentController");
 const {
   encryptData,
   decryptData,
@@ -404,6 +404,30 @@ router.post("/request", withdrawalLimiter, checkMargin, async (req, res) => {
       { headers: { "Content-Type": "application/json" } },
     );
 
+    // const mt5Response = await axios.post(
+    //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+    //   null,
+    //   {
+    //     params: {
+    //       login: accountno, // keep existing accountno variable
+    //       type: 2, // balance operation (deposit)
+    //       balance: -Math.abs(amountUSD), // keeping your existing USD conversion
+    //       comment: `WED-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+    //     },
+    //   }
+    // );
+
+    // console.log("💰 MT5 Response:", mt5Response.data);
+
+    // if (
+    //   mt5Response.data.retcode !== "0 Done" &&
+    //   mt5Response.data.retcode !== 0
+    // ) {
+    //   throw new Error(
+    //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+    //   );
+    // }
+
     // 🔹 Save withdrawal record in Pending state
     const withdrawalRecord = new Withdrawal({
       orderid,
@@ -462,6 +486,8 @@ router.post("/request", withdrawalLimiter, checkMargin, async (req, res) => {
     res.status(500).json({ success: false, error: "Failed to save request" });
   }
 });
+
+router.post("/request_v2", withdrawalLimiter, checkMargin, handleManualPaymentRequest);
 
 router.post("/approve/:id", async (req, res) => {
   try {
@@ -564,6 +590,30 @@ router.post("/approve/:id", async (req, res) => {
         { headers: { "Content-Type": "application/json" } },
       );
 
+      // const mt5Response = await axios.post(
+      //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+      //   null,
+      //   {
+      //     params: {
+      //       login: accountno, // keep existing accountno variable
+      //       type: 2, // balance operation (deposit)
+      //       balance:  +Math.abs(amountUSD), // keeping your existing USD conversion
+      //       comment: `REF-${refundOrderId}`.substring(0, 32), // MT5 max comment length = 32 chars
+      //     },
+      //   }
+      // );
+
+      // console.log("💰 MT5 Response:", mt5Response.data);
+
+      // if (
+      //   mt5Response.data.retcode !== "0 Done" &&
+      //   mt5Response.data.retcode !== 0
+      // ) {
+      //   throw new Error(
+      //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+      //   );
+      // }
+
       withdrawal.status = "Failed";
       withdrawal.response = decryptedResponse;
       await withdrawal.save();
@@ -625,6 +675,30 @@ router.post("/reject/:id", async (req, res) => {
       { headers: { "Content-Type": "application/json" } },
     );
 
+    // const mt5Response = await axios.post(
+    //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+    //   null,
+    //   {
+    //     params: {
+    //       login: accountno, // keep existing accountno variable
+    //       type: 2, // balance operation (deposit)
+    //       balance: +Math.abs(amountUSD), // keeping your existing USD conversion
+    //       comment: `REF-${refundOrderId}`.substring(0, 32), // MT5 max comment length = 32 chars
+    //     },
+    //   }
+    // );
+
+    // console.log("💰 MT5 Response:", mt5Response.data);
+
+    // if (
+    //   mt5Response.data.retcode !== "0 Done" &&
+    //   mt5Response.data.retcode !== 0
+    // ) {
+    //   throw new Error(
+    //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+    //   );
+    // }
+
     withdrawal.status = "Rejected";
     withdrawal.response = { message: "Rejected by admin" };
     await withdrawal.save();
@@ -638,8 +712,7 @@ router.post("/reject/:id", async (req, res) => {
         subject: "Withdrawal Request Rejected",
         html: `
           <p>Dear ${user.fullName || "Customer"},</p>
-          <p>Your withdrawal request (Order ID: <b>${
-            withdrawal.orderid
+          <p>Your withdrawal request (Order ID: <b>${withdrawal.orderid
           }</b>) has been <b>rejected</b> by the admin.</p>
           <p>Amount Requested: ₹${withdrawal.amount}</p>
           <p>The amount has been refunded to your account.</p>

@@ -10,6 +10,7 @@ const withdrawalSchema = new mongoose.Schema(
     amount: Number,
     note: String,
     accountNo: { type: String, required: true },
+    bankName: { type: String, default: "" },
 
     // 🔹 Use string enum instead of boolean
     status: {

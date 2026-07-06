@@ -5,6 +5,8 @@ const Order = require("../models/Order");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const Account = require("../models/account.model"); // Ensure you import Account model
+const { default: mongoose } = require("mongoose");
+const Withdrawal = require("../models/withdrawal");
 
 exports.handlePaymentCallback = async (req, res) => {
   try {
@@ -167,6 +169,151 @@ exports.handlePaymentCallback = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
+exports.handleManualPaymentRequest = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { ifsc, name, mobile, amount, note, accountNo, bankName } = req.body;
+
+    if (!ifsc || !name || !mobile || !amount || !accountNo) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing fields" });
+    }
+
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid withdrawal amount" });
+    }
+
+    // 🔒 1️⃣ BLOCK MULTIPLE PENDING
+    const existingPending = await Withdrawal.findOne(
+      { accountNo, status: "Pending" },
+      null,
+      { session },
+    );
+
+    if (existingPending) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "You already have a pending withdrawal request.",
+      });
+    }
+
+    // 5 MINUTE COOLDOWN
+    const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
+      session,
+    }).sort({ createdAt: -1 });
+
+    if (lastWithdrawal) {
+      const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
+      const fiveMinutes = 5 * 60 * 1000;
+
+      if (diff < fiveMinutes) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "You can only request withdrawal once every 5 minutes.",
+        });
+      }
+    }
+
+    // DAILY LIMIT (3 per day)
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const todayCount = await Withdrawal.countDocuments(
+      {
+        accountNo,
+        createdAt: { $gte: startOfDay },
+      },
+      { session },
+    );
+
+    if (todayCount >= 3) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Daily withdrawal limit reached (3 per day).",
+      });
+    }
+
+    const orderid = `WDR${Date.now()}`;
+
+    // 🔹 First, deduct from MoneyPlant to lock balance
+    const usdRate = await fetchRate();
+    const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
+
+    // 🔹 Save withdrawal record in Pending state
+    const withdrawalRecord = new Withdrawal({
+      orderid,
+      bankName,
+      ifsc,
+      name,
+      mobile,
+      amount,
+      note,
+      accountNo,
+      status: "Pending",
+    });
+    console.log("Saving withdrawal record:", withdrawalRecord);
+    await withdrawalRecord.save();
+
+    // ✅ Send email to admin
+    await sendEmail({
+      to: "support@billiondollarfx.com",
+      subject: "📤 New Manual Withdrawal Request Submitted",
+      html: `
+    <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+      <h2 style="color: #f39c12;">New Manual Withdrawal Request Submitted</h2>
+
+      <p>
+        A new withdrawal request has been submitted by a user using manually entered bank details and is awaiting review.
+      </p>
+
+      <ul>
+        <li><strong>Withdrawal Type:</strong> Manual Bank Details Submission</li>
+        <li><strong>Name:</strong> ${name}</li>
+        <li><strong>Order ID:</strong> ${orderid}</li>
+        <li><strong>Amount:</strong> ₹${amount} (≈ $${amountUSD})</li>
+        <li><strong>Bank Name:</strong> ${bankName}</li>
+        <li><strong>Account Number:</strong> ${accountNo}</li>
+        <li><strong>IFSC:</strong> ${ifsc}</li>
+        <li><strong>Mobile:</strong> ${mobile}</li>
+        <li><strong>Note:</strong> ${note || "N/A"}</li>
+      </ul>
+
+      <p>
+        Please log in to the admin dashboard to review and process this withdrawal request.
+      </p>
+
+      <br />
+      <p>
+        Regards,<br />
+        <strong>Billion Dollar FX System</strong>
+      </p>
+    </div>
+  `,
+    });
+
+    res.json({
+      success: true,
+      message: "Withdrawal request submitted",
+      withdrawalRecord,
+    });
+  } catch (err) {
+    console.error("❌ Error saving withdrawal request:", err.message);
+    res.status(500).json({ success: false, error: "Failed to save request" });
+  }
+}
 
 // your schema with { orderid, accountNo, amount, status }
 
@@ -362,7 +509,7 @@ exports.handleCryptoCallback = async (req, res) => {
 
         // console.log("💰 MoneyPlant Response:", mpResponse.data);
         // const AccountNo=accountno
-        
+
         const mt5Response = await axios.post(
           `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
           null,
