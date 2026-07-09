@@ -1,4 +1,6 @@
 const axios = require("axios");
+const https = require("https");
+
 const Account = require("../models/account.model");
 const User = require("../models/User");
 
@@ -41,14 +43,17 @@ exports.registerUserWithMT5 = async (req, res) => {
 
     // Create MT5 User
     const mt5Res = await axios.post(
-      `${process.env.MT5_WEB_API_URL}/api/user/add?${mt5Query.toString()}`,
-      mt5Payload,
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    );
+  `${process.env.MT5_WEB_API_URL}/api/user/add?${mt5Query.toString()}`,
+  mt5Payload,
+  {
+    headers: {
+      "Content-Type": "application/json",
+    },
+    httpsAgent: new https.Agent({
+      rejectUnauthorized: false,
+    }),
+  }
+);
 
     const mt5Data = mt5Res.data;
 
