@@ -4,117 +4,116 @@ const https = require("https");
 const Account = require("../models/account.model");
 const User = require("../models/User");
 
+// const { withSession } = require("../utils/mt5Session");
+const MT5Request = require("../utils/mt5Request");
+
+// const mt5 = new MT5Request(process.env.MT5_SERVER, 443); // e.g. 86.104.251.229
+
+// function authenticateMT5() {
+//   return new Promise((resolve, reject) => {
+//     mt5.Auth(
+//       process.env.MT5_MANAGER_LOGIN,
+//       process.env.MT5_MANAGER_PASSWORD,
+//       process.env.MT5_BUILD,     // e.g. 4530
+//       "BigWigMT5Backend",
+//       (error) => error ? reject(error) : resolve()
+//     );
+//   });
+// }
+
+let mt5Lock = Promise.resolve();
+function runExclusive(fn) {
+  const result = mt5Lock.then(fn, fn);
+  mt5Lock = result.catch(() => {});
+  return result;
+}
 
 exports.registerUserWithMT5 = async (req, res) => {
   const { email, curr, actype, Utype, Ref, Password } = req.body;
-
-  console.log("Received MT5 registration request:", req.body);
+  console.log(req.body)
+  console.log("REGISTER HIT", new Date().toISOString(), email);
 
   try {
-    // Find user
     const user = await User.findOne({ email });
-
     if (!user) {
-      return res.status(404).json({
-        message: "User not found",
-      });
+      return res.status(404).json({ message: "User not found" });
     }
 
-    // MT5 Query Parameters
-    const mt5Query = new URLSearchParams({
-      login: "0", // Auto allocate login
-      group: "demoforex",
+    const mt5Params = {
+      // login: "333385081",
+      group: "demo\\demoforex", //demo.FOREX/15
       name: user.fullName.substring(0, 127),
       country: user.nationality || "",
-      city: user.city || "",
-      state: user.state || "",
-      phone: user.phone || "",
+      phone: req.mobile || user.phone,
       email: user.email,
-      leverage: "100",
-    });
-
-    // MT5 Body Payload
-    const mt5Payload = {
-      PassMain: Password,
-      PassInvestor: Password
-        ? `${Password.substring(0, Math.min(10, Password.length))}#Inv1`
-        : "Abcd@1234",
+      leverage: 100,
+      pass_main: Password,
+      pass_investor: Password
+  ? `${Password.substring(0, Math.min(10, Password.length))}#Inv1`
+  : "Abcd@1234",
     };
 
-    // Create MT5 User
-    const mt5Res = await axios.post(
-  `${process.env.MT5_WEB_API_URL}/api/user/add?${mt5Query.toString()}`,
-  mt5Payload,
-  {
-    headers: {
-      "Content-Type": "application/json",
-    },
-    httpsAgent: new https.Agent({
-      rejectUnauthorized: false,
-    }),
-  }
-);
+    const mt5Data = await runExclusive(async () => {
+      const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
 
-    const mt5Data = mt5Res.data;
+      console.log(process.env.MT5_MANAGER_LOGIN,
+          process.env.MT5_MANAGER_PASSWORD,
+          process.env.MT5_BUILD,);
 
-    console.log("MT5 Response:", mt5Data);
-
-    // Success
-    if (
-      mt5Data.retcode === "0 Done" ||
-      mt5Data.retcode === 0
-    ) {
-      const accountNo =
-        mt5Data.answer?.Login ||
-        mt5Data.Login;
-
-      const newAccount = new Account({
-        user: user._id,
-        accountNo,
-        currency: curr,
-        accountType: actype,
-        userType: Utype,
-        referralCode: Ref || "",
-        mt5Password: Password, // keep existing field if schema unchanged
+      await new Promise((resolve, reject) => {
+        mt5.Auth(
+          process.env.MT5_MANAGER_LOGIN,
+          process.env.MT5_MANAGER_PASSWORD,
+          process.env.MT5_BUILD,
+          "WebManager",
+          (error) => (error ? reject(error) : resolve())
+        );
       });
 
-      await newAccount.save();
-
-      return res.status(200).json({
-        message: "Account successfully created",
-        accountNo,
+      return new Promise((resolve, reject) => {
+        mt5.UserAdd(mt5Params, (error, answer) => {
+          if (error) return reject(error);
+          resolve(answer);
+        });
       });
-    }
-
-    // MT5 Error Handling
-    let reason = mt5Data.retcode;
-
-    if (Number(mt5Data.retcode) === 3002) {
-      reason = "No available MT5 account numbers";
-    } else if (Number(mt5Data.retcode) === 3003) {
-      reason = "Invalid trade server";
-    } else if (Number(mt5Data.retcode) === 3004) {
-      reason = "Account already exists";
-    } else if (Number(mt5Data.retcode) === 3006) {
-      reason = "Password complexity requirement failed";
-    } else if (Number(mt5Data.retcode) === 8) {
-      reason = "Permission denied or group does not exist";
-    }
-
-    return res.status(400).json({
-      message: reason,
-      mt5Response: mt5Data,
     });
+
+    const accountNo = mt5Data.Login || mt5Data.answer?.Login;
+    const newAccount = new Account({
+      user: user._id,
+      accountNo,
+      currency: curr,
+      accountType: actype,
+      userType: Utype,
+      referralCode: Ref || "",
+      mt5Password: Password,
+    });
+    // console.log("newAccount", newAccount);
+    await newAccount.save();
+
+    return res.status(200).json({ message: "Account successfully created", accountNo });
   } catch (error) {
-    console.error("Error during MT5 registration:", error);
-    console.error(
-      "MT5 API error:",
-      error.response?.data || error.message
-    );
+  console.error("Error during MT5 registration:", error);
 
-    return res.status(500).json({
-      message: "Internal Server Error",
-      error: error.response?.data || error.message,
+  // MT5 retcode errors come through as strings like "3004 Account already exists"
+  if (typeof error === "string" && /^\d+/.test(error)) {
+    const code = parseInt(error, 10);
+    const knownMessages = {
+      3002: "No available MT5 account numbers",
+      3003: "Invalid trade server",
+      3004: "Account already exists",
+      3006: "Password complexity requirement failed",
+      8: "Permission denied or group does not exist",
+    };
+    return res.status(400).json({
+      message: knownMessages[code] || error,
+      mt5Retcode: code,
     });
   }
+
+  return res.status(500).json({
+    message: "Internal Server Error",
+    error: typeof error === "object" ? error.message || error : error,
+  });
+}
 };
