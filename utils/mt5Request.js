@@ -157,7 +157,9 @@ MT5Request.prototype.ProcessAuthFinal = function (answer, password, cli_random) 
 
 MT5Request.prototype.Auth = function (login, password, build, agent, callback) {
   if (!login || !password || !build || !agent)
-    return;
+  {
+        return callback && callback("Missing required Auth parameters (login/password/build/agent)");
+  }
   var self = this;
   self.Get("/api/auth/start?version=" + build + "&agent=" + agent + "&login=" + login + "&type=manager", function (error, res, body) {
     var answer = self.ParseBodyJSON(error, res, body, callback);
