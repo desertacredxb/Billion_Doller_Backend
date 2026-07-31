@@ -274,4 +274,21 @@ MT5Request.prototype.UserAdd = function (params, callback) {
   });
 };
 
+
+MT5Request.prototype.TradeBalance = function (params, callback) {
+  var self = this;
+  var queryParams = {
+    login: params.login,
+    type: params.type,
+    balance: params.balance,
+    comment: params.comment,
+  };
+  var qs = new URLSearchParams(queryParams).toString();
+
+  self.Post("/api/trade/balance?" + qs, "", function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) callback && callback(null, answer);
+  });
+};
+
 module.exports = MT5Request;

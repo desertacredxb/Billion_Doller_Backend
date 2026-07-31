@@ -7,7 +7,8 @@ const {
   handlePaymentCallback,
   handleRameeCallback,
   handleCryptoCallback,
-  handleManualPaymentRequest} = require("../controllers/paymentController");
+  handleManualPaymentRequest,
+  handleTruepay9Callback } = require("../controllers/paymentController");
 const {
   encryptData,
   decryptData,
@@ -33,6 +34,7 @@ const withdrawalLimiter = rateLimit({
 router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
 router.post("/crypto/callback", handleCryptoCallback);
+router.post("/truepay9/callback", handleTruepay9Callback);
 
 let DIGIPAY_TOKEN = null;
 let TOKEN_EXPIRY = null;
