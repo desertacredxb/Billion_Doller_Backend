@@ -136,6 +136,80 @@ const AGENT_CODE = process.env.RAMEEPAY_AGENT_CODE;
 const CRYPTO_AGENT_CODE = process.env.CRYPTO_AGENT_CODE;
 const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
 const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
+const TRUEPAY9_API = "https://truepay9.com/api/iframe/createOrder";
+
+router.post("/truepay9/deposit", async (req, res) => {
+  try {
+    const { accountNo, amount } = req.body;
+    console.log(accountNo, amount)
+    const numericAmount = Number(amount);
+
+    if (!accountNo || !Number.isFinite(numericAmount) || numericAmount < 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid account number and minimum amount of 1000 are required",
+      });
+    }
+
+    if (!process.env.TRUEPAY9_ACCESS_KEY) {
+      console.error("Truepay9 deposit: TRUEPAY9_ACCESS_KEY is not configured");
+      return res.status(503).json({
+        success: false,
+        message: "Truepay9 is not configured",
+      });
+    }
+
+    const account = await Account.findOne({ accountNo });
+    if (!account) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Account not found" });
+    }
+
+    const { data } = await axios.post(
+      TRUEPAY9_API,
+      {
+        amount: numericAmount,
+        access_key: process.env.TRUEPAY9_ACCESS_KEY,
+        username: String(account.accountNo),
+      },
+      { headers: { "Content-Type": "application/json" } },
+    );
+
+    const providerOrderId = data?.data?.order_id;
+    const paymentUrl = data?.data?.pay;
+
+    if (!data?.status || !providerOrderId || !paymentUrl) {
+      console.error("Truepay9 create order rejected:", data?.message);
+      return res.status(502).json({
+        success: false,
+        message: data?.message || "Truepay9 did not create the order",
+      });
+    }
+
+    const order = await Order.create({
+      orderid: String(providerOrderId),
+      account: account._id,
+      accountNo: String(account.accountNo),
+      amount: numericAmount,
+      status: "PENDING",
+    });
+
+    return res.json({
+      success: true,
+      message: data.message || "Order created successfully",
+      payment_url: paymentUrl,
+      order_id: order.orderid,
+    });
+  } catch (err) {
+    console.error("Truepay9 deposit error:", err.response?.data || err.message);
+    return res.status(502).json({
+      success: false,
+      message:
+        err.response?.data?.message || "Unable to create Truepay9 deposit",
+    });
+  }
+});
 
 router.post("/ramee/deposit", async (req, res) => {
   try {
@@ -173,22 +247,52 @@ router.post("/ramee/deposit", async (req, res) => {
 
     // Encrypt payload
     const encryptedData = encryptData(orderData);
+    console.log("encryypted data", encryptedData)
 
     const body = {
       reqData: encryptedData,
       agentCode: AGENT_CODE,
     };
 
+    // //  5️⃣ Send to RameePay
+    // const res = await axios.post(RAMEEPAY_API, body, {
+    //   headers: { "Content-Type": "application/json" },
+    // });
+    // console.log("res", res);
+
+    // // 6️⃣Decrypt response if exists
+    // let decryptedResponse = {};
+    // if (data.data) {
+    //   decryptedResponse = decryptData(data.data);
+    //   console.log("✅ Decrypted Response:", decryptedResponse);
+    // }
+
+    // // 7️⃣ Return response to frontend
+    // res.json({
+    //   success: true,
+    //   message: "Order created & sent to RameePay",
+    //   order: {
+    //     orderid: newOrder.orderid,
+    //     amount: newOrder.amount,
+    //     status: newOrder.status,
+    //     createdAt: newOrder.createdAt,
+    //     accountNo: newOrder.accountNo,
+    //     name: account.user?.fullName || "Unknown", // ✅ now included
+    //   },
+    //   raw: data,
+    //   decrypted: decryptedResponse,
+    // });
+
     //  5️⃣ Send to RameePay
-    const { data } = await axios.post(RAMEEPAY_API, body, {
+    const apiRes = await axios.post(RAMEEPAY_API, body, {
       headers: { "Content-Type": "application/json" },
     });
-    console.log(data);
+    console.log("res", apiRes.data);
 
-    // 6️⃣Decrypt response if exists
+    // 6️⃣ Decrypt response if exists
     let decryptedResponse = {};
-    if (data.data) {
-      decryptedResponse = decryptData(data.data);
+    if (apiRes.data?.data) {
+      decryptedResponse = decryptData(apiRes.data.data);
       console.log("✅ Decrypted Response:", decryptedResponse);
     }
 
@@ -202,9 +306,9 @@ router.post("/ramee/deposit", async (req, res) => {
         status: newOrder.status,
         createdAt: newOrder.createdAt,
         accountNo: newOrder.accountNo,
-        name: account.user?.fullName || "Unknown", // ✅ now included
+        name: account.user?.fullName || "Unknown",
       },
-      raw: data,
+      raw: apiRes.data,
       decrypted: decryptedResponse,
     });
   } catch (err) {

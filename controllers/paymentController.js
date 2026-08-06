@@ -680,7 +680,7 @@ async function handleTruepay9Deposit(req, res, { isSuccess, amount, order_id, ba
       login: accountno,
       type: 2,
       balance: amountUSD,
-      comment: `DEP-${orderid}`.substring(0, 32),
+      comment: `DEP-${order_id}`.substring(0, 32),
     });
 
     if (mt5Answer.retcode !== "0 Done" && mt5Answer.retcode !== 0) {
