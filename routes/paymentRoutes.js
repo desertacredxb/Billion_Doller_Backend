@@ -35,6 +35,7 @@ router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
 router.post("/crypto/callback", handleCryptoCallback);
 router.post("/truepay9/callback", handleTruepay9Callback);
+router.post("/trustpay24/callback", handleTruepay9Callback);
 
 let DIGIPAY_TOKEN = null;
 let TOKEN_EXPIRY = null;
@@ -137,58 +138,256 @@ const CRYPTO_AGENT_CODE = process.env.CRYPTO_AGENT_CODE;
 const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
 const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
 const TRUEPAY9_API = "https://truepay9.com/api/iframe/createOrder";
+const TRUSTPAY_API = "https://trustpay24.online/api/payin/create";
 
-router.post("/truepay9/deposit", async (req, res) => {
+// router.post("/truepay9/deposit", async (req, res) => {
+//   try {
+//     const { accountNo, amount } = req.body;
+//     console.log(accountNo, amount)
+//     const numericAmount = Number(amount);
+
+//     if (!accountNo || !Number.isFinite(numericAmount) || numericAmount < 1000) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "A valid account number and minimum amount of 1000 are required",
+//       });
+//     }
+
+//     if (!process.env.TRUEPAY9_ACCESS_KEY) {
+//       console.error("Truepay9 deposit: TRUEPAY9_ACCESS_KEY is not configured");
+//       return res.status(503).json({
+//         success: false,
+//         message: "Truepay9 is not configured",
+//       });
+//     }
+
+//     const account = await Account.findOne({ accountNo });
+//     if (!account) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Account not found" });
+//     }
+
+//     const { data } = await axios.post(
+//       TRUEPAY9_API,
+//       {
+//         amount: numericAmount,
+//         access_key: process.env.TRUEPAY9_ACCESS_KEY,
+//         username: String(account.accountNo),
+//       },
+//       { headers: { "Content-Type": "application/json" } },
+//     );
+
+//     const providerOrderId = data?.data?.order_id;
+//     const paymentUrl = data?.data?.pay;
+
+//     if (!data?.status || !providerOrderId || !paymentUrl) {
+//       console.error("Truepay9 create order rejected:", data?.message);
+//       return res.status(502).json({
+//         success: false,
+//         message: data?.message || "Truepay9 did not create the order",
+//       });
+//     }
+
+//     const order = await Order.create({
+//       orderid: String(providerOrderId),
+//       account: account._id,
+//       accountNo: String(account.accountNo),
+//       amount: numericAmount,
+//       status: "PENDING",
+//     });
+
+//     return res.json({
+//       success: true,
+//       message: data.message || "Order created successfully",
+//       payment_url: paymentUrl,
+//       order_id: order.orderid,
+//     });
+//   } catch (err) {
+//     console.error("Truepay9 deposit error:", err.response?.data || err.message);
+//     return res.status(502).json({
+//       success: false,
+//       message:
+//         err.response?.data?.message || "Unable to create Truepay9 deposit",
+//     });
+//   }
+// });
+
+// router.post("/trustpay24/deposit", async (req, res) => {
+//   try {
+//     const { accountNo, amount } = req.body;
+//     console.log(accountNo, amount)
+//     const numericAmount = Number(amount);
+
+//     if (!accountNo || !Number.isFinite(numericAmount) || numericAmount < 1000) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "A valid account number and minimum amount of 1000 are required",
+//       });
+//     }
+
+//     if (!process.env.TRUEPAY9_ACCESS_KEY) {
+//       console.error("Truepay9 deposit: TRUEPAY9_ACCESS_KEY is not configured");
+//       return res.status(503).json({
+//         success: false,
+//         message: "Truepay9 is not configured",
+//       });
+//     }
+
+//     const account = await Account.findOne({ accountNo }).populate('user', 'fullName phone');
+//     if (!account) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Account not found" });
+//     }
+
+//     const { data } = await axios.post(
+//       TRUSTPAY_API,
+//       {
+//         merchant_order_id: "ORD1001",
+//         amount: numericAmount,
+//         customer_name: String(account.accountNo),
+//         customer_mobile: account.user.fullName,
+//         webhook_url: "https://billion-doller-backend.onrender.com/api/payment/rameePay/callback",
+//         redirect_url: "https://www.billiondollarfx.com/transactions"
+//       },
+//       {
+//         headers: {
+//           "x-api-key": process.env.TRUSTPAY_API_KEY,
+//           "Content-Type": "application/json",
+//         }
+//       },
+//     );
+
+//     const providerOrderId = data?.data?.order_id;
+//     const paymentUrl = data?.data?.pay;
+
+//     if (!data?.status || !providerOrderId || !paymentUrl) {
+//       console.error("Truepay9 create order rejected:", data?.message);
+//       return res.status(502).json({
+//         success: false,
+//         message: data?.message || "Truepay9 did not create the order",
+//       });
+//     }
+
+//     const order = await Order.create({
+//       orderid: String(providerOrderId),
+//       account: account._id,
+//       accountNo: String(account.accountNo),
+//       amount: numericAmount,
+//       status: "PENDING",
+//     });
+
+//     return res.json({
+//       success: true,
+//       message: data.message || "Order created successfully",
+//       payment_url: paymentUrl,
+//       order_id: order.orderid,
+//     });
+//   } catch (err) {
+//     console.error("Truepay9 deposit error:", err.response?.data || err.message);
+//     return res.status(502).json({
+//       success: false,
+//       message:
+//         err.response?.data?.message || "Unable to create Truepay9 deposit",
+//     });
+//   }
+// });
+
+
+router.post("/trustpay24/deposit", async (req, res) => {
   try {
     const { accountNo, amount } = req.body;
-    console.log(accountNo, amount)
+    console.log("Deposit request:", accountNo, amount);
+
     const numericAmount = Number(amount);
 
-    if (!accountNo || !Number.isFinite(numericAmount) || numericAmount < 1000) {
+    // Validate request
+    if (
+      !accountNo ||
+      !Number.isFinite(numericAmount) ||
+      numericAmount < 1000
+    ) {
       return res.status(400).json({
         success: false,
         message: "A valid account number and minimum amount of 1000 are required",
       });
     }
 
-    if (!process.env.TRUEPAY9_ACCESS_KEY) {
-      console.error("Truepay9 deposit: TRUEPAY9_ACCESS_KEY is not configured");
+    // console.log("process.env.TRUSTPAY_API_KEY", process.env.TRUSTPAY_API_KEY)
+    // Validate API key
+    if (!process.env.TRUSTPAY_API_KEY) {
+      console.error(
+        "TrustPay24 deposit: TRUSTPAY_API_KEY is not configured"
+      );
+
       return res.status(503).json({
         success: false,
-        message: "Truepay9 is not configured",
+        message: "TrustPay24 is not configured",
       });
     }
 
-    const account = await Account.findOne({ accountNo });
-    if (!account) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Account not found" });
-    }
-
-    const { data } = await axios.post(
-      TRUEPAY9_API,
-      {
-        amount: numericAmount,
-        access_key: process.env.TRUEPAY9_ACCESS_KEY,
-        username: String(account.accountNo),
-      },
-      { headers: { "Content-Type": "application/json" } },
+    // Find account
+    const account = await Account.findOne({ accountNo }).populate(
+      "user",
+      "fullName phone"
     );
 
-    const providerOrderId = data?.data?.order_id;
-    const paymentUrl = data?.data?.pay;
-
-    if (!data?.status || !providerOrderId || !paymentUrl) {
-      console.error("Truepay9 create order rejected:", data?.message);
-      return res.status(502).json({
+    if (!account) {
+      return res.status(404).json({
         success: false,
-        message: data?.message || "Truepay9 did not create the order",
+        message: "Account not found",
       });
     }
 
+    // Generate unique merchant order ID
+    const merchantOrderId = `ORD${Date.now()}${Math.floor(
+      Math.random() * 1000
+    )}`;
+
+    // TrustPay24 checkout API
+    const { data } = await axios.post(
+      `${TRUSTPAY_API}/api/payin/checkout/create`,
+      {
+        merchant_order_id: merchantOrderId,
+        amount: numericAmount,
+        customer_name: account.user?.fullName || String(account.accountNo),
+        customer_mobile: account.user?.phone || "",
+        webhook_url:
+          "https://billion-doller-backend.onrender.com/api/payment/trustpay24/callback",
+        redirect_url: "https://www.billiondollarfx.com/transactions",
+      },
+      {
+        headers: {
+          "x-api-key": process.env.TRUSTPAY_API_KEY,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("TrustPay24 response:", data);
+
+    // Validate provider response
+    if (
+      !data?.success ||
+      !data?.transaction_ref ||
+      !data?.checkout_url
+    ) {
+      console.error(
+        "TrustPay24 create checkout rejected:",
+        data?.message || data
+      );
+
+      return res.status(502).json({
+        success: false,
+        message:
+          data?.message || "TrustPay24 did not create the checkout",
+      });
+    }
+
+    // Save order in database
     const order = await Order.create({
-      orderid: String(providerOrderId),
+      orderid: String(data.transaction_ref),
       account: account._id,
       accountNo: String(account.accountNo),
       amount: numericAmount,
@@ -197,16 +396,32 @@ router.post("/truepay9/deposit", async (req, res) => {
 
     return res.json({
       success: true,
-      message: data.message || "Order created successfully",
-      payment_url: paymentUrl,
+      message: "Checkout created successfully",
+
+      // Internal order
       order_id: order.orderid,
+
+      // TrustPay24 details
+      transaction_id: data.transaction_id,
+      transaction_ref: data.transaction_ref,
+      merchant_order_id: data.merchant_order_id,
+      amount: data.amount,
+      status: data.status,
+      checkout_url: data.checkout_url,
+      expires_at: data.expires_at,
+      expires_in_seconds: data.expires_in_seconds,
     });
   } catch (err) {
-    console.error("Truepay9 deposit error:", err.response?.data || err.message);
+    console.error(
+      "TrustPay24 deposit error:",
+      err.response?.data || err.message
+    );
+
     return res.status(502).json({
       success: false,
       message:
-        err.response?.data?.message || "Unable to create Truepay9 deposit",
+        err.response?.data?.message ||
+        "Unable to create TrustPay24 deposit",
     });
   }
 });

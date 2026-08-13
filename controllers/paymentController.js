@@ -636,6 +636,183 @@ exports.handleTruepay9Callback = async (req, res) => {
   }
 };
 
+exports.handleTrustpay24Callback = async (req, res) => {
+  try {
+    const {
+      event,
+      transaction_id,
+      transaction_ref,
+      merchant_order_id,
+      amount,
+      utr_number,
+      status,
+      approved_at,
+      expired_at,
+    } = req.body;
+
+    console.log("🔔 TrustPay24 Webhook:", req.body);
+
+    // Validate common webhook fields
+    if (!event || !transaction_ref || !merchant_order_id || !status) {
+      console.error("❌ TrustPay24 Callback: Invalid payload");
+
+      // Always return 200 so the provider doesn't repeatedly retry
+      return res.status(200).json({
+        success: false,
+        message: "Invalid payload",
+      });
+    }
+
+    // Find our order using TrustPay24 transaction_ref
+    const order = await Order.findOne({
+      orderid: String(transaction_ref),
+    });
+
+    if (!order) {
+      console.error(
+        "❌ TrustPay24 Callback: Order not found:",
+        transaction_ref
+      );
+
+      return res.status(200).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Handle approved payment
+    if (event === "payin.approved") {
+      if (String(status).toLowerCase() !== "approved") {
+        return res.status(200).json({
+          success: false,
+          message: "Invalid approved status",
+        });
+      }
+
+      // Prevent duplicate webhook processing
+      if (String(order.status).toUpperCase() === "SUCCESS") {
+        console.log(
+          "ℹ️ TrustPay24 Callback: Order already processed:",
+          transaction_ref
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: "Already processed",
+        });
+      }
+
+      order.status = "SUCCESS";
+
+      // If your Order schema has these fields, save them
+      order.utrNumber = utr_number || null;
+      order.transactionId = transaction_id || null;
+      order.transactionRef = transaction_ref || null;
+      order.approvedAt = approved_at
+        ? new Date(approved_at)
+        : new Date();
+
+      await order.save();
+
+      console.log(
+        "✅ TrustPay24 Deposit Approved:",
+        transaction_ref,
+        "Amount:",
+        amount,
+        "UTR:",
+        utr_number
+      );
+
+      /*
+       * IMPORTANT:
+       * Add your account balance update here.
+       *
+       * Example:
+       *
+       * await Account.findByIdAndUpdate(order.account, {
+       *   $inc: { balance: Number(amount) }
+       * });
+       */
+
+      return res.status(200).json({
+        success: true,
+        message: "Webhook processed successfully",
+      });
+    }
+
+    // Handle expired payment
+    if (event === "payin.expired") {
+      if (String(status).toLowerCase() !== "expired") {
+        return res.status(200).json({
+          success: false,
+          message: "Invalid expired status",
+        });
+      }
+
+      // Don't overwrite a successfully completed order
+      if (String(order.status).toUpperCase() === "SUCCESS") {
+        console.log(
+          "⚠️ TrustPay24 Callback: Order already successful:",
+          transaction_ref
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: "Order already successful",
+        });
+      }
+
+      order.status = "EXPIRED";
+
+      if (transaction_id) {
+        order.transactionId = transaction_id;
+      }
+
+      if (transaction_ref) {
+        order.transactionRef = transaction_ref;
+      }
+
+      if (expired_at) {
+        order.expiredAt = new Date(expired_at);
+      }
+
+      await order.save();
+
+      console.log(
+        "⏱️ TrustPay24 Deposit Expired:",
+        transaction_ref
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Expired webhook processed successfully",
+      });
+    }
+
+    // Unknown event
+    console.error(
+      "❌ TrustPay24 Callback: Unknown event:",
+      event
+    );
+
+    return res.status(200).json({
+      success: false,
+      message: "Unknown event",
+    });
+  } catch (error) {
+    console.error(
+      "❌ TrustPay24 Callback Error:",
+      error.response?.data || error.message
+    );
+
+    // Provider expects HTTP 200 acknowledgement
+    return res.status(200).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
 // 🔹 Deposit notification
 async function handleTruepay9Deposit(req, res, { isSuccess, amount, order_id, bank_tid }) {
   const order = await Order.findOne({ orderid: order_id });
