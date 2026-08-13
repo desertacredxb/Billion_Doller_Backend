@@ -138,7 +138,7 @@ const CRYPTO_AGENT_CODE = process.env.CRYPTO_AGENT_CODE;
 const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
 const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
 const TRUEPAY9_API = "https://truepay9.com/api/iframe/createOrder";
-const TRUSTPAY_API = "https://trustpay24.online/api/payin/create";
+const TRUSTPAY_API = "https://trustpay24.online";
 
 // router.post("/truepay9/deposit", async (req, res) => {
 //   try {
