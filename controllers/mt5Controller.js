@@ -41,7 +41,8 @@ exports.registerUserWithMT5 = async (req, res) => {
 
     const mt5Params = {
       // login: "333385081",
-      group: "demo\\demoforex", //demo.FOREX/15
+      // group: "demo\\demoforex", //demo.FOREX/15
+      group: "Forex\\BDFX", //demo.FOREX/15
       name: user.fullName.substring(0, 127),
       country: user.nationality || "",
       phone: req.mobile || user.phone,
