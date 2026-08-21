@@ -7,6 +7,7 @@ const sendEmail = require("../utils/sendEmail");
 const Account = require("../models/account.model"); // Ensure you import Account model
 const { default: mongoose } = require("mongoose");
 const Withdrawal = require("../models/withdrawal");
+const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 
 exports.handlePaymentCallback = async (req, res) => {
   try {
@@ -396,27 +397,26 @@ exports.handleRameeCallback = async (req, res) => {
 
       // 5. Call MoneyPlant API
       try {
-        // const mpResponse = await axios.post(
-        //   "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-        //   { accountno, amount: amountUSD, orderid },
-        //   { headers: { "Content-Type": "application/json" } }
+
+        // const mt5Response = await axios.post(
+        //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+        //   null,
+        //   {
+        //     params: {
+        //       login: accountno, // keep existing accountno variable
+        //       type: 2, // balance operation (deposit)
+        //       balance: amountUSD, // keeping your existing USD conversion
+        //       comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+        //     },
+        //   }
         // );
 
-        // console.log("💰 MoneyPlant Response:", mpResponse.data);
-        // const AccountNo=accountno
-
-        const mt5Response = await axios.post(
-          `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
-          null,
-          {
-            params: {
-              login: accountno, // keep existing accountno variable
-              type: 2, // balance operation (deposit)
-              balance: amountUSD, // keeping your existing USD conversion
-              comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
-            },
-          }
-        );
+        const mt5Response = await updateMT5Balance({
+          login: accountno, // keep existing accountno variable
+          type: 2, // balance operation (deposit)
+          balance: amountUSD, // keeping your existing USD conversion
+          comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+        });
 
         console.log("💰 MT5 Response:", mt5Response.data);
 
@@ -466,7 +466,7 @@ exports.handleRameeCallback = async (req, res) => {
           });
         }
       } catch (err) {
-        console.error("❌ MoneyPlant Error:", err.message);
+        console.error("❌ MT5 Error:", err.message);
       }
     }
 
