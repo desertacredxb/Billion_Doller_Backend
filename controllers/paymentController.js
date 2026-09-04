@@ -532,18 +532,12 @@ exports.handleCryptoCallback = async (req, res) => {
         // console.log("💰 MoneyPlant Response:", mpResponse.data);
         // const AccountNo=accountno
 
-        const mt5Response = await axios.post(
-          `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
-          null,
-          {
-            params: {
-              login: accountno, // keep existing accountno variable
-              type: 2, // balance operation (deposit)
-              balance: amountUSD, // keeping your existing USD conversion
-              comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
-            },
-          }
-        );
+        const mt5Response = await updateMT5Balance({
+          login: accountno, // keep existing accountno variable
+          type: 2, // balance operation (deposit)
+          balance: amountUSD, // keeping your existing USD conversion
+          comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+        });
 
         console.log("💰 MT5 Response:", mt5Response.data);
 
@@ -1201,16 +1195,29 @@ exports.handleTrustpay24Callback = async (req, res) => {
         utr_number
       );
 
-      /*
-       * IMPORTANT:
-       * Add your account balance update here.
-       *
-       * Example:
-       *
-       * await Account.findByIdAndUpdate(order.account, {
-       *   $inc: { balance: Number(amount) }
-       * });
-       */
+      const mt5Response = await updateMT5Balance({
+            login: accountno,
+            type: 2,
+            balance: amountUSD,
+            comment: `DEP-${order_id}`.substring(0, 32),
+          });
+
+          console.log(
+            "MT5 Response:",
+            mt5Response.data
+          );
+
+          // --------------------------------------------
+          // Validate MT5 response
+          // --------------------------------------------
+          if (
+            mt5Response.data.retcode !== "0 Done" &&
+            mt5Response.data.retcode !== 0
+          ) {
+            throw new Error(
+              `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+            );
+          }
 
       return res.status(200).json({
         success: true,
