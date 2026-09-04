@@ -21,6 +21,64 @@ const MT5Request = require("../utils/mt5Request");
 //   });
 // }
 
+
+/**
+ * Reusable MT5 Error Formatting Helper
+ */
+function handleMT5Error(error, res, defaultCode) {
+  if (error?.code === "ETIMEDOUT") {
+    return res.status(504).json({
+      success: false,
+      code: "MT5_CONNECTION_TIMEOUT",
+      message: "Unable to connect to the MT5 server. Please try again later.",
+    });
+  }
+
+  if (error?.code === "ECONNREFUSED") {
+    return res.status(503).json({
+      success: false,
+      code: "MT5_CONNECTION_REFUSED",
+      message: "MT5 server is currently unavailable. Please try again later.",
+    });
+  }
+
+  if (error?.code === "ENOTFOUND" || error?.code === "EAI_AGAIN") {
+    return res.status(503).json({
+      success: false,
+      code: "MT5_SERVER_NOT_FOUND",
+      message: "MT5 server could not be reached. Please try again later.",
+    });
+  }
+
+  const errorMessage = typeof error === "string" ? error : error?.message || "";
+
+  if (/^\d+/.test(errorMessage)) {
+    const code = parseInt(errorMessage, 10);
+    const knownMessages = {
+      1: "Authorization failed or invalid manager session",
+      8: "Permission denied or MT5 group does not exist",
+      3001: "User account not found",
+      3002: "No available MT5 account numbers",
+      3003: "Invalid trade server",
+      3004: "Account already exists",
+      3006: "Password complexity requirement failed",
+    };
+
+    return res.status(400).json({
+      success: false,
+      code: `MT5_${code}`,
+      message: knownMessages[code] || errorMessage,
+    });
+  }
+
+  return res.status(500).json({
+    success: false,
+    code: defaultCode,
+    message: "Unable to complete MT5 operation. Please try again.",
+  });
+}
+
+
 let mt5Lock = Promise.resolve();
 function runExclusive(fn) {
   const result = mt5Lock.then(fn, fn);
@@ -39,6 +97,7 @@ exports.registerUserWithMT5 = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const investorPassword = `${Password}#Inv`;
     const mt5Params = {
       // login: "333385081",
       // group: "demo\\demoforex", //demo.FOREX/15
@@ -49,9 +108,7 @@ exports.registerUserWithMT5 = async (req, res) => {
       email: user.email,
       leverage: 100,
       pass_main: Password,
-      pass_investor: Password
-        ? `${Password.substring(0, Math.min(10, Password.length))}#Inv1`
-        : "Abcd@1234",
+      pass_investor: investorPassword,
     };
 
     const mt5Data = await runExclusive(async () => {
@@ -88,6 +145,7 @@ exports.registerUserWithMT5 = async (req, res) => {
       userType: Utype,
       referralCode: Ref || "",
       mt5Password: Password,
+      mt5InvestorPassword: investorPassword,
     });
     // console.log("newAccount", newAccount);
     await newAccount.save();
@@ -170,4 +228,118 @@ exports.registerUserWithMT5 = async (req, res) => {
     code: "MT5_REGISTRATION_FAILED",
     message: "Unable to create MT5 account. Please try again.",
   });
+};
+
+exports.getMT5User = async (req, res) => {
+  const { login } = req.query;
+
+  if (!login) {
+    return res.status(400).json({
+      success: false,
+      message: "MT5 login query parameter is required",
+    });
+  }
+
+  try {
+    const userData = await runExclusive(async () => {
+      const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
+
+      // 1. Authenticate connection
+      await new Promise((resolve, reject) => {
+        mt5.Auth(
+          process.env.MT5_MANAGER_LOGIN,
+          process.env.MT5_MANAGER_PASSWORD,
+          process.env.MT5_BUILD,
+          "WebManager",
+          (error) => (error ? reject(error) : resolve())
+        );
+      });
+
+      // 2. Fetch User Info
+      return new Promise((resolve, reject) => {
+        mt5.UserGet(login, (error, answer) => {
+          if (error) return reject(error);
+          resolve(answer);
+        });
+      });
+    });
+
+    // Handle return format (answer container vs direct object)
+    const userDetails = userData.answer || userData;
+
+    return res.status(200).json({
+      success: true,
+      data: userDetails,
+    });
+  } catch (error) {
+    console.error("Error fetching MT5 user:", error);
+    return handleMT5Error(error, res, "MT5_GET_USER_FAILED");
+  }
+};
+
+/**
+ * Change MT5 Account Password (Main, Investor, or API)
+ */
+exports.changeMT5Password = async (req, res) => {
+  const { login, password } = req.body; // new master password input
+
+  if (!login || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "login and password are required fields.",
+    });
+  }
+
+  const newMainPassword = password;
+  const newInvestorPassword = `${password}#Inv`;
+
+  try {
+    await runExclusive(async () => {
+      const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
+
+      // 1. Authenticate MT5 Session
+      await new Promise((resolve, reject) => {
+        mt5.Auth(
+          process.env.MT5_MANAGER_LOGIN,
+          process.env.MT5_MANAGER_PASSWORD,
+          process.env.MT5_BUILD,
+          "WebManager",
+          (error) => (error ? reject(error) : resolve())
+        );
+      });
+
+      // 2. Update Main (Trader) Password
+      await new Promise((resolve, reject) => {
+        mt5.UserPasswordChange(
+          { login, type: "main", password: newMainPassword },
+          (error, answer) => (error ? reject(error) : resolve(answer))
+        );
+      });
+
+      // 3. Update Investor (Read-Only) Password automatically using the formatted string
+      await new Promise((resolve, reject) => {
+        mt5.UserPasswordChange(
+          { login, type: "investor", password: newInvestorPassword },
+          (error, answer) => (error ? reject(error) : resolve(answer))
+        );
+      });
+    });
+
+    // 4. Update both passwords in the local database
+    await Account.findOneAndUpdate(
+      { accountNo: login },
+      {
+        mt5Password: newMainPassword,
+        mt5InvestorPassword: newInvestorPassword,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Main and Investor passwords updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating MT5 passwords:", error);
+    return handleMT5Error(error, res, "MT5_PASSWORD_UPDATE_FAILED");
+  }
 };

@@ -39,6 +39,10 @@ const accountSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    mt5InvestorPassword:{
+      type: String,
+      required: true,
+    }
   },
   { timestamps: true }
 );

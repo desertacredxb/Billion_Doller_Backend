@@ -291,4 +291,44 @@ MT5Request.prototype.TradeBalance = function (params, callback) {
   });
 };
 
+
+MT5Request.prototype.UserGet = function (login, callback) {
+  var self = this;
+
+  if (!login) {
+    return callback && callback("login is required");
+  }
+
+  var qs = new URLSearchParams({
+    login: String(login),
+  }).toString();
+
+  self.Get("/api/user/get?" + qs, function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+MT5Request.prototype.UserPasswordChange = function (params, callback) {
+  var self = this;
+
+  if (!params.login || !params.type || !params.password) {
+    return callback && callback("Missing required parameters (login, type, password)");
+  }
+
+  var jsonBody = {
+    Login: String(params.login),
+    Type: String(params.type).toLowerCase(), // "main", "investor", or "api"
+    Password: String(params.password),
+  };
+
+  self.PostJSON("/api/user/change_password", jsonBody, function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) callback && callback(null, answer);
+  });
+};
+
 module.exports = MT5Request;
