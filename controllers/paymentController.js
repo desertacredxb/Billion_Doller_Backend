@@ -694,8 +694,12 @@ exports.handleCregisCallback = async (req, res) => {
     // --------------------------------------------------
     // 3. Store Cregis ID
     // --------------------------------------------------
-    if (!order.cregisId) {
-      order.cregisId = String(cregis_id);
+    if (!order.provider) {
+      order.provider = "CREGIS";
+    }
+
+    if (!order.providerOrderId) {
+      order.providerOrderId = String(cregis_id);
     }
 
     // --------------------------------------------------

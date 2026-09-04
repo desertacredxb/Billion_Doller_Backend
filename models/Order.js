@@ -14,11 +14,18 @@ const orderSchema = new mongoose.Schema(
       enum: ["PENDING", "SUCCESS", "FAILED"],
       default: "PENDING",
     },
-    cregisId: {
+    provider: {
       type: String,
-      unique: true,
+      default: "",
+    },
+    providerOrderId: {
+      type: String,
       sparse: true,
     },
+    comment:{
+      type: String,
+      default: ""
+    }
   },
   { timestamps: true }
 );
