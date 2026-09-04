@@ -8,7 +8,9 @@ const {
   handleRameeCallback,
   handleCryptoCallback,
   handleManualPaymentRequest,
-  handleTruepay9Callback } = require("../controllers/paymentController");
+  handleTruepay9Callback, 
+  handleCregisCallback,
+  handleTrustpay24Callback} = require("../controllers/paymentController");
 const {
   encryptData,
   decryptData,
@@ -24,6 +26,7 @@ const sendEmail = require("../utils/sendEmail");
 const checkMargin = require("../middleware/checkMargin");
 
 const rateLimit = require("express-rate-limit");
+const { createCregisCheckout } = require("../controllers/paymentOrder.controller");
 
 const withdrawalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -35,7 +38,9 @@ router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
 router.post("/crypto/callback", handleCryptoCallback);
 router.post("/truepay9/callback", handleTruepay9Callback);
-router.post("/trustpay24/callback", handleTruepay9Callback);
+router.post("/trustpay24/callback", handleTrustpay24Callback);
+router.post("/cregis/callback", handleCregisCallback);
+
 
 let DIGIPAY_TOKEN = null;
 let TOKEN_EXPIRY = null;
@@ -294,6 +299,7 @@ const TRUSTPAY_API = "https://trustpay24.online";
 //   }
 // });
 
+router.post("/cregis/deposit", createCregisCheckout);
 
 router.post("/trustpay24/deposit", async (req, res) => {
   try {

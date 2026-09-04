@@ -636,6 +636,480 @@ exports.handleTruepay9Callback = async (req, res) => {
   }
 };
 
+exports.handleCregisCallback = async (req, res) => {
+  try {
+    console.log("========== CREGIS CALLBACK ==========");
+    console.log(JSON.stringify(req.body, null, 2));
+
+    const { event_type, data } = req.body;
+
+    // --------------------------------------------------
+    // 1. Validate callback payload
+    // --------------------------------------------------
+    if (!event_type || !data) {
+      console.error("Invalid Cregis callback payload");
+
+      // Cregis expects acknowledgement
+      return res.status(200).send("success");
+    }
+
+    const {
+      order_id,
+      cregis_id,
+      order_amount,
+      pay_amount,
+      pay_currency,
+      tx_id,
+    } = data;
+
+    if (!order_id || !cregis_id) {
+      console.error(
+        "Missing order_id or cregis_id in Cregis callback"
+      );
+
+      return res.status(200).send("success");
+    }
+
+    console.log("Cregis Event:", event_type);
+    console.log("Order ID:", order_id);
+    console.log("Cregis ID:", cregis_id);
+    console.log("Order Amount:", order_amount);
+    console.log("Pay Amount:", pay_amount);
+    console.log("Pay Currency:", pay_currency);
+    console.log("TX ID:", tx_id);
+
+    // --------------------------------------------------
+    // 2. Find our internal order
+    // --------------------------------------------------
+    const order = await Order.findOne({
+      orderid: String(order_id),
+    });
+
+    if (!order) {
+      console.error("Order not found:", order_id);
+
+      return res.status(200).send("success");
+    }
+
+    // --------------------------------------------------
+    // 3. Store Cregis ID
+    // --------------------------------------------------
+    if (!order.cregisId) {
+      order.cregisId = String(cregis_id);
+    }
+
+    // --------------------------------------------------
+    // 4. Prevent duplicate successful webhook
+    // --------------------------------------------------
+    if (order.status === "SUCCESS") {
+      console.log(
+        "Order already processed successfully:",
+        order_id
+      );
+
+      return res.status(200).send("success");
+    }
+
+    // --------------------------------------------------
+    // 5. Handle events
+    // --------------------------------------------------
+    switch (event_type) {
+      // ==================================================
+      // PAYMENT SUCCESS
+      // ==================================================
+      case "paid": {
+        console.log(
+          "Cregis payment successful:",
+          order_id
+        );
+
+        const accountno = order.accountNo;
+
+        if (!accountno) {
+          console.error(
+            "Account number missing for order:",
+            order_id
+          );
+
+          return res.status(200).send("success");
+        }
+
+        // ----------------------------------------------
+        // Determine payment amount
+        // ----------------------------------------------
+        const paymentAmount = Number(
+          pay_amount || order_amount || order.amount
+        );
+
+        if (!paymentAmount || paymentAmount <= 0) {
+          console.error(
+            "Invalid payment amount:",
+            paymentAmount
+          );
+
+          return res.status(200).send("success");
+        }
+
+        console.log(
+          `Cregis payment received: ${paymentAmount} ${pay_currency}`
+        );
+
+        // ----------------------------------------------
+        // Convert INR -> USD
+        // ----------------------------------------------
+        let amountUSD;
+
+        if (
+          String(pay_currency || "").toUpperCase() === "INR"
+        ) {
+          const usdRate = await fetchRate();
+
+          amountUSD = (
+            paymentAmount * usdRate
+          ).toFixed(2);
+
+          console.log(
+            `Converted: ₹${paymentAmount} → $${amountUSD} (rate ${usdRate})`
+          );
+        } else if (
+          String(pay_currency || "").toUpperCase() === "USD"
+        ) {
+          amountUSD = paymentAmount.toFixed(2);
+
+          console.log(
+            `Payment already in USD: $${amountUSD}`
+          );
+        } else {
+          console.error(
+            `Unsupported Cregis currency: ${pay_currency}`
+          );
+
+          return res.status(200).send("success");
+        }
+
+        // ----------------------------------------------
+        // Call MT5 balance API
+        // ----------------------------------------------
+        try {
+          console.log(
+            "Updating MT5 balance...",
+            {
+              login: accountno,
+              type: 2,
+              balance: amountUSD,
+            }
+          );
+
+          const mt5Response = await updateMT5Balance({
+            login: accountno,
+            type: 2,
+            balance: amountUSD,
+            comment: `DEP-${order_id}`.substring(0, 32),
+          });
+
+          console.log(
+            "MT5 Response:",
+            mt5Response.data
+          );
+
+          // --------------------------------------------
+          // Validate MT5 response
+          // --------------------------------------------
+          if (
+            mt5Response.data.retcode !== "0 Done" &&
+            mt5Response.data.retcode !== 0
+          ) {
+            throw new Error(
+              `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+            );
+          }
+
+          console.log(
+            "MT5 balance successfully updated:",
+            accountno
+          );
+
+          // --------------------------------------------
+          // IMPORTANT:
+          // Only mark SUCCESS after MT5 succeeds
+          // --------------------------------------------
+          order.status = "SUCCESS";
+
+          await order.save();
+
+          console.log(
+            "Order marked SUCCESS:",
+            order_id
+          );
+
+          // --------------------------------------------
+          // Send confirmation email
+          // --------------------------------------------
+          try {
+            const account = await Account.findOne({
+              accountNo: accountno,
+            }).populate("user");
+
+            console.log("👤 Account:", account);
+
+            if (
+              account &&
+              account.user &&
+              account.user.email
+            ) {
+              await sendEmail({
+                to: account.user.email,
+                subject:
+                  "Deposit Successful - Balance Updated",
+                html: `
+                  <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+
+                    <h2 style="color: #2c3e50;">
+                      Deposit Confirmation
+                    </h2>
+
+                    <p>
+                      Dear ${account.user.fullName || "Customer"
+                  },
+                    </p>
+
+                    <img
+                      src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg"
+                      alt="Deposit Processed"
+                      style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;"
+                    />
+
+                    <p>
+                      Your deposit has been successfully processed
+                      and your trading balance has been updated.
+                    </p>
+
+                    <p>
+                      <strong>Transaction Details:</strong>
+                    </p>
+
+                    <ul>
+                      <li>
+                        <strong>Order ID:</strong>
+                        ${order_id}
+                      </li>
+
+                      <li>
+                        <strong>Cregis ID:</strong>
+                        ${cregis_id}
+                      </li>
+
+                      <li>
+                        <strong>Transaction ID:</strong>
+                        ${tx_id || "N/A"}
+                      </li>
+
+                      <li>
+                        <strong>Amount Deposited:</strong>
+                        ${paymentAmount} ${pay_currency || ""}
+                        ${String(
+                    pay_currency || ""
+                  ).toUpperCase() === "INR"
+                    ? ` (≈ $${amountUSD})`
+                    : ""
+                  }
+                      </li>
+
+                      <li>
+                        <strong>Trading Account:</strong>
+                        ${accountno}
+                      </li>
+
+                      <li>
+                        <strong>Status:</strong>
+                        Successful
+                      </li>
+
+                      <li>
+                        <strong>Date:</strong>
+                        ${new Date().toLocaleString()}
+                      </li>
+                    </ul>
+
+                    <p>
+                      The amount has been credited to your
+                      trading account
+                      <strong>${accountno}</strong>.
+                    </p>
+
+                    <p>
+                      If you did not initiate this transaction,
+                      please contact our support team immediately.
+                    </p>
+
+                    <br />
+
+                    <p>
+                      Best Regards,<br />
+                      The Support Team
+                    </p>
+
+                  </div>
+                `,
+              });
+
+              console.log(
+                "📧 Deposit confirmation email sent:",
+                account.user.email
+              );
+            } else {
+              console.warn(
+                "⚠️ Account/user/email not found. Email skipped."
+              );
+            }
+          } catch (emailError) {
+            // Email failure should NOT reverse the successful
+            // MT5 deposit.
+            console.error(
+              "Confirmation email failed:",
+              emailError.message
+            );
+          }
+        } catch (mt5Error) {
+          // --------------------------------------------
+          // MT5 failed
+          // --------------------------------------------
+          console.error(
+            "MT5 Deposit Error:",
+            mt5Error.response?.data ||
+            mt5Error.message
+          );
+
+          /*
+           * IMPORTANT:
+           *
+           * Do NOT mark the order SUCCESS here.
+           *
+           * Payment was received by Cregis,
+           * but MT5 credit failed.
+           *
+           * Keep order PENDING so it can be
+           * retried/reconciled.
+           */
+          order.status = "PENDING";
+
+          await order.save();
+
+          // Still acknowledge Cregis
+          return res.status(200).send("success");
+        }
+
+        break;
+      }
+
+      // ==================================================
+      // PARTIAL PAYMENT
+      // ==================================================
+      case "paid_partial": {
+        console.warn(
+          "Cregis partial payment:",
+          order_id,
+          pay_amount
+        );
+
+        /*
+         * Order model doesn't support PARTIAL.
+         * Keep it PENDING.
+         */
+
+        order.status = "PENDING";
+
+        await order.save();
+
+        break;
+      }
+
+      // ==================================================
+      // OVER PAYMENT
+      // ==================================================
+      case "paid_over": {
+        console.warn(
+          "Cregis overpayment:",
+          order_id,
+          pay_amount
+        );
+
+        /*
+         * Order model doesn't support OVERPAID.
+         * Keep it PENDING.
+         */
+
+        order.status = "PENDING";
+
+        await order.save();
+
+        break;
+      }
+
+      // ==================================================
+      // EXPIRED
+      // ==================================================
+      case "expired": {
+        console.log(
+          "Cregis order expired:",
+          order_id
+        );
+
+        order.status = "FAILED";
+
+        await order.save();
+
+        break;
+      }
+
+      // ==================================================
+      // REFUNDED
+      // ==================================================
+      case "refunded": {
+        console.log(
+          "Cregis order refunded:",
+          order_id
+        );
+
+        order.status = "FAILED";
+
+        await order.save();
+
+        break;
+      }
+
+      // ==================================================
+      // UNKNOWN EVENT
+      // ==================================================
+      default: {
+        console.warn(
+          "Unknown Cregis event:",
+          event_type
+        );
+
+        await order.save();
+      }
+    }
+
+    // --------------------------------------------------
+    // 6. Acknowledge Cregis
+    // --------------------------------------------------
+    return res.status(200).send("success");
+  } catch (error) {
+    console.error(
+      "Cregis callback error:",
+      error.response?.data || error.message
+    );
+
+    /*
+     * Cregis expects acknowledgement.
+     * Therefore return 200 even when our internal
+     * processing encounters an error.
+     */
+    return res.status(200).send("success");
+  }
+};
+
 exports.handleTrustpay24Callback = async (req, res) => {
   try {
     const {
