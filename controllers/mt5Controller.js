@@ -24,7 +24,7 @@ const MT5Request = require("../utils/mt5Request");
 let mt5Lock = Promise.resolve();
 function runExclusive(fn) {
   const result = mt5Lock.then(fn, fn);
-  mt5Lock = result.catch(() => {});
+  mt5Lock = result.catch(() => { });
   return result;
 }
 
@@ -42,7 +42,7 @@ exports.registerUserWithMT5 = async (req, res) => {
     const mt5Params = {
       // login: "333385081",
       // group: "demo\\demoforex", //demo.FOREX/15
-      group: "demo.FOREX/15", //demo.FOREX/15 //Forex\\BDFX
+      group: process.env.MT5_GROUP, //demo.FOREX/15 //Forex\\BDFX
       name: user.fullName.substring(0, 127),
       country: user.nationality || "",
       phone: req.mobile || user.phone,
@@ -50,16 +50,16 @@ exports.registerUserWithMT5 = async (req, res) => {
       leverage: 100,
       pass_main: Password,
       pass_investor: Password
-  ? `${Password.substring(0, Math.min(10, Password.length))}#Inv1`
-  : "Abcd@1234",
+        ? `${Password.substring(0, Math.min(10, Password.length))}#Inv1`
+        : "Abcd@1234",
     };
 
     const mt5Data = await runExclusive(async () => {
       const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
 
       console.log(process.env.MT5_MANAGER_LOGIN,
-          process.env.MT5_MANAGER_PASSWORD,
-          process.env.MT5_BUILD,);
+        process.env.MT5_MANAGER_PASSWORD,
+        process.env.MT5_BUILD,);
 
       await new Promise((resolve, reject) => {
         mt5.Auth(
@@ -94,27 +94,80 @@ exports.registerUserWithMT5 = async (req, res) => {
 
     return res.status(200).json({ message: "Account successfully created", accountNo });
   } catch (error) {
-  console.error("Error during MT5 registration:", error);
+    console.error("Error during MT5 registration:", error);
 
-  // MT5 retcode errors come through as strings like "3004 Account already exists"
-  if (typeof error === "string" && /^\d+/.test(error)) {
-    const code = parseInt(error, 10);
-    const knownMessages = {
-      3002: "No available MT5 account numbers",
-      3003: "Invalid trade server",
-      3004: "Account already exists",
-      3006: "Password complexity requirement failed",
-      8: "Permission denied or group does not exist",
-    };
-    return res.status(400).json({
-      message: knownMessages[code] || error,
-      mt5Retcode: code,
-    });
+    // -----------------------------------------
+    // MT5 CONNECTION TIMEOUT
+    // -----------------------------------------
+    if (error?.code === "ETIMEDOUT") {
+      return res.status(504).json({
+        success: false,
+        code: "MT5_CONNECTION_TIMEOUT",
+        message:
+          "Unable to connect to the MT5 server. Please try again later.",
+      });
+    }
+
+    // -----------------------------------------
+    // MT5 CONNECTION REFUSED
+    // -----------------------------------------
+    if (error?.code === "ECONNREFUSED") {
+      return res.status(503).json({
+        success: false,
+        code: "MT5_CONNECTION_REFUSED",
+        message:
+          "MT5 server is currently unavailable. Please try again later.",
+      });
+    }
+
+    // -----------------------------------------
+    // MT5 HOST NOT FOUND
+    // -----------------------------------------
+    if (
+      error?.code === "ENOTFOUND" ||
+      error?.code === "EAI_AGAIN"
+    ) {
+      return res.status(503).json({
+        success: false,
+        code: "MT5_SERVER_NOT_FOUND",
+        message:
+          "MT5 server could not be reached. Please try again later.",
+      });
+    }
+
+    // -----------------------------------------
+    // MT5 RETCODE ERRORS
+    // -----------------------------------------
+    const errorMessage =
+      typeof error === "string"
+        ? error
+        : error?.message || "";
+
+    if (/^\d+/.test(errorMessage)) {
+      const code = parseInt(errorMessage, 10);
+
+      const knownMessages = {
+        3002: "No available MT5 account numbers",
+        3003: "Invalid trade server",
+        3004: "Account already exists",
+        3006: "Password complexity requirement failed",
+        8: "Permission denied or MT5 group does not exist",
+      };
+
+      return res.status(400).json({
+        success: false,
+        code: `MT5_${code}`,
+        message: knownMessages[code] || errorMessage,
+      });
+    }
   }
 
+  // -----------------------------------------
+  // GENERIC ERROR
+  // -----------------------------------------
   return res.status(500).json({
-    message: "Internal Server Error",
-    error: typeof error === "object" ? error.message || error : error,
+    success: false,
+    code: "MT5_REGISTRATION_FAILED",
+    message: "Unable to create MT5 account. Please try again.",
   });
-}
 };
