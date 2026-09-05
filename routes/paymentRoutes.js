@@ -27,6 +27,8 @@ const checkMargin = require("../middleware/checkMargin");
 
 const rateLimit = require("express-rate-limit");
 const { createCregisCheckout } = require("../controllers/paymentOrder.controller");
+const { createPayoutRequest, approvePayoutReq } = require("../controllers/payout.controller");
+const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 
 const withdrawalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -624,7 +626,7 @@ router.post("/crypto/deposit", async (req, res) => {
   }
 });
 
-async function fetchRate() {
+exports.fetchRate = async () => {
   try {
     const res = await axios.get(
       "https://api.frankfurter.app/latest?amount=1&from=INR&to=USD",
@@ -639,334 +641,186 @@ async function fetchRate() {
 const RAMEEPAY_WITHDRAWAL_API = "https://apis.rameepay.io/withdrawal/account";
 
 // Save withdrawal request as Pending
-router.post("/request", withdrawalLimiter, checkMargin, async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+// router.post("/request", withdrawalLimiter, checkMargin, async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
 
-  try {
-    const { account, ifsc, name, mobile, amount, note, accountNo } = req.body;
+//   try {
+//     const { account, ifsc, name, mobile, amount, note, accountNo } = req.body;
 
-    if (!account || !ifsc || !name || !mobile || !amount || !accountNo) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing fields" });
-    }
+//     if (!account || !ifsc || !name || !mobile || !amount || !accountNo) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Missing fields" });
+//     }
 
-    const numericAmount = parseFloat(amount);
-    if (isNaN(numericAmount) || numericAmount <= 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid withdrawal amount" });
-    }
+//     const numericAmount = parseFloat(amount);
+//     if (isNaN(numericAmount) || numericAmount <= 0) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Invalid withdrawal amount" });
+//     }
 
-    // 🔒 1️⃣ BLOCK MULTIPLE PENDING
-    const existingPending = await Withdrawal.findOne(
-      { accountNo, status: "Pending" },
-      null,
-      { session },
-    );
+//     // 🔒 1️⃣ BLOCK MULTIPLE PENDING
+//     const existingPending = await Withdrawal.findOne(
+//       { accountNo, status: "Pending" },
+//       null,
+//       { session },
+//     );
 
-    if (existingPending) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "You already have a pending withdrawal request.",
-      });
-    }
+//     if (existingPending) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({
+//         success: false,
+//         message: "You already have a pending withdrawal request.",
+//       });
+//     }
 
-    // 5 MINUTE COOLDOWN
-    const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
-      session,
-    }).sort({ createdAt: -1 });
+//     // 5 MINUTE COOLDOWN
+//     const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
+//       session,
+//     }).sort({ createdAt: -1 });
 
-    if (lastWithdrawal) {
-      const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
-      const fiveMinutes = 5 * 60 * 1000;
+//     if (lastWithdrawal) {
+//       const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
+//       const fiveMinutes = 5 * 60 * 1000;
 
-      if (diff < fiveMinutes) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          success: false,
-          message: "You can only request withdrawal once every 5 minutes.",
-        });
-      }
-    }
+//       if (diff < fiveMinutes) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return res.status(400).json({
+//           success: false,
+//           message: "You can only request withdrawal once every 5 minutes.",
+//         });
+//       }
+//     }
 
-    // DAILY LIMIT (3 per day)
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+//     // DAILY LIMIT (3 per day)
+//     const startOfDay = new Date();
+//     startOfDay.setHours(0, 0, 0, 0);
 
-    const todayCount = await Withdrawal.countDocuments(
-      {
-        accountNo,
-        createdAt: { $gte: startOfDay },
-      },
-      { session },
-    );
+//     const todayCount = await Withdrawal.countDocuments(
+//       {
+//         accountNo,
+//         createdAt: { $gte: startOfDay },
+//       },
+//       { session },
+//     );
 
-    if (todayCount >= 3) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Daily withdrawal limit reached (3 per day).",
-      });
-    }
+//     if (todayCount >= 3) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({
+//         success: false,
+//         message: "Daily withdrawal limit reached (3 per day).",
+//       });
+//     }
 
-    const orderid = `WDR${Date.now()}`;
+//     const orderid = `WDR${Date.now()}`;
 
-    // 🔹 First, deduct from MoneyPlant to lock balance
-    const usdRate = await fetchRate();
-    const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
+//     // 🔹 First, deduct from MoneyPlant to lock balance
+//     const usdRate = await fetchRate();
+//     const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
 
-    await axios.post(
-      "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-      {
-        accountno: accountNo,
-        amount: -Math.abs(amountUSD),
-        orderid,
-      },
-      { headers: { "Content-Type": "application/json" } },
-    );
+//     await axios.post(
+//       "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+//       {
+//         accountno: accountNo,
+//         amount: -Math.abs(amountUSD),
+//         orderid,
+//       },
+//       { headers: { "Content-Type": "application/json" } },
+//     );
 
-    // const mt5Response = await axios.post(
-    //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
-    //   null,
-    //   {
-    //     params: {
-    //       login: accountno, // keep existing accountno variable
-    //       type: 2, // balance operation (deposit)
-    //       balance: -Math.abs(amountUSD), // keeping your existing USD conversion
-    //       comment: `WED-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
-    //     },
-    //   }
-    // );
+//     // const mt5Response = await axios.post(
+//     //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+//     //   null,
+//     //   {
+//     //     params: {
+//     //       login: accountno, // keep existing accountno variable
+//     //       type: 2, // balance operation (deposit)
+//     //       balance: -Math.abs(amountUSD), // keeping your existing USD conversion
+//     //       comment: `WED-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+//     //     },
+//     //   }
+//     // );
 
-    // console.log("💰 MT5 Response:", mt5Response.data);
+//     // console.log("💰 MT5 Response:", mt5Response.data);
 
-    // if (
-    //   mt5Response.data.retcode !== "0 Done" &&
-    //   mt5Response.data.retcode !== 0
-    // ) {
-    //   throw new Error(
-    //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-    //   );
-    // }
+//     // if (
+//     //   mt5Response.data.retcode !== "0 Done" &&
+//     //   mt5Response.data.retcode !== 0
+//     // ) {
+//     //   throw new Error(
+//     //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+//     //   );
+//     // }
 
-    // 🔹 Save withdrawal record in Pending state
-    const withdrawalRecord = new Withdrawal({
-      orderid,
-      account,
-      ifsc,
-      name,
-      mobile,
-      amount,
-      note,
-      accountNo,
-      status: "Pending",
-    });
-    await withdrawalRecord.save();
+//     // 🔹 Save withdrawal record in Pending state
+//     const withdrawalRecord = new Withdrawal({
+//       orderid,
+//       account,
+//       ifsc,
+//       name,
+//       mobile,
+//       amount,
+//       note,
+//       accountNo,
+//       status: "Pending",
+//     });
+//     await withdrawalRecord.save();
 
-    // ✅ Send email to admin
-    await sendEmail({
-      to: "support@billiondollarfx.com",
-      subject: "⚠️ New Withdrawal Request Pending Approval",
-      html: `
-        <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
-          <h2 style="color: #e74c3c;">New Withdrawal Request</h2>
-          <p>A user has requested a withdrawal. Please review and approve in the admin dashboard.</p>
+//     // ✅ Send email to admin
+//     await sendEmail({
+//       to: "support@billiondollarfx.com",
+//       subject: "⚠️ New Withdrawal Request Pending Approval",
+//       html: `
+//         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+//           <h2 style="color: #e74c3c;">New Withdrawal Request</h2>
+//           <p>A user has requested a withdrawal. Please review and approve in the admin dashboard.</p>
 
-          <p><strong>User Details:</strong></p>
-          <ul>
-            <li><strong>Name:</strong> ${name}</li>
-            <li><strong>Account:</strong> ${account}</li>
-            <li><strong>Account No:</strong> ${accountNo}</li>
-            <li><strong>IFSC:</strong> ${ifsc}</li>
-            <li><strong>Mobile:</strong> ${mobile}</li>
-          </ul>
+//           <p><strong>User Details:</strong></p>
+//           <ul>
+//             <li><strong>Name:</strong> ${name}</li>
+//             <li><strong>Account:</strong> ${account}</li>
+//             <li><strong>Account No:</strong> ${accountNo}</li>
+//             <li><strong>IFSC:</strong> ${ifsc}</li>
+//             <li><strong>Mobile:</strong> ${mobile}</li>
+//           </ul>
 
-          <p><strong>Withdrawal Details:</strong></p>
-          <ul>
-            <li><strong>Order ID:</strong> ${orderid}</li>
-            <li><strong>Amount:</strong> ₹${amount} (≈ $${amountUSD})</li>
-            <li><strong>Note:</strong> ${note || "N/A"}</li>
-            <li><strong>Status:</strong> Pending</li>
-          </ul>
+//           <p><strong>Withdrawal Details:</strong></p>
+//           <ul>
+//             <li><strong>Order ID:</strong> ${orderid}</li>
+//             <li><strong>Amount:</strong> ₹${amount} (≈ $${amountUSD})</li>
+//             <li><strong>Note:</strong> ${note || "N/A"}</li>
+//             <li><strong>Status:</strong> Pending</li>
+//           </ul>
 
-          <p>✅ Next Step: Please approve this withdrawal in the dashboard and contact the user if necessary.</p>
+//           <p>✅ Next Step: Please approve this withdrawal in the dashboard and contact the user if necessary.</p>
 
-          <br/>
-          <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
-        </div>
-      `,
-    });
+//           <br/>
+//           <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
+//         </div>
+//       `,
+//     });
 
-    res.json({
-      success: true,
-      message: "Withdrawal request submitted",
-      withdrawalRecord,
-    });
-  } catch (err) {
-    console.error("❌ Error saving withdrawal request:", err.message);
-    res.status(500).json({ success: false, error: "Failed to save request" });
-  }
-});
+//     res.json({
+//       success: true,
+//       message: "Withdrawal request submitted",
+//       withdrawalRecord,
+//     });
+//   } catch (err) {
+//     console.error("❌ Error saving withdrawal request:", err.message);
+//     res.status(500).json({ success: false, error: "Failed to save request" });
+//   }
+// });
+
+router.post("/request", withdrawalLimiter, checkMargin, createPayoutRequest);
 
 router.post("/request_v2", withdrawalLimiter, checkMargin, handleManualPaymentRequest);
 
-router.post("/approve/:id", async (req, res) => {
-  try {
-    const withdrawal = await Withdrawal.findById(req.params.id);
-    if (!withdrawal) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-
-    if (withdrawal.status !== "Pending") {
-      return res
-        .status(400)
-        .json({ success: false, message: "Already processed" });
-    }
-
-    const { account, ifsc, name, mobile, amount, note, orderid, accountNo } =
-      withdrawal;
-
-    // 🔹 Payload for RameePay (amount must be string with 2 decimals)
-    const payload = {
-      account,
-      ifsc,
-      name,
-      mobile,
-      amount: parseFloat(amount).toFixed(2), // e.g. "1000.00"
-      note,
-      orderid,
-    };
-
-    // Encrypt
-    const encryptedData = encryptData(payload);
-    const body = { reqData: encryptedData, agentCode: AGENT_CODE };
-
-    // Call API
-    const { data } = await axios.post(RAMEEPAY_WITHDRAWAL_API, body, {
-      headers: { "Content-Type": "application/json" },
-    });
-
-    console.log("🔒 Raw RameePay Response:", data);
-
-    let decryptedResponse = {};
-    if (data.data) {
-      if (typeof data.data === "string") {
-        decryptedResponse = decryptData(data.data);
-      } else {
-        console.error(
-          "Expected string in data.data, got:",
-          typeof data.data,
-          data.data,
-        );
-        decryptedResponse = data.data; // fallback, store raw object
-      }
-    }
-
-    console.log("🔓 Decrypted RameePay Response:", decryptedResponse);
-
-    // ✅ Check based on decryptedResponse.success
-    if (decryptedResponse && decryptedResponse.success === true) {
-      withdrawal.status = "Completed";
-      withdrawal.response = decryptedResponse;
-      await withdrawal.save();
-
-      // Send success email
-      const user = await User.findOne({ phone: withdrawal.mobile });
-      if (user) {
-        const usdRate = await fetchRate();
-        const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
-
-        await sendEmail({
-          to: user.email,
-          subject: "Withdrawal Successful",
-          html: `
-    <p>Hi ${user.fullName},</p>
-    <p>Your withdrawal of ₹${amount} (≈ $${amountUSD}) is successful.</p>
-    <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_Withdrawal_Processed_p4rluh.jpg" 
-         alt="Withdrawal Processed" 
-         style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
-    <p>Thank you for using our service!</p>
-  `,
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: decryptedResponse.message || "Withdrawal completed",
-        response: decryptedResponse,
-      });
-    } else {
-      // ❌ Failed → refund via MoneyPlant
-      const usdRate = await fetchRate();
-      const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
-      const refundOrderId = `RF${Date.now()}`;
-
-      await axios.post(
-        "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-        {
-          accountno: accountNo,
-          amount: +Math.abs(amountUSD),
-          orderid: refundOrderId,
-        },
-        { headers: { "Content-Type": "application/json" } },
-      );
-
-      // const mt5Response = await axios.post(
-      //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
-      //   null,
-      //   {
-      //     params: {
-      //       login: accountno, // keep existing accountno variable
-      //       type: 2, // balance operation (deposit)
-      //       balance:  +Math.abs(amountUSD), // keeping your existing USD conversion
-      //       comment: `REF-${refundOrderId}`.substring(0, 32), // MT5 max comment length = 32 chars
-      //     },
-      //   }
-      // );
-
-      // console.log("💰 MT5 Response:", mt5Response.data);
-
-      // if (
-      //   mt5Response.data.retcode !== "0 Done" &&
-      //   mt5Response.data.retcode !== 0
-      // ) {
-      //   throw new Error(
-      //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-      //   );
-      // }
-
-      withdrawal.status = "Failed";
-      withdrawal.response = decryptedResponse;
-      await withdrawal.save();
-
-      return res.json({
-        success: false,
-        message:
-          decryptedResponse?.message || "Withdrawal failed, amount refunded",
-        response: decryptedResponse,
-      });
-    }
-  } catch (err) {
-    console.error("Withdrawal approval error:", err);
-
-    const decryptedData =
-      err.response?.data?.data && typeof err.response.data.data === "string"
-        ? decryptData(err.response.data.data)
-        : null;
-
-    res.status(500).json({
-      success: false,
-      error:
-        decryptedData?.message || err.message || "Withdrawal processing failed",
-    });
-  }
-});
+router.post("/approve/:id", approvePayoutReq);
 
 // Reject withdrawal request (Admin action)
 router.post("/reject/:id", async (req, res) => {
@@ -986,45 +840,36 @@ router.post("/reject/:id", async (req, res) => {
 
     // 🔹 Refund via MoneyPlant
     const usdRate = await fetchRate();
-    const amountUSD = (parseFloat(withdrawal.amount) * usdRate).toFixed(2);
+    // const amountUSD = (parseFloat(withdrawal.amount) * usdRate).toFixed(2);
+    const amountUSD = withdrawal.amount;
 
     const refundOrderId = `RF${Date.now()}`;
 
     console.log(withdrawal.accountNo, amountUSD, refundOrderId);
 
-    await axios.post(
-      "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-      {
-        accountno: withdrawal.accountNo,
-        amount: +Math.abs(amountUSD),
-        orderid: refundOrderId,
-      },
-      { headers: { "Content-Type": "application/json" } },
-    );
+    const mt5Response = await updateMT5Balance({
+            login: withdrawal.accountNo,
+            type: 2,
+            balance: -amountUSD,
+            comment: `refundOrderId`.substring(0, 32),
+        });
 
-    // const mt5Response = await axios.post(
-    //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
-    //   null,
-    //   {
-    //     params: {
-    //       login: accountno, // keep existing accountno variable
-    //       type: 2, // balance operation (deposit)
-    //       balance: +Math.abs(amountUSD), // keeping your existing USD conversion
-    //       comment: `REF-${refundOrderId}`.substring(0, 32), // MT5 max comment length = 32 chars
-    //     },
-    //   }
-    // );
+        console.log(
+            "MT5 Response:",
+            mt5Response.data
+        );
 
-    // console.log("💰 MT5 Response:", mt5Response.data);
-
-    // if (
-    //   mt5Response.data.retcode !== "0 Done" &&
-    //   mt5Response.data.retcode !== 0
-    // ) {
-    //   throw new Error(
-    //     `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-    //   );
-    // }
+        // --------------------------------------------
+        // Validate MT5 response
+        // --------------------------------------------
+        if (
+            mt5Response.data.retcode !== "0 Done" &&
+            mt5Response.data.retcode !== 0
+        ) {
+            throw new Error(
+                `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+            );
+        }
 
     withdrawal.status = "Rejected";
     withdrawal.response = { message: "Rejected by admin" };

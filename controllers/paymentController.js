@@ -8,6 +8,7 @@ const Account = require("../models/account.model"); // Ensure you import Account
 const { default: mongoose } = require("mongoose");
 const Withdrawal = require("../models/withdrawal");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
+const { sendSuccessEmail, refundToMT5 } = require("./payout.controller");
 
 exports.handlePaymentCallback = async (req, res) => {
   try {
@@ -352,6 +353,254 @@ async function fetchRate() {
   }
 }
 
+// exports.handleRameeCallback = async (req, res) => {
+//   try {
+//     const { data, agentCode } = req.body;
+
+//     if (!data || !agentCode) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Invalid payload" });
+//     }
+//     console.log(data);
+//     // 1. Decrypt RameePay response
+//     const txn = decryptData(data);
+//     console.log("🔓 Decrypted Webhook:", txn);
+
+//     if (txn.status === "SUCCESS") {
+//       const orderid = txn.merchantid;
+//       const amount = txn.realAmount;
+
+//       // 2. Find order mapping from DB
+//       const order = await Order.findOne({ orderid });
+//       if (!order) {
+//         console.error("❌ Order not found in DB:", orderid);
+//         return res
+//           .status(404)
+//           .json({ success: false, message: "Order not found" });
+//       }
+
+//       const accountno = order.accountNo;
+
+//       // 3. Update status in DB
+//       if (txn.status === "SUCCESS") {
+//         order.status = "SUCCESS";
+//       } else if (txn.status === "FAILED") {
+//         order.status = "FAILED";
+//       }
+//       await order.save();
+
+//       // ✅ 4. Convert INR → USD
+//       const usdRate = await fetchRate();
+//       const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
+
+//       console.log(`💱 Converted: ₹${amount} → $${amountUSD} (rate ${usdRate})`);
+
+//       // 5. Call MoneyPlant API
+//       try {
+
+//         // const mt5Response = await axios.post(
+//         //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
+//         //   null,
+//         //   {
+//         //     params: {
+//         //       login: accountno, // keep existing accountno variable
+//         //       type: 2, // balance operation (deposit)
+//         //       balance: amountUSD, // keeping your existing USD conversion
+//         //       comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+//         //     },
+//         //   }
+//         // );
+
+//         const mt5Response = await updateMT5Balance({
+//           login: accountno, // keep existing accountno variable
+//           type: 2, // balance operation (deposit)
+//           balance: amountUSD, // keeping your existing USD conversion
+//           comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+//         });
+
+//         console.log("💰 MT5 Response:", mt5Response.data);
+
+//         if (
+//           mt5Response.data.retcode !== "0 Done" &&
+//           mt5Response.data.retcode !== 0
+//         ) {
+//           throw new Error(
+//             `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+//           );
+//         }
+
+//         // ✅ 6. Send confirmation email to user
+//         const account = await Account.findOne({
+//           accountNo: accountno,
+//         }).populate("user");
+//         console.log(account);
+//         if (account) {
+//           await sendEmail({
+//             to: account.user.email,
+//             subject: "Deposit Successful - Balance Updated",
+//             html: `
+//               <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+//                 <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+//                 <p>Dear ${account.user.fullName || "Customer"},</p>
+//                 <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg" 
+//          alt="Withdrawal Processed" 
+//          style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+//                 <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
+                
+//                 <p><strong>Transaction Details:</strong></p>
+//                 <ul>
+//                   <li><strong>Order ID:</strong> ${orderid}</li>
+//                   <li><strong>Amount Deposited:</strong> ₹${amount} (≈ $${amountUSD})</li>
+//                   <li><strong>Status:</strong> Successful</li>
+//                   <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
+//                 </ul>
+                
+//                 <p>The amount has been credited to your trading account <strong>${accountno}</strong>.</p>
+                
+//                 <p>If you did not initiate this transaction, please contact our support team immediately.</p>
+                
+//                 <br/>
+//                 <p>Best Regards,<br/>The Support Team</p>
+//               </div>
+//             `,
+//           });
+//         }
+//       } catch (err) {
+//         console.error("❌ MT5 Error:", err.message);
+//       }
+//     }
+
+//     // 7. Acknowledge webhook
+//     return res.status(200).json({ success: true });
+//   } catch (error) {
+//     console.error("❌ Callback Error:", error);
+//     return res.status(500).json({ success: false, error: error.message });
+//   }
+// };
+
+// exports.handleCryptoCallback = async (req, res) => {
+//   try {
+//     const { data, agentCode } = req.body;
+
+//     if (!data || !agentCode) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Invalid payload" });
+//     }
+//     console.log(data);
+//     // 1. Decrypt RameePay response
+//     const txn = decryptDataCrypto(data);
+//     console.log("🔓 Decrypted Webhook:", txn);
+
+//     if (txn.status === "SUCCESS") {
+//       const orderid = txn.merchantid;
+//       const amount = txn.payAmount;
+
+//       // 2. Find order mapping from DB
+//       const order = await Order.findOne({ orderid });
+//       if (!order) {
+//         console.error("❌ Order not found in DB:", orderid);
+//         return res
+//           .status(404)
+//           .json({ success: false, message: "Order not found" });
+//       }
+
+//       const accountno = order.accountNo;
+
+//       // 3. Update status in DB
+//       if (txn.status === "SUCCESS") {
+//         order.status = "SUCCESS";
+//       } else if (txn.status === "FAILED") {
+//         order.status = "FAILED";
+//       }
+//       await order.save();
+
+//       // ✅ 4. Convert INR → USD
+//       const usdRate = await fetchRate();
+//       const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
+
+//       console.log(`💱 Converted: ₹${amount} → $${amountUSD} (rate ${usdRate})`);
+
+//       // 5. Call MoneyPlant API
+//       try {
+//         // const mpResponse = await axios.post(
+//         //   "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
+//         //   { accountno, amount: amountUSD, orderid },
+//         //   { headers: { "Content-Type": "application/json" } }
+//         // );
+
+//         // console.log("💰 MoneyPlant Response:", mpResponse.data);
+//         // const AccountNo=accountno
+
+//         const mt5Response = await updateMT5Balance({
+//           login: accountno, // keep existing accountno variable
+//           type: 2, // balance operation (deposit)
+//           balance: amountUSD, // keeping your existing USD conversion
+//           comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+//         });
+
+//         console.log("💰 MT5 Response:", mt5Response.data);
+
+//         if (
+//           mt5Response.data.retcode !== "0 Done" &&
+//           mt5Response.data.retcode !== 0
+//         ) {
+//           throw new Error(
+//             `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+//           );
+//         }
+
+//         // ✅ 6. Send confirmation email to user
+//         const account = await Account.findOne({
+//           accountNo: accountno,
+//         }).populate("user");
+//         console.log(account);
+//         if (account) {
+//           await sendEmail({
+//             to: account.user.email,
+//             subject: "Deposit Successful - Balance Updated",
+//             html: `
+//               <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+//                 <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+//                 <p>Dear ${account.user.fullName || "Customer"},</p>
+//                 <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg"
+//          alt="Withdrawal Processed"
+//          style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+//                 <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
+
+//                 <p><strong>Transaction Details:</strong></p>
+//                 <ul>
+//                   <li><strong>Order ID:</strong> ${orderid}</li>
+//                   <li><strong>Amount Deposited:</strong> ₹${amount} (≈ $${amountUSD})</li>
+//                   <li><strong>Status:</strong> Successful</li>
+//                   <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
+//                 </ul>
+
+//                 <p>The amount has been credited to your trading account <strong>${accountno}</strong>.</p>
+
+//                 <p>If you did not initiate this transaction, please contact our support team immediately.</p>
+
+//                 <br/>
+//                 <p>Best Regards,<br/>The Support Team</p>
+//               </div>
+//             `,
+//           });
+//         }
+//       } catch (err) {
+//         console.error("❌ MoneyPlant Error:", err.message);
+//       }
+//     }
+
+//     // 7. Acknowledge webhook
+//     return res.status(200).json({ success: true });
+//   } catch (error) {
+//     console.error("❌ Callback Error:", error);
+//     return res.status(500).json({ success: false, error: error.message });
+//   }
+// };
+
+
 exports.handleRameeCallback = async (req, res) => {
   try {
     const { data, agentCode } = req.body;
@@ -361,61 +610,95 @@ exports.handleRameeCallback = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Invalid payload" });
     }
-    console.log(data);
+
     // 1. Decrypt RameePay response
     const txn = decryptData(data);
-    console.log("🔓 Decrypted Webhook:", txn);
+    console.log("🔓 Decrypted Fiat Webhook:", txn);
 
-    if (txn.status === "SUCCESS") {
-      const orderid = txn.merchantid;
-      const amount = txn.realAmount;
+    const orderid = txn.merchantid || txn.orderid;
+    const amount = txn.realAmount || txn.amount;
+    const status = String(txn.status || "").toUpperCase();
+    const isSuccess = status === "SUCCESS" || status === "COMPLETED";
+    const isFailed = status === "FAILED" || status === "REJECTED";
 
-      // 2. Find order mapping from DB
-      const order = await Order.findOne({ orderid });
-      if (!order) {
-        console.error("❌ Order not found in DB:", orderid);
-        return res
-          .status(404)
-          .json({ success: false, message: "Order not found" });
+    if (!orderid) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID missing in payload" });
+    }
+
+    // =========================================================================
+    // CHECK 1: WITHDRAWAL / PAYOUT PROCESSING
+    // =========================================================================
+    const withdrawal = await Withdrawal.findOne({ orderid });
+
+    if (withdrawal) {
+      if (["Completed", "Failed"].includes(withdrawal.status)) {
+        return res.json({ success: true, message: "Withdrawal already processed" });
       }
 
-      const accountno = order.accountNo;
+      if (isSuccess) {
+        withdrawal.status = "Completed";
+        withdrawal.response = { ...withdrawal.response, callbackData: txn };
+        await withdrawal.save();
 
-      // 3. Update status in DB
-      if (txn.status === "SUCCESS") {
-        order.status = "SUCCESS";
-      } else if (txn.status === "FAILED") {
-        order.status = "FAILED";
+        await sendSuccessEmail(withdrawal);
+        console.log(`✅ Fiat Withdrawal Completed: ${orderid}`);
+      } else if (isFailed) {
+        withdrawal.status = "Failed";
+        withdrawal.response = { ...withdrawal.response, callbackData: txn };
+        await withdrawal.save();
+
+        // Refund user balance on MT5
+        await refundToMT5(
+          withdrawal.accountNo,
+          withdrawal.amount,
+          withdrawal.currency
+        );
+        console.log(`❌ Fiat Withdrawal Failed & Refunded: ${orderid}`);
       }
-      await order.save();
 
-      // ✅ 4. Convert INR → USD
+      return res.status(200).json({ success: true, message: "Withdrawal callback handled" });
+    }
+
+    // =========================================================================
+    // CHECK 2: DEPOSIT / PAYIN PROCESSING
+    // =========================================================================
+    const order = await Order.findOne({ orderid });
+    if (!order) {
+      console.error("❌ Order/Withdrawal not found in DB:", orderid);
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
+
+    if (order.status === "SUCCESS") {
+      return res.json({ success: true, message: "Deposit already processed" });
+    }
+
+    const accountno = order.accountNo;
+
+    // Update DB Order status
+    if (isSuccess) {
+      order.status = "SUCCESS";
+    } else if (isFailed) {
+      order.status = "FAILED";
+    }
+    await order.save();
+
+    if (isSuccess) {
+      // Convert INR -> USD
       const usdRate = await fetchRate();
       const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
 
       console.log(`💱 Converted: ₹${amount} → $${amountUSD} (rate ${usdRate})`);
 
-      // 5. Call MoneyPlant API
       try {
-
-        // const mt5Response = await axios.post(
-        //   `${process.env.MT5_WEB_API_URL}/api/trade/balance`,
-        //   null,
-        //   {
-        //     params: {
-        //       login: accountno, // keep existing accountno variable
-        //       type: 2, // balance operation (deposit)
-        //       balance: amountUSD, // keeping your existing USD conversion
-        //       comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
-        //     },
-        //   }
-        // );
-
         const mt5Response = await updateMT5Balance({
-          login: accountno, // keep existing accountno variable
-          type: 2, // balance operation (deposit)
-          balance: amountUSD, // keeping your existing USD conversion
-          comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+          login: accountno,
+          type: 2, // Balance operation (deposit)
+          balance: amountUSD,
+          comment: `DEP-${orderid}`.substring(0, 32),
         });
 
         console.log("💰 MT5 Response:", mt5Response.data);
@@ -424,17 +707,12 @@ exports.handleRameeCallback = async (req, res) => {
           mt5Response.data.retcode !== "0 Done" &&
           mt5Response.data.retcode !== 0
         ) {
-          throw new Error(
-            `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-          );
+          throw new Error(`MT5 Deposit Failed: ${mt5Response.data.retcode}`);
         }
 
-        // ✅ 6. Send confirmation email to user
-        const account = await Account.findOne({
-          accountNo: accountno,
-        }).populate("user");
-        console.log(account);
-        if (account) {
+        // Send confirmation email
+        const account = await Account.findOne({ accountNo: accountno }).populate("user");
+        if (account?.user?.email) {
           await sendEmail({
             to: account.user.email,
             subject: "Deposit Successful - Balance Updated",
@@ -443,8 +721,8 @@ exports.handleRameeCallback = async (req, res) => {
                 <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
                 <p>Dear ${account.user.fullName || "Customer"},</p>
                 <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg" 
-         alt="Withdrawal Processed" 
-         style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+                     alt="Deposit Processed" 
+                     style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
                 <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
                 
                 <p><strong>Transaction Details:</strong></p>
@@ -456,9 +734,7 @@ exports.handleRameeCallback = async (req, res) => {
                 </ul>
                 
                 <p>The amount has been credited to your trading account <strong>${accountno}</strong>.</p>
-                
                 <p>If you did not initiate this transaction, please contact our support team immediately.</p>
-                
                 <br/>
                 <p>Best Regards,<br/>The Support Team</p>
               </div>
@@ -470,7 +746,6 @@ exports.handleRameeCallback = async (req, res) => {
       }
     }
 
-    // 7. Acknowledge webhook
     return res.status(200).json({ success: true });
   } catch (error) {
     console.error("❌ Callback Error:", error);
@@ -480,63 +755,105 @@ exports.handleRameeCallback = async (req, res) => {
 
 exports.handleCryptoCallback = async (req, res) => {
   try {
-    const { data, agentCode } = req.body;
+    const { data, agentCode, reqData } = req.body;
+    const rawPayload = data || reqData;
 
-    if (!data || !agentCode) {
+    if (!rawPayload || !agentCode) {
       return res
         .status(400)
         .json({ success: false, message: "Invalid payload" });
     }
-    console.log(data);
-    // 1. Decrypt RameePay response
-    const txn = decryptDataCrypto(data);
-    console.log("🔓 Decrypted Webhook:", txn);
 
-    if (txn.status === "SUCCESS") {
-      const orderid = txn.merchantid;
-      const amount = txn.payAmount;
+    // 1. Decrypt RameePay Crypto response
+    const txn = decryptDataCrypto(rawPayload);
+    console.log("🔓 Decrypted Crypto Webhook:", txn);
 
-      // 2. Find order mapping from DB
-      const order = await Order.findOne({ orderid });
-      if (!order) {
-        console.error("❌ Order not found in DB:", orderid);
-        return res
-          .status(404)
-          .json({ success: false, message: "Order not found" });
+    // Crypto Spec: orderid, payAmount, status, hash
+    const orderid = txn.merchantid || txn.orderid;
+    const amount = txn.payAmount || txn.amount;
+    const status = String(txn.status || "").toUpperCase();
+    const isSuccess = status === "SUCCESS" || status === "COMPLETED";
+    const isFailed = status === "FAILED" || status === "REJECTED" || status === "EXPIRED";
+
+    if (!orderid) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order ID missing in payload" });
+    }
+
+    // =========================================================================
+    // CHECK 1: WITHDRAWAL / PAYOUT PROCESSING
+    // =========================================================================
+    const withdrawal = await Withdrawal.findOne({ orderid });
+
+    if (withdrawal) {
+      if (["Completed", "Failed"].includes(withdrawal.status)) {
+        return res.json({ success: true, message: "Withdrawal already processed" });
       }
 
-      const accountno = order.accountNo;
+      if (isSuccess) {
+        withdrawal.status = "Completed";
+        withdrawal.transactionReference = txn.hash || withdrawal.transactionReference;
+        withdrawal.response = { ...withdrawal.response, callbackData: txn };
+        await withdrawal.save();
 
-      // 3. Update status in DB
-      if (txn.status === "SUCCESS") {
-        order.status = "SUCCESS";
-      } else if (txn.status === "FAILED") {
-        order.status = "FAILED";
+        await sendSuccessEmail(withdrawal);
+        console.log(`✅ Crypto Withdrawal Completed: ${orderid}`);
+      } else if (isFailed) {
+        withdrawal.status = "Failed";
+        withdrawal.response = { ...withdrawal.response, callbackData: txn };
+        await withdrawal.save();
+
+        // Refund user balance on MT5
+        await refundToMT5(
+          withdrawal.accountNo,
+          withdrawal.amount,
+          withdrawal.currency
+        );
+        console.log(`❌ Crypto Withdrawal Failed & Refunded: ${orderid}`);
       }
-      await order.save();
 
-      // ✅ 4. Convert INR → USD
+      return res.status(200).json({ success: true, message: "Crypto withdrawal callback handled" });
+    }
+
+    // =========================================================================
+    // CHECK 2: DEPOSIT / PAYIN PROCESSING
+    // =========================================================================
+    const order = await Order.findOne({ orderid });
+    if (!order) {
+      console.error("❌ Order/Withdrawal not found in DB:", orderid);
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
+    }
+
+    if (order.status === "SUCCESS") {
+      return res.json({ success: true, message: "Deposit already processed" });
+    }
+
+    const accountno = order.accountNo;
+
+    // Update DB Order status
+    if (isSuccess) {
+      order.status = "SUCCESS";
+    } else if (isFailed) {
+      order.status = "FAILED";
+    }
+    await order.save();
+
+    if (isSuccess) {
+      // Direct USD credit or rate conversion depending on your setup
       const usdRate = await fetchRate();
       const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
 
-      console.log(`💱 Converted: ₹${amount} → $${amountUSD} (rate ${usdRate})`);
+      console.log(`💱 Crypto Credit: ${amount} USDT → $${amountUSD}`);
 
-      // 5. Call MoneyPlant API
       try {
-        // const mpResponse = await axios.post(
-        //   "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-        //   { accountno, amount: amountUSD, orderid },
-        //   { headers: { "Content-Type": "application/json" } }
-        // );
-
-        // console.log("💰 MoneyPlant Response:", mpResponse.data);
-        // const AccountNo=accountno
-
         const mt5Response = await updateMT5Balance({
-          login: accountno, // keep existing accountno variable
-          type: 2, // balance operation (deposit)
-          balance: amountUSD, // keeping your existing USD conversion
-          comment: `DEP-${orderid}`.substring(0, 32), // MT5 max comment length = 32 chars
+          login: accountno,
+          type: 2, // Balance operation (deposit)
+          balance: amountUSD,
+          comment: `DEP-${orderid}`.substring(0, 32),
         });
 
         console.log("💰 MT5 Response:", mt5Response.data);
@@ -545,41 +862,35 @@ exports.handleCryptoCallback = async (req, res) => {
           mt5Response.data.retcode !== "0 Done" &&
           mt5Response.data.retcode !== 0
         ) {
-          throw new Error(
-            `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-          );
+          throw new Error(`MT5 Deposit Failed: ${mt5Response.data.retcode}`);
         }
 
-        // ✅ 6. Send confirmation email to user
-        const account = await Account.findOne({
-          accountNo: accountno,
-        }).populate("user");
-        console.log(account);
-        if (account) {
+        // Send confirmation email
+        const account = await Account.findOne({ accountNo: accountno }).populate("user");
+        if (account?.user?.email) {
           await sendEmail({
             to: account.user.email,
-            subject: "Deposit Successful - Balance Updated",
+            subject: "Crypto Deposit Successful - Balance Updated",
             html: `
               <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+                <h2 style="color: #2c3e50;">Crypto Deposit Confirmation</h2>
                 <p>Dear ${account.user.fullName || "Customer"},</p>
-                <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg"
-         alt="Withdrawal Processed"
-         style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
-                <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
-
+                <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg" 
+                     alt="Deposit Processed" 
+                     style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+                <p>Your Crypto deposit has been successfully processed and your trading balance has been updated.</p>
+                
                 <p><strong>Transaction Details:</strong></p>
                 <ul>
                   <li><strong>Order ID:</strong> ${orderid}</li>
-                  <li><strong>Amount Deposited:</strong> ₹${amount} (≈ $${amountUSD})</li>
+                  <li><strong>Amount Deposited:</strong> ${amount} USDT (≈ $${amountUSD})</li>
                   <li><strong>Status:</strong> Successful</li>
+                  <li><strong>TX Hash:</strong> ${txn.hash || "N/A"}</li>
                   <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
                 </ul>
-
+                
                 <p>The amount has been credited to your trading account <strong>${accountno}</strong>.</p>
-
                 <p>If you did not initiate this transaction, please contact our support team immediately.</p>
-
                 <br/>
                 <p>Best Regards,<br/>The Support Team</p>
               </div>
@@ -587,11 +898,10 @@ exports.handleCryptoCallback = async (req, res) => {
           });
         }
       } catch (err) {
-        console.error("❌ MoneyPlant Error:", err.message);
+        console.error("❌ MT5 Error:", err.message);
       }
     }
 
-    // 7. Acknowledge webhook
     return res.status(200).json({ success: true });
   } catch (error) {
     console.error("❌ Callback Error:", error);
@@ -642,8 +952,6 @@ exports.handleCregisCallback = async (req, res) => {
     // --------------------------------------------------
     if (!event_type || !data) {
       console.error("Invalid Cregis callback payload");
-
-      // Cregis expects acknowledgement
       return res.status(200).send("success");
     }
 
@@ -656,454 +964,202 @@ exports.handleCregisCallback = async (req, res) => {
       tx_id,
     } = data;
 
-    if (!order_id || !cregis_id) {
-      console.error(
-        "Missing order_id or cregis_id in Cregis callback"
-      );
-
+    if (!order_id) {
+      console.error("Missing order_id in Cregis callback");
       return res.status(200).send("success");
     }
 
     console.log("Cregis Event:", event_type);
     console.log("Order ID:", order_id);
     console.log("Cregis ID:", cregis_id);
-    console.log("Order Amount:", order_amount);
-    console.log("Pay Amount:", pay_amount);
-    console.log("Pay Currency:", pay_currency);
     console.log("TX ID:", tx_id);
 
-    // --------------------------------------------------
-    // 2. Find our internal order
-    // --------------------------------------------------
-    const order = await Order.findOne({
-      orderid: String(order_id),
-    });
+    const targetOrderId = String(order_id);
+
+    // =========================================================================
+    // CHECK 1: WITHDRAWAL / PAYOUT PROCESSING
+    // =========================================================================
+    const withdrawal = await Withdrawal.findOne({ orderid: targetOrderId });
+
+    if (withdrawal) {
+      console.log("📌 Cregis Withdrawal Matched:", targetOrderId);
+
+      if (["Completed", "Failed"].includes(withdrawal.status)) {
+        console.log("Withdrawal already processed:", targetOrderId);
+        return res.status(200).send("success");
+      }
+
+      // Handle Successful Payout Event
+      if (event_type === "paid" || event_type === "success") {
+        withdrawal.status = "Completed";
+        withdrawal.transactionReference = tx_id || withdrawal.transactionReference;
+        withdrawal.response = { ...withdrawal.response, callbackData: data, event_type };
+        await withdrawal.save();
+
+        await sendSuccessEmail(withdrawal);
+        console.log(`✅ Cregis Withdrawal Completed: ${targetOrderId}`);
+      } 
+      // Handle Failed/Expired/Refunded Payout Events
+      else if (["failed", "expired", "refunded", "cancelled"].includes(event_type)) {
+        withdrawal.status = "Failed";
+        withdrawal.response = { ...withdrawal.response, callbackData: data, event_type };
+        await withdrawal.save();
+
+        // Refund MT5 Balance
+        await refundToMT5(
+          withdrawal.accountNo,
+          withdrawal.amount,
+          withdrawal.currency
+        );
+        console.log(`❌ Cregis Withdrawal Failed & Refunded: ${targetOrderId}`);
+      }
+
+      return res.status(200).send("success");
+    }
+
+    // =========================================================================
+    // CHECK 2: DEPOSIT / PAYIN PROCESSING
+    // =========================================================================
+    const order = await Order.findOne({ orderid: targetOrderId });
 
     if (!order) {
-      console.error("Order not found:", order_id);
-
+      console.error("Neither Order nor Withdrawal found in DB:", targetOrderId);
       return res.status(200).send("success");
     }
 
-    // --------------------------------------------------
-    // 3. Store Cregis ID
-    // --------------------------------------------------
-    if (!order.provider) {
-      order.provider = "CREGIS";
-    }
+    // Store Cregis ID metadata
+    if (!order.provider) order.provider = "CREGIS";
+    if (!order.providerOrderId && cregis_id) order.providerOrderId = String(cregis_id);
 
-    if (!order.providerOrderId) {
-      order.providerOrderId = String(cregis_id);
-    }
-
-    // --------------------------------------------------
-    // 4. Prevent duplicate successful webhook
-    // --------------------------------------------------
+    // Prevent duplicate processing
     if (order.status === "SUCCESS") {
-      console.log(
-        "Order already processed successfully:",
-        order_id
-      );
-
+      console.log("Order already processed successfully:", targetOrderId);
       return res.status(200).send("success");
     }
 
-    // --------------------------------------------------
-    // 5. Handle events
-    // --------------------------------------------------
+    // Handle Deposit Events
     switch (event_type) {
-      // ==================================================
-      // PAYMENT SUCCESS
-      // ==================================================
       case "paid": {
-        console.log(
-          "Cregis payment successful:",
-          order_id
-        );
+        console.log("Cregis payment successful:", targetOrderId);
 
         const accountno = order.accountNo;
-
         if (!accountno) {
-          console.error(
-            "Account number missing for order:",
-            order_id
-          );
-
+          console.error("Account number missing for order:", targetOrderId);
           return res.status(200).send("success");
         }
 
-        // ----------------------------------------------
-        // Determine payment amount
-        // ----------------------------------------------
-        const paymentAmount = Number(
-          pay_amount || order_amount || order.amount
-        );
-
+        const paymentAmount = Number(pay_amount || order_amount || order.amount);
         if (!paymentAmount || paymentAmount <= 0) {
-          console.error(
-            "Invalid payment amount:",
-            paymentAmount
-          );
-
+          console.error("Invalid payment amount:", paymentAmount);
           return res.status(200).send("success");
         }
 
-        console.log(
-          `Cregis payment received: ${paymentAmount} ${pay_currency}`
-        );
-
-        // ----------------------------------------------
-        // Convert INR -> USD
-        // ----------------------------------------------
+        // Convert Currency
         let amountUSD;
+        const currencyStr = String(pay_currency || "").toUpperCase();
 
-        if (
-          String(pay_currency || "").toUpperCase() === "INR"
-        ) {
+        if (currencyStr === "INR") {
           const usdRate = await fetchRate();
-
-          amountUSD = (
-            paymentAmount * usdRate
-          ).toFixed(2);
-
-          console.log(
-            `Converted: ₹${paymentAmount} → $${amountUSD} (rate ${usdRate})`
-          );
-        } else if (
-          String(pay_currency || "").toUpperCase() === "USD"
-        ) {
+          amountUSD = (paymentAmount * usdRate).toFixed(2);
+        } else if (currencyStr === "USD" || currencyStr === "USDT") {
           amountUSD = paymentAmount.toFixed(2);
-
-          console.log(
-            `Payment already in USD: $${amountUSD}`
-          );
         } else {
-          console.error(
-            `Unsupported Cregis currency: ${pay_currency}`
-          );
-
+          console.error(`Unsupported Cregis currency: ${pay_currency}`);
           return res.status(200).send("success");
         }
 
-        // ----------------------------------------------
-        // Call MT5 balance API
-        // ----------------------------------------------
+        // Update MT5 Balance
         try {
-          console.log(
-            "Updating MT5 balance...",
-            {
-              login: accountno,
-              type: 2,
-              balance: amountUSD,
-            }
-          );
+          console.log("Updating MT5 balance...", {
+            login: accountno,
+            type: 2,
+            balance: amountUSD,
+          });
 
           const mt5Response = await updateMT5Balance({
             login: accountno,
             type: 2,
             balance: amountUSD,
-            comment: `DEP-${order_id}`.substring(0, 32),
+            comment: `DEP-${targetOrderId}`.substring(0, 32),
           });
 
-          console.log(
-            "MT5 Response:",
-            mt5Response.data
-          );
-
-          // --------------------------------------------
-          // Validate MT5 response
-          // --------------------------------------------
           if (
             mt5Response.data.retcode !== "0 Done" &&
             mt5Response.data.retcode !== 0
           ) {
-            throw new Error(
-              `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-            );
+            throw new Error(`MT5 Deposit Failed: ${mt5Response.data.retcode}`);
           }
 
-          console.log(
-            "MT5 balance successfully updated:",
-            accountno
-          );
-
-          // --------------------------------------------
-          // IMPORTANT:
-          // Only mark SUCCESS after MT5 succeeds
-          // --------------------------------------------
           order.status = "SUCCESS";
-
           await order.save();
+          console.log("Order marked SUCCESS:", targetOrderId);
 
-          console.log(
-            "Order marked SUCCESS:",
-            order_id
-          );
-
-          // --------------------------------------------
-          // Send confirmation email
-          // --------------------------------------------
+          // Send Email
           try {
-            const account = await Account.findOne({
-              accountNo: accountno,
-            }).populate("user");
-
-            console.log("👤 Account:", account);
-
-            if (
-              account &&
-              account.user &&
-              account.user.email
-            ) {
+            const account = await Account.findOne({ accountNo: accountno }).populate("user");
+            if (account?.user?.email) {
               await sendEmail({
                 to: account.user.email,
-                subject:
-                  "Deposit Successful - Balance Updated",
+                subject: "Deposit Successful - Balance Updated",
                 html: `
                   <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-
-                    <h2 style="color: #2c3e50;">
-                      Deposit Confirmation
-                    </h2>
-
-                    <p>
-                      Dear ${account.user.fullName || "Customer"
-                  },
-                    </p>
-
-                    <img
-                      src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg"
-                      alt="Deposit Processed"
-                      style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;"
-                    />
-
-                    <p>
-                      Your deposit has been successfully processed
-                      and your trading balance has been updated.
-                    </p>
-
-                    <p>
-                      <strong>Transaction Details:</strong>
-                    </p>
-
+                    <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+                    <p>Dear ${account.user.fullName || "Customer"},</p>
+                    <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_deposit_has_been_credited_rczjut.jpg" 
+                         alt="Deposit Processed" 
+                         style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
+                    <p>Your deposit has been successfully processed and your trading balance has been updated.</p>
+                    <p><strong>Transaction Details:</strong></p>
                     <ul>
-                      <li>
-                        <strong>Order ID:</strong>
-                        ${order_id}
-                      </li>
-
-                      <li>
-                        <strong>Cregis ID:</strong>
-                        ${cregis_id}
-                      </li>
-
-                      <li>
-                        <strong>Transaction ID:</strong>
-                        ${tx_id || "N/A"}
-                      </li>
-
-                      <li>
-                        <strong>Amount Deposited:</strong>
-                        ${paymentAmount} ${pay_currency || ""}
-                        ${String(
-                    pay_currency || ""
-                  ).toUpperCase() === "INR"
-                    ? ` (≈ $${amountUSD})`
-                    : ""
-                  }
-                      </li>
-
-                      <li>
-                        <strong>Trading Account:</strong>
-                        ${accountno}
-                      </li>
-
-                      <li>
-                        <strong>Status:</strong>
-                        Successful
-                      </li>
-
-                      <li>
-                        <strong>Date:</strong>
-                        ${new Date().toLocaleString()}
-                      </li>
+                      <li><strong>Order ID:</strong> ${targetOrderId}</li>
+                      <li><strong>Cregis ID:</strong> ${cregis_id || "N/A"}</li>
+                      <li><strong>Transaction ID:</strong> ${tx_id || "N/A"}</li>
+                      <li><strong>Amount Deposited:</strong> ${paymentAmount} ${pay_currency || ""}</li>
+                      <li><strong>Trading Account:</strong> ${accountno}</li>
+                      <li><strong>Status:</strong> Successful</li>
+                      <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
                     </ul>
-
-                    <p>
-                      The amount has been credited to your
-                      trading account
-                      <strong>${accountno}</strong>.
-                    </p>
-
-                    <p>
-                      If you did not initiate this transaction,
-                      please contact our support team immediately.
-                    </p>
-
-                    <br />
-
-                    <p>
-                      Best Regards,<br />
-                      The Support Team
-                    </p>
-
+                    <p>Best Regards,<br/>The Support Team</p>
                   </div>
                 `,
               });
-
-              console.log(
-                "📧 Deposit confirmation email sent:",
-                account.user.email
-              );
-            } else {
-              console.warn(
-                "⚠️ Account/user/email not found. Email skipped."
-              );
             }
           } catch (emailError) {
-            // Email failure should NOT reverse the successful
-            // MT5 deposit.
-            console.error(
-              "Confirmation email failed:",
-              emailError.message
-            );
+            console.error("Confirmation email failed:", emailError.message);
           }
         } catch (mt5Error) {
-          // --------------------------------------------
-          // MT5 failed
-          // --------------------------------------------
-          console.error(
-            "MT5 Deposit Error:",
-            mt5Error.response?.data ||
-            mt5Error.message
-          );
-
-          /*
-           * IMPORTANT:
-           *
-           * Do NOT mark the order SUCCESS here.
-           *
-           * Payment was received by Cregis,
-           * but MT5 credit failed.
-           *
-           * Keep order PENDING so it can be
-           * retried/reconciled.
-           */
+          console.error("MT5 Deposit Error:", mt5Error.response?.data || mt5Error.message);
           order.status = "PENDING";
-
           await order.save();
-
-          // Still acknowledge Cregis
-          return res.status(200).send("success");
         }
-
         break;
       }
 
-      // ==================================================
-      // PARTIAL PAYMENT
-      // ==================================================
-      case "paid_partial": {
-        console.warn(
-          "Cregis partial payment:",
-          order_id,
-          pay_amount
-        );
-
-        /*
-         * Order model doesn't support PARTIAL.
-         * Keep it PENDING.
-         */
-
-        order.status = "PENDING";
-
-        await order.save();
-
-        break;
-      }
-
-      // ==================================================
-      // OVER PAYMENT
-      // ==================================================
+      case "paid_partial":
       case "paid_over": {
-        console.warn(
-          "Cregis overpayment:",
-          order_id,
-          pay_amount
-        );
-
-        /*
-         * Order model doesn't support OVERPAID.
-         * Keep it PENDING.
-         */
-
+        console.warn(`Cregis ${event_type}:`, targetOrderId, pay_amount);
         order.status = "PENDING";
-
         await order.save();
-
         break;
       }
 
-      // ==================================================
-      // EXPIRED
-      // ==================================================
-      case "expired": {
-        console.log(
-          "Cregis order expired:",
-          order_id
-        );
-
-        order.status = "FAILED";
-
-        await order.save();
-
-        break;
-      }
-
-      // ==================================================
-      // REFUNDED
-      // ==================================================
+      case "expired":
       case "refunded": {
-        console.log(
-          "Cregis order refunded:",
-          order_id
-        );
-
+        console.log(`Cregis order ${event_type}:`, targetOrderId);
         order.status = "FAILED";
-
         await order.save();
-
         break;
       }
 
-      // ==================================================
-      // UNKNOWN EVENT
-      // ==================================================
       default: {
-        console.warn(
-          "Unknown Cregis event:",
-          event_type
-        );
-
+        console.warn("Unknown Cregis event:", event_type);
         await order.save();
       }
     }
 
-    // --------------------------------------------------
-    // 6. Acknowledge Cregis
-    // --------------------------------------------------
     return res.status(200).send("success");
   } catch (error) {
-    console.error(
-      "Cregis callback error:",
-      error.response?.data || error.message
-    );
-
-    /*
-     * Cregis expects acknowledgement.
-     * Therefore return 200 even when our internal
-     * processing encounters an error.
-     */
+    console.error("Cregis callback error:", error.response?.data || error.message);
     return res.status(200).send("success");
   }
 };

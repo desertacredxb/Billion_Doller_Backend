@@ -6,6 +6,7 @@ const User = require("../models/User");
 
 // const { withSession } = require("../utils/mt5Session");
 const MT5Request = require("../utils/mt5Request");
+const { sendMT5AccountCreatedEmail } = require("../utils/Email");
 
 // const mt5 = new MT5Request(process.env.MT5_SERVER, 443); // e.g. 86.104.251.229
 
@@ -150,6 +151,25 @@ exports.registerUserWithMT5 = async (req, res) => {
     // console.log("newAccount", newAccount);
     await newAccount.save();
 
+    try {
+      await sendMT5AccountCreatedEmail({
+        email: user.email,
+        name: user.fullName,
+        accountNo,
+        currency: curr,
+        accountType: actype,
+        userType: Utype,
+        mt5Password: Password,
+        mt5InvestorPassword: investorPassword,
+      });
+    } catch (emailError) {
+      // Don't fail account creation because email failed
+      console.error(
+        "⚠️ MT5 account created, but account email failed:",
+        emailError
+      );
+    }
+
     return res.status(200).json({ message: "Account successfully created", accountNo });
   } catch (error) {
     console.error("Error during MT5 registration:", error);
@@ -267,6 +287,8 @@ exports.getMT5User = async (req, res) => {
     // Handle return format (answer container vs direct object)
     const userDetails = userData.answer || userData;
 
+    console.log("userDetails", userDetails)
+
     return res.status(200).json({
       success: true,
       data: userDetails,
@@ -281,23 +303,32 @@ exports.getMT5User = async (req, res) => {
  * Change MT5 Account Password (Main, Investor, or API)
  */
 exports.changeMT5Password = async (req, res) => {
-  const { login, password } = req.body; // new master password input
+  const { login, type, password, mainPassword, investorPassword } = req.body;
 
-  if (!login || !password) {
+  if (!login || !type) {
     return res.status(400).json({
       success: false,
-      message: "login and password are required fields.",
+      message: "login and type are required fields.",
     });
   }
 
-  const newMainPassword = password;
-  const newInvestorPassword = `${password}#Inv`;
-
   try {
+    let targetMainPassword = null;
+    let targetInvestorPassword = null;
+
+    if (type === "both") {
+      targetMainPassword = mainPassword;
+      targetInvestorPassword = investorPassword;
+    } else if (type === "main") {
+      targetMainPassword = password;
+    } else if (type === "investor") {
+      targetInvestorPassword = password;
+    }
+
     await runExclusive(async () => {
       const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
 
-      // 1. Authenticate MT5 Session
+      // Authenticate MT5 Session
       await new Promise((resolve, reject) => {
         mt5.Auth(
           process.env.MT5_MANAGER_LOGIN,
@@ -308,38 +339,40 @@ exports.changeMT5Password = async (req, res) => {
         );
       });
 
-      // 2. Update Main (Trader) Password
-      await new Promise((resolve, reject) => {
-        mt5.UserPasswordChange(
-          { login, type: "main", password: newMainPassword },
-          (error, answer) => (error ? reject(error) : resolve(answer))
-        );
-      });
+      // 1. Update Main Password if provided
+      if (targetMainPassword) {
+        await new Promise((resolve, reject) => {
+          mt5.UserPasswordChange(
+            { login, type: "main", password: targetMainPassword },
+            (error, answer) => (error ? reject(error) : resolve(answer))
+          );
+        });
+      }
 
-      // 3. Update Investor (Read-Only) Password automatically using the formatted string
-      await new Promise((resolve, reject) => {
-        mt5.UserPasswordChange(
-          { login, type: "investor", password: newInvestorPassword },
-          (error, answer) => (error ? reject(error) : resolve(answer))
-        );
-      });
+      // 2. Update Investor Password if provided
+      if (targetInvestorPassword) {
+        await new Promise((resolve, reject) => {
+          mt5.UserPasswordChange(
+            { login, type: "investor", password: targetInvestorPassword },
+            (error, answer) => (error ? reject(error) : resolve(answer))
+          );
+        });
+      }
     });
 
-    // 4. Update both passwords in the local database
-    await Account.findOneAndUpdate(
-      { accountNo: login },
-      {
-        mt5Password: newMainPassword,
-        mt5InvestorPassword: newInvestorPassword,
-      }
-    );
+    // Update MongoDB record
+    const updatePayload = {};
+    if (targetMainPassword) updatePayload.mt5Password = targetMainPassword;
+    if (targetInvestorPassword) updatePayload.mt5InvestorPassword = targetInvestorPassword;
+
+    await Account.findOneAndUpdate({ accountNo: login }, updatePayload);
 
     return res.status(200).json({
       success: true,
-      message: "Main and Investor passwords updated successfully",
+      message: `Password (${type}) updated successfully`,
     });
   } catch (error) {
-    console.error("Error updating MT5 passwords:", error);
+    console.error("Error updating MT5 password:", error);
     return handleMT5Error(error, res, "MT5_PASSWORD_UPDATE_FAILED");
   }
 };
