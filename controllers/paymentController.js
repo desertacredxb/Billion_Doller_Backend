@@ -1383,9 +1383,16 @@ exports.handleTrustpay24Callback = async (req, res) => {
     }
 
     // Find our order using TrustPay24 transaction_ref
-    const order = await Order.findOne({
+    let order = await Order.findOne({
       orderid: String(transaction_ref),
     });
+
+    if (!order) {
+      order = await Order.findOne({
+        orderid: String(merchant_order_id),
+      });
+    }
+
 
     if (!order) {
       console.error(
@@ -1449,7 +1456,7 @@ exports.handleTrustpay24Callback = async (req, res) => {
         login: accountno,
         type: 2,
         balance: amountUSD,
-        comment: `DEP-${order_id}`.substring(0, 32),
+        comment: `DEP-${order.orderid}`.substring(0, 32),
       });
 
       console.log(

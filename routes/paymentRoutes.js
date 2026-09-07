@@ -395,7 +395,7 @@ router.post("/trustpay24/deposit", async (req, res) => {
 
     // Save order in database
     const order = await Order.create({
-      orderid: String(data.transaction_ref),
+      orderid: String(merchantOrderId),
       account: account._id,
       accountNo: String(account.accountNo),
       amount: numericAmount,
