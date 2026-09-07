@@ -59,6 +59,8 @@ async function checkCregisOrderStatus(cregisId) {
       timeout: 10000,
     });
 
+    console.log(data)
+
     if (data?.code === "00000" && data?.data) {
       return data.data.status; // "new", "paid", "expired", "paid_over", "paid_partial", "canceled"
     }
@@ -74,10 +76,13 @@ async function checkCregisOrderStatus(cregisId) {
 // =========================================================================
 async function checkRameeOrderStatus(orderid, provider) {
   try {
-    const isCrypto = provider === "CRYPTO";
+    // Standardize provider check (case-insensitive)
+    const isCrypto = String(provider).toUpperCase() === "CRYPTO";
+
     const encryptedData = isCrypto
       ? encryptDataCrypto({ order_id: orderid })
       : encryptData({ order_id: orderid });
+
     const payload = isCrypto
       ? { data: encryptedData, agentCode: process.env.CRYPTO_AGENT_CODE }
       : { reqData: encryptedData, agentCode: process.env.RAMEE_AGENT_CODE };
@@ -85,20 +90,29 @@ async function checkRameeOrderStatus(orderid, provider) {
     const statusUrl = isCrypto
       ? "https://crypto-apis.rameepay.io/v1/order/status"
       : "https://apis.rameepay.io/order/status";
+
     const { data } = await axios.post(statusUrl, payload, {
       headers: { "Content-Type": "application/json" },
       timeout: 10000,
     });
 
-    if (data?.status && data?.data) {
+    console.log("API Raw Response:", data);
+
+    // FIXED: Check data.success instead of data.status
+    if (data?.success && data?.data) {
       const decrypted = isCrypto
         ? decryptDataCrypto(data.data)
         : decryptData(data.data);
-      return decrypted.status; // "SUCCESS", "PENDING", "FAILED"
+
+      console.log("Decrypted Payload:", decrypted);
+
+      // Return status if object, or return raw payload if string/other
+      return typeof decrypted === "object" ? decrypted?.status : decrypted;
     }
+
     return null;
   } catch (error) {
-    console.error("Ramee status query error:", error.message);
+    console.error("Ramee status query error:", error.response?.data || error.message);
     return null;
   }
 }
@@ -139,7 +153,7 @@ async function reconcilePendingOrders(orderCount = null) {
         : "🔍 Starting pending orders reconciliation job..."
     );
 
-    const pendingOrderQuery = Order.find({ status: "PENDING" }).sort({ createdAt: 1 });
+    const pendingOrderQuery = Order.find({ status: "PENDING" }).sort({ createdAt: -1 });
     if (orderCount !== null) pendingOrderQuery.limit(orderCount);
     const pendingOrders = await pendingOrderQuery;
 
