@@ -29,12 +29,24 @@ const rateLimit = require("express-rate-limit");
 const { createCregisCheckout } = require("../controllers/paymentOrder.controller");
 const { createPayoutRequest, approvePayoutReq } = require("../controllers/payout.controller");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
+// const reconcilePendingOrders = require("../utils/syncPendingOrders");
 
 const withdrawalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 2,
   message: "Too many withdrawal attempts. Please wait.",
 });
+
+// router.post("/reconcile-orders", async (req, res) => {
+//   // Add admin authentication check here
+//   try {
+//     // Run reconciliation asynchronously or await completion
+//     await reconcilePendingOrders();
+//     return res.json({ success: true, message: "Order reconciliation completed." });
+//   } catch (err) {
+//     return res.status(500).json({ success: false, error: err.message });
+//   }
+// });
 
 router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
@@ -399,6 +411,7 @@ router.post("/trustpay24/deposit", async (req, res) => {
       account: account._id,
       accountNo: String(account.accountNo),
       amount: numericAmount,
+      provider: "TRUSTPAY24",
       status: "PENDING",
     });
 
@@ -461,6 +474,7 @@ router.post("/ramee/deposit", async (req, res) => {
       account: account._id, // ✅ link to Account
       accountNo: account.accountNo, // backup string
       amount,
+      provider: "RAMEE",
       status: "PENDING", // default
     });
     await newOrder.save();
@@ -571,6 +585,7 @@ router.post("/crypto/deposit", async (req, res) => {
       account: account._id, // ✅ link to Account
       accountNo: account.accountNo, // backup string
       amount,
+      provider: "CRYPTO",
       status: "PENDING", // default
     });
     await newOrder.save();
