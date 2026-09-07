@@ -293,7 +293,7 @@ exports.createCregisCheckout = async (req, res) => {
       console.error("Cregis deposit: CREGIS credentials are not configured");
       return res.status(503).json({
         success: false,
-        message: "Cregis payment gateway is not properly configured",
+        message: "We’re unable to process your deposit right now. Please try again in a few moments.",
       });
     }
 
@@ -362,7 +362,7 @@ exports.createCregisCheckout = async (req, res) => {
       console.error("Cregis checkout rejected:", data?.msg || data);
       return res.status(502).json({
         success: false,
-        message: data?.msg || "Cregis failed to generate checkout link",
+        message: data?.msg || "failed to generate checkout link",
       });
     }
 
@@ -395,7 +395,7 @@ exports.createCregisCheckout = async (req, res) => {
     console.error("Cregis deposit error:", err.response?.data || err.message);
     return res.status(502).json({
       success: false,
-      message: err.response?.data?.msg || "Unable to create Cregis deposit",
+      message: "We’re having trouble processing your deposit. Please try again shortly.",
     });
   }
 };
