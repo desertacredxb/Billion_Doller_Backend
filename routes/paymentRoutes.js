@@ -8,9 +8,9 @@ const {
   handleRameeCallback,
   handleCryptoCallback,
   handleManualPaymentRequest,
-  handleTruepay9Callback, 
+  handleTruepay9Callback,
   handleCregisCallback,
-  handleTrustpay24Callback} = require("../controllers/paymentController");
+  handleTrustpay24Callback } = require("../controllers/paymentController");
 const {
   encryptData,
   decryptData,
@@ -848,28 +848,28 @@ router.post("/reject/:id", async (req, res) => {
     console.log(withdrawal.accountNo, amountUSD, refundOrderId);
 
     const mt5Response = await updateMT5Balance({
-            login: withdrawal.accountNo,
-            type: 2,
-            balance: -amountUSD,
-            comment: `refundOrderId`.substring(0, 32),
-        });
+      login: withdrawal.accountNo,
+      type: 2,
+      balance: -amountUSD,
+      comment: `refundOrderId`.substring(0, 32),
+    });
 
-        console.log(
-            "MT5 Response:",
-            mt5Response.data
-        );
+    console.log(
+      "MT5 Response:",
+      mt5Response.data
+    );
 
-        // --------------------------------------------
-        // Validate MT5 response
-        // --------------------------------------------
-        if (
-            mt5Response.data.retcode !== "0 Done" &&
-            mt5Response.data.retcode !== 0
-        ) {
-            throw new Error(
-                `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-            );
-        }
+    // --------------------------------------------
+    // Validate MT5 response
+    // --------------------------------------------
+    if (
+      mt5Response.data.retcode !== "0 Done" &&
+      mt5Response.data.retcode !== 0
+    ) {
+      throw new Error(
+        `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+      );
+    }
 
     withdrawal.status = "Rejected";
     withdrawal.response = { message: "Rejected by admin" };
