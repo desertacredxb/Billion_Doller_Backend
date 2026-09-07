@@ -275,22 +275,82 @@ MT5Request.prototype.UserAdd = function (params, callback) {
 };
 
 
+// MT5Request.prototype.TradeBalance = function (params, callback) {
+//   var self = this;
+
+//   if (!params || !params.login || params.balance === undefined) {
+//     return callback && callback("Missing required parameters (login, balance)");
+//   }
+
+//   // Structure payload matching MT5 WebAPI JSON expectations
+//   var jsonBody = {
+//     Login: Number(params.login),
+//     Type: Number(params.type ?? 2), // 2 = Balance operation
+//     Balance: Number(params.balance),
+//     Comment: String(params.comment ?? "Deposit/Withdrawal").substring(0, 31), // Max 32 chars
+//   };
+
+//   if (params.check_margin !== undefined) {
+//     jsonBody.CheckMargin = Number(params.check_margin);
+//   }
+
+//   self.PostJSON("/api/trade/balance", jsonBody, function (error, res, body) {
+//     var answer = self.ParseBodyJSON(error, res, body, callback);
+//     if (answer) {
+//       return callback && callback(null, answer);
+//     }
+//   });
+// };
+
 MT5Request.prototype.TradeBalance = function (params, callback) {
   var self = this;
-  var queryParams = {
-    login: params.login,
-    type: params.type,
-    balance: params.balance,
-    comment: params.comment,
-  };
-  var qs = new URLSearchParams(queryParams).toString();
 
-  self.Post("/api/trade/balance?" + qs, "", function (error, res, body) {
+  // 1. Validate required parameters according to MT5 protocol
+  if (!params || params.login === undefined || params.balance === undefined) {
+    return callback && callback("Missing required parameters: 'login' and 'balance' are required.");
+  }
+
+  var login = params.login;
+  var type = params.type !== undefined ? params.type : 2; // Default 2 (DEAL_BALANCE)
+  var balance = params.balance;
+  var comment = params.comment !== undefined ? String(params.comment).substring(0, 31) : "Deposit";
+  var checkMargin = params.check_margin ? "1" : "0";
+
+  // 2. Format query string using percent-encoding matching MT5 Web API spec
+  var queryParams = [
+    "login=" + encodeURIComponent(login),
+    "type=" + encodeURIComponent(type),
+    "balance=" + encodeURIComponent(balance),
+    "comment=" + encodeURIComponent(comment),
+    "check_margin=" + encodeURIComponent(checkMargin)
+  ];
+
+  var path = "/api/trade/balance?" + queryParams.join("&");
+
+  // 3. MTTradeProtocol sends requests via GET
+  self.Get(path, function (error, res, body) {
+    if (error) {
+      return callback && callback(error);
+    }
+
     var answer = self.ParseBodyJSON(error, res, body, callback);
-    if (answer) callback && callback(null, answer);
+    if (!answer) return;
+
+    // 4. Match MTTradeAnswer parsing logic from PHP SDK
+    // MT5 returns "0 Done" or "0" in retcode on success
+    var retCode = answer.retcode ? answer.retcode.toString() : "";
+    
+    if (retCode.startsWith("0") || retCode === "0 Done") {
+      return callback && callback(null, {
+        retcode: answer.retcode,
+        ticket: answer.ticket ? parseInt(answer.ticket, 10) : 0,
+        raw: answer
+      });
+    } else {
+      return callback && callback("MT5 Server Error [" + answer.retcode + "]");
+    }
   });
 };
-
 
 MT5Request.prototype.UserGet = function (login, callback) {
   var self = this;

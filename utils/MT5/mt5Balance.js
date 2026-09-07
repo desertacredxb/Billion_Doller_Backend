@@ -11,6 +11,7 @@ async function updateMT5Balance({ login, type = 2, balance, comment }) {
   return runExclusive(async () => {
     const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
 
+    // 1. Authenticate with MT5 Manager credentials
     await new Promise((resolve, reject) => {
       mt5.Auth(
         process.env.MT5_MANAGER_LOGIN,
@@ -21,6 +22,7 @@ async function updateMT5Balance({ login, type = 2, balance, comment }) {
       );
     });
 
+    // 2. Execute Balance Update
     return new Promise((resolve, reject) => {
       mt5.TradeBalance({ login, type, balance, comment }, (error, answer) => {
         if (error) return reject(error);

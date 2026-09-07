@@ -153,31 +153,29 @@ exports.createPayoutRequest = async (req, res) => {
         const usdRate = await fetchRate();
         const amountUSD = (numericAmount * usdRate).toFixed(2);
         // const amountUSD = numericAmount;
-
+        const negativeAmountUSD = (-Math.abs(parseFloat(amountUSD))).toFixed(2);
         // 🔹 Lock balance by deducting from system backend / MoneyPlant
+
+
         const mt5Response = await updateMT5Balance({
             login: accountNo,
-            type: 2,
-            balance: -amountUSD,
-            comment: `orderid`.substring(0, 32),
+            type: 2, // Deposit type
+            balance: negativeAmountUSD,
+            comment: `DEP-${targetOrderId}`.substring(0, 31),
         });
+
+        console.log("💰 MT5 Response:", mt5Response);
+
+        const retCode = String(mt5Response.retcode || "");
+
+        if (!retCode.startsWith("0") && retCode !== "0 Done") {
+            throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
+        }
 
         console.log(
             "MT5 Response:",
             mt5Response.data
         );
-
-        // --------------------------------------------
-        // Validate MT5 response
-        // --------------------------------------------
-        if (
-            mt5Response.data.retcode !== "0 Done" &&
-            mt5Response.data.retcode !== 0
-        ) {
-            throw new Error(
-                `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-            );
-        }
 
         // 🔹 Save Withdrawal Record with Full Currency Context
         const withdrawalRecord = new Withdrawal({
@@ -273,7 +271,6 @@ exports.createPayoutRequest = async (req, res) => {
         return res.status(500).json({ success: false, error: "Failed to save request" });
     }
 }
-
 
 // exports.approvePayoutReq = async (req, res) => {
 //   try {
@@ -593,7 +590,7 @@ exports.approvePayoutReq = async (req, res) => {
                 // Determine correct endpoint base URL if different for Crypto vs Fiat
                 const endpoint =
                     currency === "CRYPTO"
-                        ?  RAMEEPAY_Crypto_API
+                        ? RAMEEPAY_Crypto_API
                         : RAMEEPAY_API;
 
                 // 1. Encrypt payload and send request
@@ -679,21 +676,46 @@ exports.approvePayoutReq = async (req, res) => {
 // HELPER FUNCTIONS
 // =============================================================================
 exports.refundToMT5 = async (accountNo, amount, currency) => {
-    const usdRate = await fetchRate();
-    const amountUSD = currency === "INR"
-        ? (parseFloat(amount) / usdRate).toFixed(2)
-        : parseFloat(amount).toFixed(2);
+    try {
+        const usdRate = await fetchRate();
+        const parsedAmount = parseFloat(amount);
 
-    const refundOrderId = `RF${Date.now()}`;
+        if (isNaN(parsedAmount) || parsedAmount <= 0) {
+            throw new Error(`Invalid refund amount provided: ${amount}`);
+        }
 
+        // Convert INR to USD if needed, otherwise format to 2 decimal places
+        const amountUSD = currency === "INR"
+            ? (parsedAmount / usdRate).toFixed(2)
+            : parsedAmount.toFixed(2);
 
-    return updateMT5Balance({
-                login: accountNo,
-                type: 2,
-                balance: amountUSD,
-                comment: `REF-${refundOrderId}`,
-              });
-}
+        const refundOrderId = `RF${Date.now()}`;
+        const formattedComment = `REF-${refundOrderId}`.substring(0, 31);
+
+        console.log(`🔄 Refunding MT5 Account ${accountNo}: $${amountUSD} USD (Comment: ${formattedComment})`);
+
+        const mt5Response = await updateMT5Balance({
+            login: accountNo,
+            type: 2, // Deposit/Balance Operation
+            balance: amountUSD,
+            comment: formattedComment,
+        });
+
+        console.log("💰 MT5 Refund Response:", mt5Response);
+
+        // Validate retcode directly from the return object
+        const retCode = String(mt5Response.retcode || "");
+
+        if (!retCode.startsWith("0") && retCode !== "0 Done") {
+            throw new Error(`MT5 Refund Failed for account ${accountNo}: ${mt5Response.retcode}`);
+        }
+
+        return mt5Response;
+    } catch (error) {
+        console.error("❌ refundToMT5 Error:", error.message);
+        throw error; // Re-throw so caller webhooks log or handle the failure
+    }
+};
 
 exports.sendSuccessEmail = async (withdrawal) => {
     const user = await User.findOne({

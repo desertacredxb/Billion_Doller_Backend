@@ -698,17 +698,19 @@ exports.handleRameeCallback = async (req, res) => {
           login: accountno,
           type: 2, // Balance operation (deposit)
           balance: amountUSD,
-          comment: `DEP-${orderid}`.substring(0, 32),
+          comment: `DEP-${orderid}`.substring(0, 31),
         });
 
-        console.log("💰 MT5 Response:", mt5Response.data);
+        console.log("💰 MT5 Response:", mt5Response);
 
-        if (
-          mt5Response.data.retcode !== "0 Done" &&
-          mt5Response.data.retcode !== 0
-        ) {
-          throw new Error(`MT5 Deposit Failed: ${mt5Response.data.retcode}`);
+        // Validate MT5 response directly from returned object
+        const retCode = String(mt5Response.retcode || "");
+
+        if (!retCode.startsWith("0") && retCode !== "0 Done") {
+          throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
         }
+
+        console.log(`✅ MT5 Balance Updated Successfully. Ticket: ${mt5Response.ticket}`);
 
         // Send confirmation email
         const account = await Account.findOne({ accountNo: accountno }).populate("user");
@@ -730,6 +732,7 @@ exports.handleRameeCallback = async (req, res) => {
                   <li><strong>Order ID:</strong> ${orderid}</li>
                   <li><strong>Amount Deposited:</strong> ₹${amount} (≈ $${amountUSD})</li>
                   <li><strong>Status:</strong> Successful</li>
+                  <li><strong>Ticket ID:</strong> ${mt5Response.ticket || "N/A"}</li>
                   <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
                 </ul>
                 
@@ -850,21 +853,24 @@ exports.handleCryptoCallback = async (req, res) => {
       console.log(`💱 Crypto Credit: ${amount} USDT → $${amountUSD}`);
 
       try {
+        // Execute MT5 balance deposit request
         const mt5Response = await updateMT5Balance({
           login: accountno,
           type: 2, // Balance operation (deposit)
           balance: amountUSD,
-          comment: `DEP-${orderid}`.substring(0, 32),
+          comment: `DEP-${orderid}`.substring(0, 31),
         });
 
-        console.log("💰 MT5 Response:", mt5Response.data);
+        console.log("💰 MT5 Response:", mt5Response);
 
-        if (
-          mt5Response.data.retcode !== "0 Done" &&
-          mt5Response.data.retcode !== 0
-        ) {
-          throw new Error(`MT5 Deposit Failed: ${mt5Response.data.retcode}`);
+        // Validate MT5 Response Code directly from object
+        const retCode = String(mt5Response.retcode || "");
+
+        if (!retCode.startsWith("0") && retCode !== "0 Done") {
+          throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
         }
+
+        console.log(`✅ MT5 Balance Updated Successfully. Ticket: ${mt5Response.ticket}`);
 
         // Send confirmation email
         const account = await Account.findOne({ accountNo: accountno }).populate("user");
@@ -886,6 +892,7 @@ exports.handleCryptoCallback = async (req, res) => {
                   <li><strong>Order ID:</strong> ${orderid}</li>
                   <li><strong>Amount Deposited:</strong> ${amount} USDT (≈ $${amountUSD})</li>
                   <li><strong>Status:</strong> Successful</li>
+                  <li><strong>Ticket ID:</strong> ${mt5Response.ticket || "N/A"}</li>
                   <li><strong>TX Hash:</strong> ${txn.hash || "N/A"}</li>
                   <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
                 </ul>
@@ -1274,14 +1281,15 @@ exports.handleCregisCallback = async (req, res) => {
             login: accountno,
             type: 2, // Deposit type
             balance: usdAmountToCredit,
-            comment: `DEP-${targetOrderId}`.substring(0, 32),
+            comment: `DEP-${targetOrderId}`.substring(0, 31),
           });
 
-          if (
-            mt5Response.data?.retcode !== "0 Done" &&
-            mt5Response.data?.retcode !== 0
-          ) {
-            throw new Error(`MT5 Deposit Failed: ${mt5Response.data?.retcode}`);
+          console.log("💰 MT5 Response:", mt5Response);
+
+          const retCode = String(mt5Response.retcode || "");
+
+          if (!retCode.startsWith("0") && retCode !== "0 Done") {
+            throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
           }
 
           order.status = "SUCCESS";
@@ -1305,6 +1313,7 @@ exports.handleCregisCallback = async (req, res) => {
                       <li><strong>Order ID:</strong> ${targetOrderId}</li>
                       <li><strong>Cregis ID:</strong> ${cregis_id || "N/A"}</li>
                       <li><strong>Transaction ID:</strong> ${tx_id || "N/A"}</li>
+                      <li><strong>Ticket ID:</strong> ${mt5Response.ticket || "N/A"}</li>
                       <li><strong>Paid In Crypto:</strong> ${pay_amount || "N/A"} ${pay_currency || ""}</li>
                       <li><strong>Amount Credited:</strong> $${usdAmountToCredit} USD</li>
                       <li><strong>Trading Account:</strong> ${accountno}</li>
@@ -1318,7 +1327,7 @@ exports.handleCregisCallback = async (req, res) => {
             console.error("Confirmation email failed:", emailError.message);
           }
         } catch (mt5Error) {
-          console.error("MT5 Deposit Error:", mt5Error.response?.data || mt5Error.message);
+          console.error("MT5 Deposit Error:", mt5Error.message);
           order.status = "PENDING";
           await order.save();
         }
@@ -1350,7 +1359,7 @@ exports.handleCregisCallback = async (req, res) => {
 
     return res.status(200).send("success");
   } catch (error) {
-    console.error("Cregis callback error:", error.response?.data || error.message);
+    console.error("Cregis callback error:", error.message);
     return res.status(200).send("success");
   }
 };
@@ -1452,25 +1461,35 @@ exports.handleTrustpay24Callback = async (req, res) => {
       const usdRate = await fetchRate();
       const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
 
-      const mt5Response = await updateMT5Balance({
-        login: accountno,
-        type: 2,
-        balance: amountUSD,
-        comment: `DEP-${order.orderid}`.substring(0, 32),
-      });
+      // const mt5Response = await updateMT5Balance({
+      //   login: accountno,
+      //   type: 2,
+      //   balance: amountUSD,
+      //   comment: `DEP-${order.orderid}`.substring(0, 32),
+      // });
+      try {
+        const mt5Response = await updateMT5Balance({
+          login: accountno,
+          type: 2,
+          balance: amountUSD,
+          comment: `DEP-${order.orderid}`.substring(0, 31), // MT5 comments max 31 chars
+        });
 
-      console.log(
-        "MT5 Response:",
-        mt5Response.data
-      );
+        console.log("MT5 Response:", mt5Response);
 
-      // --------------------------------------------
-      // Validate MT5 response
-      // --------------------------------------------
-      if (
-        mt5Response.data.retcode !== "0 Done" &&
-        mt5Response.data.retcode !== 0
-      ) {
+        // --------------------------------------------
+        // Validate MT5 response
+        // --------------------------------------------
+        const retCode = String(mt5Response.retcode);
+
+        if (!retCode.startsWith("0") && retCode !== "0 Done") {
+          throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
+        }
+
+        console.log(`Deposit successful! Ticket ID: ${mt5Response.ticket}`);
+
+      } catch (error) {
+        console.error("MT5 Operation Failed:", error);
         throw new Error(
           `MT5 Deposit Failed: ${mt5Response.data.retcode}`
         );

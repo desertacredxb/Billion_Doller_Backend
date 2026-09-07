@@ -376,3 +376,67 @@ exports.changeMT5Password = async (req, res) => {
     return handleMT5Error(error, res, "MT5_PASSWORD_UPDATE_FAILED");
   }
 };
+
+/**
+ * Update MT5 Balance (Deposit/Withdrawal)
+ */
+exports.updateUserMT5balance = async (req, res) => {
+  const { login, balance, comment = "Deposit/Withdrawal", type = 2, check_margin } = req.body;
+
+  // Validation
+  if (!login || balance === undefined || isNaN(Number(balance))) {
+    return res.status(400).json({
+      success: false,
+      message: "Both 'login' and numeric 'balance' are required fields.",
+    });
+  }
+
+  try {
+    const tradeResult = await runExclusive(async () => {
+      const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
+
+      // 1. Authenticate connection
+      await new Promise((resolve, reject) => {
+        mt5.Auth(
+          process.env.MT5_MANAGER_LOGIN,
+          process.env.MT5_MANAGER_PASSWORD,
+          process.env.MT5_BUILD,
+          "WebManager",
+          (error) => (error ? reject(error) : resolve())
+        );
+      });
+
+      // 2. Perform Trade Balance operation using PostJSON wrapper
+      return new Promise((resolve, reject) => {
+        mt5.TradeBalance(
+          {
+            login: login,
+            type: type,
+            balance: balance,
+            comment: comment,
+            check_margin: check_margin,
+          },
+          (error, answer) => {
+            if (error) return reject(error);
+            resolve(answer);
+          }
+        );
+      });
+    });
+
+    const ticket = tradeResult?.answer?.Ticket || tradeResult?.Ticket;
+
+    return res.status(200).json({
+      success: true,
+      message: `Balance updated successfully by ${balance}`,
+      data: {
+        ticket: ticket,
+        account: tradeResult,
+      },
+    });
+
+  } catch (error) {
+    console.error("Error updating MT5 balance:", error);
+    return handleMT5Error(error, res, "MT5_BALANCE_UPDATE_FAILED");
+  }
+};
