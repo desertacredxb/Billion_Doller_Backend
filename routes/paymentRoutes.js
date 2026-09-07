@@ -29,7 +29,7 @@ const rateLimit = require("express-rate-limit");
 const { createCregisCheckout } = require("../controllers/paymentOrder.controller");
 const { createPayoutRequest, approvePayoutReq } = require("../controllers/payout.controller");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
-// const reconcilePendingOrders = require("../utils/syncPendingOrders");
+const reconcilePendingOrders = require("../utils/syncPendingOrders");
 
 const withdrawalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -37,16 +37,30 @@ const withdrawalLimiter = rateLimit({
   message: "Too many withdrawal attempts. Please wait.",
 });
 
-// router.post("/reconcile-orders", async (req, res) => {
-//   // Add admin authentication check here
-//   try {
-//     // Run reconciliation asynchronously or await completion
-//     await reconcilePendingOrders();
-//     return res.json({ success: true, message: "Order reconciliation completed." });
-//   } catch (err) {
-//     return res.status(500).json({ success: false, error: err.message });
-//   }
-// });
+router.post("/reconcile-orders", async (req, res) => {
+  // Add admin authentication check here
+  try {
+    const requestedCount = req.body?.count ?? req.body?.orderCount ?? req.body?.limit;
+    const orderCount = requestedCount === undefined ? null : Number(requestedCount);
+
+    if (orderCount !== null && (!Number.isInteger(orderCount) || orderCount <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: "count must be a positive integer",
+      });
+    }
+
+    await reconcilePendingOrders(orderCount);
+    return res.json({
+      success: true,
+      message: orderCount === null
+        ? "All pending orders reconciliation completed."
+        : `Reconciliation completed for up to ${orderCount} pending orders.`,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 router.post("/callback", handlePaymentCallback);
 router.post("/rameePay/callback", handleRameeCallback);
@@ -412,6 +426,7 @@ router.post("/trustpay24/deposit", async (req, res) => {
       accountNo: String(account.accountNo),
       amount: numericAmount,
       provider: "TRUSTPAY24",
+      providerOrderId: merchantOrderId,
       status: "PENDING",
     });
 
@@ -475,6 +490,7 @@ router.post("/ramee/deposit", async (req, res) => {
       accountNo: account.accountNo, // backup string
       amount,
       provider: "RAMEE",
+      merchantOrderId: orderid,
       status: "PENDING", // default
     });
     await newOrder.save();

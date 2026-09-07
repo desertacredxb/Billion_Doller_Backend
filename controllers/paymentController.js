@@ -678,13 +678,10 @@ exports.handleRameeCallback = async (req, res) => {
 
     const accountno = order.accountNo;
 
-    // Update DB Order status
-    if (isSuccess) {
-      order.status = "SUCCESS";
-    } else if (isFailed) {
+    if (isFailed) {
       order.status = "FAILED";
+      await order.save();
     }
-    await order.save();
 
     if (isSuccess) {
       // Convert INR -> USD
@@ -709,6 +706,9 @@ exports.handleRameeCallback = async (req, res) => {
         if (!retCode.startsWith("0") && retCode !== "0 Done") {
           throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
         }
+
+        order.status = "SUCCESS";
+        await order.save();
 
         console.log(`✅ MT5 Balance Updated Successfully. Ticket: ${mt5Response.ticket}`);
 
@@ -836,13 +836,10 @@ exports.handleCryptoCallback = async (req, res) => {
 
     const accountno = order.accountNo;
 
-    // Update DB Order status
-    if (isSuccess) {
-      order.status = "SUCCESS";
-    } else if (isFailed) {
+    if (isFailed) {
       order.status = "FAILED";
+      await order.save();
     }
-    await order.save();
 
     if (isSuccess) {
       // Direct USD credit or rate conversion depending on your setup
@@ -869,6 +866,9 @@ exports.handleCryptoCallback = async (req, res) => {
         if (!retCode.startsWith("0") && retCode !== "0 Done") {
           throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
         }
+
+        order.status = "SUCCESS";
+        await order.save();
 
         console.log(`✅ MT5 Balance Updated Successfully. Ticket: ${mt5Response.ticket}`);
 
@@ -1437,8 +1437,6 @@ exports.handleTrustpay24Callback = async (req, res) => {
         });
       }
 
-      order.status = "SUCCESS";
-
       // If your Order schema has these fields, save them
       order.utrNumber = utr_number || null;
       order.transactionId = transaction_id || null;
@@ -1486,6 +1484,8 @@ exports.handleTrustpay24Callback = async (req, res) => {
           throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
         }
 
+        order.status = "SUCCESS";
+        await order.save();
         console.log(`Deposit successful! Ticket ID: ${mt5Response.ticket}`);
 
       } catch (error) {
