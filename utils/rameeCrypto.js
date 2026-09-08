@@ -33,11 +33,41 @@ function decryptData(encryptedText) {
   }
 }
 
-// Crypto methods using AES-256-CBC with CRYPTO keys
+// // Crypto methods using AES-256-CBC with CRYPTO keys
+// function encryptDataCrypto(data) {
+//   try {
+//     const text = typeof data === "string" ? data : JSON.stringify(data);
+//     const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(CRYPTO_KEY), Buffer.from(CRYPTO_IV));
+//     let encrypted = cipher.update(text, "utf8", "base64");
+//     encrypted += cipher.final("base64");
+//     return encrypted;
+//   } catch (err) {
+//     console.error("Crypto Encryption Error:", err.message);
+//     return false;
+//   }
+// }
+
+// function decryptDataCrypto(base64Data) {
+//   try {
+//     const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(CRYPTO_KEY), Buffer.from(CRYPTO_IV));
+//     let decrypted = decipher.update(base64Data, "base64", "utf8");
+//     decrypted += decipher.final("utf8");
+//     return JSON.parse(decrypted);
+//   } catch (err) {
+//     console.error("Crypto Decryption Error:", err.message);
+//     return false;
+//   }
+// }
+
+
 function encryptDataCrypto(data) {
   try {
     const text = typeof data === "string" ? data : JSON.stringify(data);
-    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(CRYPTO_KEY), Buffer.from(CRYPTO_IV));
+    const cipher = crypto.createCipheriv(
+      "aes-256-cbc",
+      Buffer.from(CRYPTO_KEY, "utf8"),
+      Buffer.from(CRYPTO_IV, "utf8")
+    );
     let encrypted = cipher.update(text, "utf8", "base64");
     encrypted += cipher.final("base64");
     return encrypted;
@@ -49,7 +79,11 @@ function encryptDataCrypto(data) {
 
 function decryptDataCrypto(base64Data) {
   try {
-    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(CRYPTO_KEY), Buffer.from(CRYPTO_IV));
+    const decipher = crypto.createDecipheriv(
+      "aes-256-cbc",
+      Buffer.from(CRYPTO_KEY, "utf8"),
+      Buffer.from(CRYPTO_IV, "utf8")
+    );
     let decrypted = decipher.update(base64Data, "base64", "utf8");
     decrypted += decipher.final("utf8");
     return JSON.parse(decrypted);
@@ -58,6 +92,7 @@ function decryptDataCrypto(base64Data) {
     return false;
   }
 }
+
 
 module.exports = {
   encryptData,

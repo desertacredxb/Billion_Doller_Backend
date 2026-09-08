@@ -614,7 +614,7 @@ router.post("/crypto/deposit", async (req, res) => {
     console.log("Encrypted Data:", encryptedData);
 
     const body = {
-      data: encryptedData,
+      reqData: encryptedData,
       agentCode: CRYPTO_AGENT_CODE,
     };
     console.log(body);
