@@ -664,11 +664,13 @@ router.post("/crypto/deposit", async (req, res) => {
     if (!accountNo || !amount) {
       return res
         .status(400)
-        .json({ success: false, message: "Missing required fields" });
+        .json({ success: false, message: "Missing fields" });
     }
 
+    // 1️⃣ Generate unique orderid
     const orderid = "OCP" + Date.now();
 
+    // 2️⃣ Find account (to save reference)
     const account = await Account.findOne({ accountNo });
     if (!account) {
       return res
@@ -676,88 +678,63 @@ router.post("/crypto/deposit", async (req, res) => {
         .json({ success: false, message: "Account not found" });
     }
 
-    // Save pending order to database
+    // 3️⃣ Save new order
     const newOrder = new Order({
       orderid,
-      account: account._id,
-      accountNo: account.accountNo,
+      account: account._id, // ✅ link to Account
+      accountNo: account.accountNo, // backup string
       amount,
-      provider: "CRYPTO",
-      status: "PENDING",
+      status: "PENDING", // default
     });
     await newOrder.save();
 
-    // ✅ Format payload per API doc specs: string orderid & formatted string amount
-    const orderData = { 
-      amount: Number(amount).toFixed(2), // e.g., "10.00"
-      orderid: String(orderid) 
-    };
+    // 4️⃣ Prepare payload for RameePay (only orderid & amount required)
+    const orderData = { orderid, amount };
 
-    console.log("Payload before encryption:", orderData);
-
-    // Encrypt JSON object string
+    // Encrypt payload
     const encryptedData = encryptDataCrypto(orderData);
-
-    if (!encryptedData) {
-      return res.status(500).json({
-        success: false,
-        message: "Encryption failed on backend server",
-      });
-    }
+    console.log("Encrypted Data:", encryptedData);
 
     const body = {
-      reqData: encryptedData,
-      agentCode: process.env.CRYPTO_AGENT_CODE?.trim(),
+      data: encryptedData,
+      agentCode: CRYPTO_AGENT_CODE,
     };
+    console.log(body);
 
-    console.log("Sending request to RameePay:", body);
-
-    // Send POST request to RameePay API endpoint
-    const { data } = await axios.post(
-      "https://crypto-apis.rameepay.io/v1/order", 
-      body, 
-      {
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-
-    console.log("RameePay API Raw Response:", data);
-
-    // Decrypt data if returned from RameePay
-    let decryptedResponse = null;
-    if (data && data.data) {
-      decryptedResponse = decryptDataCrypto(data.data);
-      console.log("Decrypted RameePay Response:", decryptedResponse);
-    }
-
-    // If RameePay returned error response directly
-    if (data.status === false || data.status === "false") {
-      return res.status(400).json({
-        success: false,
-        message: data.message || "RameePay gateway rejected the request",
-      });
-    }
-
-    if (decryptedResponse && decryptedResponse.url) {
-      return res.json({
-        success: true,
-        message: "Order created successfully",
-        url: decryptedResponse.url,
-        decrypted: decryptedResponse,
-      });
-    }
-
-    return res.status(400).json({
-      success: false,
-      message: "Failed to obtain payment gateway URL",
-      raw: data,
+    //  5️⃣ Send to RameePay
+    const { data } = await axios.post(RAMEEPAY_Crypto_API, body, {
+      headers: { "Content-Type": "application/json" },
     });
+    console.log(data);
 
+    // 6️⃣Decrypt response if exists
+    let decryptedResponse = {};
+    if (data.data) {
+      decryptedResponse = decryptDataCrypto(data.data);
+      console.log("✅ Decrypted Response:", decryptedResponse);
+    }
+
+    // 7️⃣ Return response to frontend
+    res.json({
+      success: true,
+      message: "Order created & sent to RameePay",
+      order: {
+        orderid: newOrder.orderid,
+        amount: newOrder.amount,
+        status: newOrder.status,
+        createdAt: newOrder.createdAt,
+        accountNo: newOrder.accountNo,
+        name: account.user?.fullName || "Unknown", // ✅ now included
+      },
+      raw: data,
+      decrypted: decryptedResponse,
+    });
   } catch (err) {
     console.error("❌ Deposit Error:", err.response?.data || err.message);
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
-      message: err.response?.data?.message || err.message || "Internal Server Error",
+      error: "ServerError",
+      message: err.message,
     });
   }
 });
