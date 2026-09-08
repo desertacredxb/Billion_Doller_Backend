@@ -33,7 +33,7 @@ function decryptData(encryptedText) {
   }
 }
 
-// // Crypto methods using AES-256-CBC with CRYPTO keys
+// Crypto methods using AES-256-CBC with CRYPTO keys
 // function encryptDataCrypto(data) {
 //   try {
 //     const text = typeof data === "string" ? data : JSON.stringify(data);
@@ -60,16 +60,23 @@ function decryptData(encryptedText) {
 // }
 
 
+const KEY_STRING = (process.env.CRYPTO_SECRET_KEY || "").trim();
+const IV_STRING = (process.env.CRYPTO_SECRET_IV || "").trim();
+
 function encryptDataCrypto(data) {
   try {
+    // 1. Convert payload to clean JSON string
     const text = typeof data === "string" ? data : JSON.stringify(data);
-    const cipher = crypto.createCipheriv(
-      "aes-256-cbc",
-      Buffer.from(CRYPTO_KEY, "utf8"),
-      Buffer.from(CRYPTO_IV, "utf8")
-    );
+
+    // 2. Create buffers with explicit UTF-8 encoding
+    const key = Buffer.from(KEY_STRING, "utf8");
+    const iv = Buffer.from(IV_STRING, "utf8");
+
+    // 3. Encrypt using aes-256-cbc
+    const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
     let encrypted = cipher.update(text, "utf8", "base64");
     encrypted += cipher.final("base64");
+
     return encrypted;
   } catch (err) {
     console.error("Crypto Encryption Error:", err.message);
@@ -79,20 +86,21 @@ function encryptDataCrypto(data) {
 
 function decryptDataCrypto(base64Data) {
   try {
-    const decipher = crypto.createDecipheriv(
-      "aes-256-cbc",
-      Buffer.from(CRYPTO_KEY, "utf8"),
-      Buffer.from(CRYPTO_IV, "utf8")
-    );
+    if (!base64Data || typeof base64Data !== "string") return false;
+
+    const key = Buffer.from(KEY_STRING, "utf8");
+    const iv = Buffer.from(IV_STRING, "utf8");
+
+    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
     let decrypted = decipher.update(base64Data, "base64", "utf8");
     decrypted += decipher.final("utf8");
+
     return JSON.parse(decrypted);
   } catch (err) {
     console.error("Crypto Decryption Error:", err.message);
     return false;
   }
 }
-
 
 module.exports = {
   encryptData,

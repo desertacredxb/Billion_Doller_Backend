@@ -80,7 +80,7 @@ async function checkRameeOrderStatus(orderid, provider) {
     const isCrypto = String(provider).toUpperCase() === "CRYPTO";
 
     const encryptedData = isCrypto
-      ? encryptDataCrypto({ order_id: orderid })
+      ? encryptDataCrypto({ orderid: orderid })
       : encryptData({ order_id: orderid });
 
     const payload = isCrypto
