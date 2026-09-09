@@ -8,6 +8,7 @@ const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const { encryptDataCrypto, encryptData, decryptDataCrypto, decryptData } = require("../utils/rameeCrypto");
+const { MIN_WITHDRAWAL_USD, MIN_WITHDRAWAL_INR } = require("../config/withdrawalLimits");
 
 const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
 const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
@@ -26,22 +27,47 @@ const fetchRate = async () => {
 
 /**
  * Generates Cregis MD5 Signature.
- * Formats keys alphabetically: key1=val1&key2=val2...&key=SECRET_KEY
- * Strips out 'sign' field before hashing.
+ * Matches the confirmed-working algorithm used for deposit checkout signing
+ * (paymentOrder.controller.js's generateCregisSignature) - Cregis signs the
+ * same way across their API, only the key/secret differs per project:
+ * 1. Filter out empty fields & 'sign'
+ * 2. Key-sort lexicographically
+ * 3. Concatenate key1value1key2value2... (no "=", no "&")
+ * 4. Prepend the secret key
+ * 5. MD5 hash (lowercase)
+ *
+ * The previous key=val&...&key=SECRET style caused Cregis to reject every
+ * payout with "B0001 Signature Error".
  */
 function generateCregisSignature(params, secretKey) {
-    const payloadCopy = { ...params };
-    delete payloadCopy.sign; // Never include the sign parameter in MD5 payload
+    const sortedKeys = Object.keys(params)
+        .filter((k) => k !== "sign" && params[k] !== undefined && params[k] !== null && params[k] !== "")
+        .sort();
 
-    const sortedKeys = Object.keys(payloadCopy).sort();
-    let str = "";
+    let stringToSign = "";
     for (const key of sortedKeys) {
-        if (payloadCopy[key] !== undefined && payloadCopy[key] !== null && payloadCopy[key] !== "") {
-            str += `${key}=${payloadCopy[key]}&`;
-        }
+        stringToSign += `${key}${params[key]}`;
     }
-    str += `key=${secretKey}`;
-    return crypto.createHash("md5").update(str).digest("hex");
+
+    const unsignedString = stringToSign;
+    stringToSign = secretKey + stringToSign;
+
+    const sign = crypto.createHash("md5").update(stringToSign).digest("hex").toLowerCase();
+
+    // Debug logging - secret key is redacted to just its length + first/last 2
+    // chars so we can confirm it's non-empty/plausible without leaking it.
+    const keyPreview = secretKey
+        ? `${secretKey.slice(0, 2)}...${secretKey.slice(-2)} (len ${secretKey.length})`
+        : "MISSING/EMPTY";
+    console.log("🔑 Cregis signature debug:", {
+        sortedKeys,
+        unsignedString,
+        apiKeyPreview: keyPreview,
+        signedStringLength: stringToSign.length,
+        sign,
+    });
+
+    return sign;
 }
 
 /**
@@ -116,6 +142,26 @@ exports.createPayoutRequest = async (req, res) => {
             return res
                 .status(400)
                 .json({ success: false, message: "Invalid withdrawal amount" });
+        }
+
+        // Minimum withdrawal amount (see config/withdrawalLimits.js). Only INR/USD
+        // have a defined minimum today - CRYPTO has none, matching what the
+        // frontend already enforces.
+        if (currency === "USD" && numericAmount < MIN_WITHDRAWAL_USD) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+                success: false,
+                message: `Minimum withdrawal amount is $${MIN_WITHDRAWAL_USD}.`,
+            });
+        }
+        if (currency === "INR" && numericAmount < MIN_WITHDRAWAL_INR) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+                success: false,
+                message: `Minimum withdrawal amount is ₹${MIN_WITHDRAWAL_INR}.`,
+            });
         }
 
         // 2️⃣ Dynamic Currency Method Validation
@@ -411,7 +457,10 @@ exports.approvePayoutReq = async (req, res) => {
                 });
             }
 
-            const nonce = Math.random().toString(36).substring(2, 8);
+            // Docs require exactly a 6-character nonce - Math.random().toString(36)
+            // can occasionally produce fewer chars, so pad/generate deterministically.
+            const nonceChars = "abcdefghijklmnopqrstuvwxyz0123456789";
+            const nonce = Array.from({ length: 6 }, () => nonceChars[Math.floor(Math.random() * nonceChars.length)]).join("");
             const timestamp = Date.now();
             const currencyId = getCregisCurrencyId(network, cryptoSymbol);
 
@@ -431,12 +480,19 @@ exports.approvePayoutReq = async (req, res) => {
             // Generate MD5 signature without modifying the original object
             cregisPayload.sign = generateCregisSignature(cregisPayload, process.env.CREGIS_WITHDRAWAL_API_KEY);
 
+            console.log("📤 Cregis payout request:", {
+                ...cregisPayload,
+                pidEnvRaw: process.env.CREGIS_WITHDRAWAL_PID,
+            });
+
             try {
                 const { data: cregisRes } = await axios.post(
                     "https://t-jcgfykxv.cregis.io/api/v1/payout",
                     cregisPayload,
                     { headers: { "Content-Type": "application/json" } }
                 );
+
+                console.log("📥 Cregis payout response:", cregisRes);
 
                 if (cregisRes.code === "00000") {
                     // "00000" only means Cregis ACCEPTED the payout request (assigned a
@@ -469,6 +525,12 @@ exports.approvePayoutReq = async (req, res) => {
                 }
             } catch (gatewayErr) {
                 const errorData = gatewayErr.response?.data || { message: gatewayErr.message };
+
+                console.error("📥 Cregis payout request threw:", {
+                    httpStatus: gatewayErr.response?.status,
+                    data: gatewayErr.response?.data,
+                    message: gatewayErr.message,
+                });
 
                 withdrawal.status = "Failed";
                 withdrawal.response = errorData;

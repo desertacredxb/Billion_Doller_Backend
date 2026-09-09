@@ -2,6 +2,7 @@ const { default: mongoose } = require("mongoose");
 const Withdrawal = require("../../models/withdrawal");
 const sendEmail = require("../../utils/sendEmail");
 const fetchRate = require("./fetchRate");
+const { MIN_WITHDRAWAL_INR } = require("../../config/withdrawalLimits");
 
 exports.handleManualPaymentRequest = async (req, res) => {
   const session = await mongoose.startSession();
@@ -37,6 +38,14 @@ exports.handleManualPaymentRequest = async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "Invalid withdrawal amount" });
+    }
+
+    // This manual flow is INR-only (bank transfer / UPI), see config/withdrawalLimits.js.
+    if (numericAmount < MIN_WITHDRAWAL_INR) {
+      return res.status(400).json({
+        success: false,
+        message: `Minimum withdrawal amount is ₹${MIN_WITHDRAWAL_INR}.`,
+      });
     }
 
     // 🔒 1️⃣ BLOCK MULTIPLE PENDING
