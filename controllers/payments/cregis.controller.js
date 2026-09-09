@@ -81,11 +81,25 @@ exports.handleCregisCallback = async (req, res) => {
       return handleCregisPayoutCallback(req, res);
     }
 
-    const { event_type, data } = req.body;
+    const { event_type } = req.body;
+    let { data } = req.body;
 
     if (!event_type || !data) {
       console.error("Invalid Cregis callback payload format");
       return res.status(200).send("success"); // Always return 200 to acknowledge webhook
+    }
+
+    // Cregis sends "data" as a JSON-encoded string, not a parsed object -
+    // destructuring fields straight off the string silently yields undefined
+    // for everything, which used to show up as "Missing order_id in Cregis
+    // callback" even though order_id was right there in the payload.
+    if (typeof data === "string") {
+      try {
+        data = JSON.parse(data);
+      } catch (parseErr) {
+        console.error("Failed to parse Cregis callback data string:", parseErr.message);
+        return res.status(200).send("success");
+      }
     }
 
     const {
