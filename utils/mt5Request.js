@@ -37,12 +37,12 @@ MT5Request.prototype.Get = function (path, callback) {
     var respBody = "";
     res.on('data', function (chunk) { respBody += chunk; });
     res.on('end', function () {
-      console.log("MT5 GET RAW RESPONSE:", {
-        path: path,
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: respBody,
-      });
+      // console.log("MT5 GET RAW RESPONSE:", {
+      //   path: path,
+      //   statusCode: res.statusCode,
+      //   headers: res.headers,
+      //   body: respBody,
+      // });
       callback(null, res, respBody);
     });
   });
@@ -71,12 +71,12 @@ MT5Request.prototype.Post = function (path, body, callback) {
     var respBody = "";
     res.on('data', function (chunk) { respBody += chunk; });
     res.on('end', function () {
-      console.log("MT5 POST RAW RESPONSE:", {
-        path: path,
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: respBody,
-      });
+      // console.log("MT5 POST RAW RESPONSE:", {
+      //   path: path,
+      //   statusCode: res.statusCode,
+      //   headers: res.headers,
+      //   body: respBody,
+      // });
       callback(null, res, respBody);
     });
   });
@@ -227,14 +227,14 @@ MT5Request.prototype.PostJSON = function (path, jsonBody, callback) {
     var respBody = "";
     res.on('data', function (chunk) { respBody += chunk; });
     res.on('end', function () {
-      console.log("MT5 POST(JSON) RAW RESPONSE:", {
-        // req: req,
-        path: path,
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: respBody,
-        data: JSON.stringify(jsonBody),
-      });
+      // console.log("MT5 POST(JSON) RAW RESPONSE:", {
+      //   // req: req,
+      //   path: path,
+      //   statusCode: res.statusCode,
+      //   headers: res.headers,
+      //   body: respBody,
+      //   data: JSON.stringify(jsonBody),
+      // });
       callback(null, res, respBody);
     });
   });

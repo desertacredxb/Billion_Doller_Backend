@@ -89,7 +89,7 @@ function runExclusive(fn) {
 
 exports.registerUserWithMT5 = async (req, res) => {
   const { email, curr, actype, Utype, Ref, Password } = req.body;
-  console.log(req.body)
+  // console.log(req.body)
   console.log("REGISTER HIT", new Date().toISOString(), email);
 
   try {
