@@ -108,22 +108,31 @@ exports.handleRameeCallback = async (req, res) => {
     const txn = decryptData(data);
     console.log("🔓 Decrypted Fiat Webhook:", txn);
 
-    const orderid = txn.merchantid || txn.orderid;
+    // RameePay's own docs are inconsistent about which field carries *our*
+    // order id (page 4 shows "merchantid"+"orderid" together, the webhook
+    // section and withdrawal-status responses spell it "ordered" instead of
+    // "orderid"). Rather than guess wrong and silently drop real callbacks,
+    // treat every field they've ever used as a candidate and match any of them.
+    const candidateOrderIds = [txn.orderid, txn.merchantid, txn.ordered]
+      .filter((v) => v !== undefined && v !== null && v !== "")
+      .map(String);
     const amount = txn.realAmount || txn.amount;
     const status = String(txn.status || "").toUpperCase();
     const isSuccess = status === "SUCCESS" || status === "COMPLETED";
     const isFailed = status === "FAILED" || status === "REJECTED";
 
-    if (!orderid) {
+    if (candidateOrderIds.length === 0) {
       return res
         .status(400)
         .json({ success: false, message: "Order ID missing in payload" });
     }
 
+    const orderid = candidateOrderIds[0];
+
     // =========================================================================
     // CHECK 1: WITHDRAWAL / PAYOUT PROCESSING
     // =========================================================================
-    const withdrawal = await Withdrawal.findOne({ orderid });
+    const withdrawal = await Withdrawal.findOne({ orderid: { $in: candidateOrderIds } });
 
     if (withdrawal) {
       if (["Completed", "Failed"].includes(withdrawal.status)) {
@@ -155,7 +164,7 @@ exports.handleRameeCallback = async (req, res) => {
     // =========================================================================
     // CHECK 2: DEPOSIT / PAYIN PROCESSING
     // =========================================================================
-    const order = await Order.findOne({ orderid });
+    const order = await Order.findOne({ orderid: { $in: candidateOrderIds } });
     if (!order) {
       console.error("❌ Order/Withdrawal not found in DB:", orderid);
       return res
@@ -168,6 +177,7 @@ exports.handleRameeCallback = async (req, res) => {
     }
 
     const accountno = order.accountNo;
+    let creditFailed = false;
 
     if (isFailed) {
       order.status = "FAILED";
@@ -236,11 +246,44 @@ exports.handleRameeCallback = async (req, res) => {
           });
         }
       } catch (err) {
-        console.error("❌ MT5 Error:", err.message);
+        // Do NOT silently swallow this: RameePay already collected the money,
+        // so if MT5 crediting fails the order must NOT be acknowledged as
+        // handled - otherwise RameePay never retries the webhook and the
+        // deposit just vanishes (order stuck PENDING forever, no visibility).
+        creditFailed = true;
+        console.error(`❌ MT5 Error crediting order ${orderid}:`, err.message);
+
+        try {
+          await sendEmail({
+            to: "support@billiondollarfx.com",
+            subject: `⚠️ RameePay deposit received but MT5 credit FAILED - ${orderid}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; color: #333;">
+                <h2 style="color: #c0392b;">RameePay Deposit Credit Failed</h2>
+                <p>RameePay confirmed payment for order <strong>${orderid}</strong>, but crediting the
+                trading account failed. The order remains <strong>PENDING</strong> and needs manual review.</p>
+                <ul>
+                  <li><strong>Order ID:</strong> ${orderid}</li>
+                  <li><strong>Trading Account:</strong> ${accountno}</li>
+                  <li><strong>Amount:</strong> ₹${amount}</li>
+                  <li><strong>Error:</strong> ${err.message}</li>
+                </ul>
+              </div>
+            `,
+          });
+        } catch (mailErr) {
+          console.error("❌ Failed to send MT5-credit-failure alert email:", mailErr.message);
+        }
       }
     }
 
-    return res.status(200).json({ success: true });
+    if (creditFailed) {
+      // Ack as "FAILED" per RameePay's documented webhook contract so their
+      // system treats this delivery as not-yet-processed and retries later.
+      return res.status(200).json({ success: false, status: "FAILED", message: "Credit failed, will retry" });
+    }
+
+    return res.status(200).json({ success: true, status: "SUCCESS" });
   } catch (error) {
     console.error("❌ Callback Error:", error);
     return res.status(500).json({ success: false, error: error.message });
