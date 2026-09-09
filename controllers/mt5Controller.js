@@ -287,7 +287,7 @@ exports.getMT5User = async (req, res) => {
     // Handle return format (answer container vs direct object)
     const userDetails = userData.answer || userData;
 
-    console.log("userDetails", userDetails)
+    // console.log("userDetails", userDetails)
 
     return res.status(200).json({
       success: true,

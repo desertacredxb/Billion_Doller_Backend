@@ -929,7 +929,7 @@ const RAMEEPAY_WITHDRAWAL_API = "https://apis.rameepay.io/withdrawal/account";
 //   }
 // });
 
-router.post("/request", withdrawalLimiter, checkMargin, createPayoutRequest);
+router.post("/request", withdrawalLimiter, createPayoutRequest);
 
 router.post("/request_v2", withdrawalLimiter, checkMargin, handleManualPaymentRequest);
 
@@ -1026,7 +1026,7 @@ router.post("/reject/:id", async (req, res) => {
 
 router.get("/withdrawals", async (req, res) => {
   try {
-    const withdrawals = await Withdrawal.find({ status: "Pending" }).sort({
+    const withdrawals = await Withdrawal.find().sort({
       createdAt: -1,
     });
     res.json({ success: true, data: withdrawals });

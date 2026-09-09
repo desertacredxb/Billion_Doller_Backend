@@ -1,3 +1,4 @@
+const Account = require("../../models/account.model");
 const MT5Request = require("../mt5Request");
 
 let mt5Lock = Promise.resolve();
@@ -32,4 +33,45 @@ async function updateMT5Balance({ login, type = 2, balance, comment }) {
   });
 }
 
-module.exports = { updateMT5Balance, runExclusive };
+async function refundToMoneyPlant(accountNo, amount, currency = "USD") {
+  const refundAmount = Math.abs(Number(amount));
+
+  if (!accountNo || isNaN(refundAmount) || refundAmount <= 0) {
+    throw new Error("Invalid parameters: Valid accountNo and positive refund amount are required.");
+  }
+
+  // 1. Verify the account exists in MongoDB
+  const account = await Account.findOne({ accountNo: String(accountNo) });
+  if (!account) {
+    throw new Error(`MoneyPlant Account '${accountNo}' not found.`);
+  }
+
+  const comment = `Refund credit (${currency}) - Auto System`;
+
+  // 2. Deposit the refund amount back into the MT5 Account via TradeBalance
+  const mt5Answer = await updateMT5Balance({
+    login: String(accountNo),
+    type: 2, // 2 = Balance adjustment/deposit in MT5 WebAPI
+    balance: refundAmount,
+    comment: comment,
+    
+  });
+
+  // 3. Increment the balance in MongoDB
+  const updatedAccount = await Account.findOneAndUpdate(
+    { accountNo: String(accountNo) },
+    { $inc: { balance: refundAmount } },
+    { new: true }
+  );
+
+  return {
+    success: true,
+    accountNo: String(accountNo),
+    refundedAmount: refundAmount,
+    currency,
+    mt5Ticket: mt5Answer?.ticket || mt5Answer?.answer || mt5Answer,
+    account: updatedAccount,
+  };
+}
+
+module.exports = { updateMT5Balance, runExclusive , refundToMoneyPlant};
