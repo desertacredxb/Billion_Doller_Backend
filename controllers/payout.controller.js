@@ -77,25 +77,41 @@ const getCregisCurrencyId = (network, cryptoSymbol) => {
     const net = (network || "").toUpperCase();
     const symbol = (cryptoSymbol || "USDT").toUpperCase();
 
+    // Cregis currency identifiers are "<chain_id>@<token_id>" (chain first,
+    // NOT token@chain as previously assumed - that reversed order plus
+    // treating "56"/"60"/"137" as chain ids is what caused Cregis to reject
+    // these as E0005 "Unsupported coin"). token_id is the chain's own id
+    // again for a native asset, or the token's real on-chain contract
+    // address for a stablecoin. Cregis also uses its own internal chain
+    // codes, not standard EVM chain ids - e.g. BSC is 2510 here, not 56.
+    // Source: https://developer.cregis.com/api-reference/currency-identifiers
     if (symbol === "USDT") {
         if (net.includes("BEP20") || net.includes("BSC") || net.includes("BNB")) {
-            return "195@56"; // USDT-BEP20
+            return "2510@0x55d398326f99059ff775485246999027b3197955"; // USDT-BEP20
         }
         if (net.includes("ERC20") || net.includes("ETH")) {
-            return "195@60"; // USDT-ERC20
+            return "60@0xdac17f958d2ee523a2206206994597c13d831ec7"; // USDT-ERC20
         }
         if (net.includes("POLYGON") || net.includes("MATIC")) {
-            return "195@137"; // USDT-Polygon
+            return "62@0xc2132d05d31c914a87c6611c10748aeb04b58e8f"; // USDT-Polygon
         }
-        return "195@195"; // USDT-TRC20 (Default)
+        if (net.includes("SOLANA") || net.includes("SOL")) {
+            return "1000@Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"; // USDT-Solana
+        }
+        return "195@TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"; // USDT-TRC20 (Default)
     }
 
-    // Native token fallbacks
-    if (net.includes("BEP20") || net.includes("BSC")) return "56";  // BNB
-    if (net.includes("TRC20") || net.includes("TRX")) return "195"; // TRX
-    if (net.includes("ERC20") || net.includes("ETH")) return "60";  // ETH
+    if (symbol === "BTC") return "0@0";
+    if (symbol === "ETH") return "60@60";
+    if (symbol === "SOL") return "1000@1000";
 
-    return "195@195";
+    // Native token fallbacks by network, for any other/unmapped symbol
+    if (net.includes("BEP20") || net.includes("BSC")) return "2510@2510"; // BNB
+    if (net.includes("TRC20") || net.includes("TRX")) return "195@195";  // TRX
+    if (net.includes("ERC20") || net.includes("ETH")) return "60@60";    // ETH
+    if (net.includes("POLYGON") || net.includes("MATIC")) return "62@62"; // POL
+
+    return "195@TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 };
 
 exports.createPayoutRequest = async (req, res) => {
