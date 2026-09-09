@@ -3,12 +3,83 @@ const Withdrawal = require("../../models/withdrawal");
 const Account = require("../../models/account.model");
 const sendEmail = require("../../utils/sendEmail");
 const { updateMT5Balance } = require("../../utils/MT5/mt5Balance");
-const { sendSuccessEmail, refundToMT5 } = require("../payout.controller");
+const { sendSuccessEmail } = require("../payout.controller");
+
+// Cregis WaaS payout (withdrawal) webhook - a completely different, flat shape
+// from the order/deposit webhook: no event_type/data wrapper, correlated via
+// third_party_id, with a numeric status code instead of a string.
+// https://developers.cregis.com/en/reference/waas-api/initiatePayout/ (request shape)
+// status: 2 = signature rejected, 4 = approval rejected, 6 = success, 7 = tx failed
+// (2/4/7 are all definitive failure states; anything else is treated as failure too).
+async function handleCregisPayoutCallback(req, res) {
+  try {
+    const { third_party_id, status, cid, txid } = req.body;
+
+    if (!third_party_id) {
+      console.error("Cregis payout callback: missing third_party_id");
+      return res.status(200).send("success");
+    }
+
+    const targetOrderId = String(third_party_id);
+    const withdrawal = await Withdrawal.findOne({ orderid: targetOrderId });
+
+    if (!withdrawal) {
+      console.error("Cregis payout callback: withdrawal not found:", targetOrderId);
+      return res.status(200).send("success");
+    }
+
+    if (["Completed", "Failed", "Rejected"].includes(withdrawal.status)) {
+      console.log("Cregis payout callback: withdrawal already finalized:", targetOrderId, withdrawal.status);
+      return res.status(200).send("success");
+    }
+
+    const statusCode = Number(status);
+
+    if (statusCode === 6) {
+      withdrawal.status = "Completed";
+      withdrawal.transactionReference = txid || withdrawal.transactionReference;
+      withdrawal.cregisCid = cid !== undefined ? String(cid) : withdrawal.cregisCid;
+      withdrawal.response = { ...withdrawal.response, payoutCallback: req.body };
+      await withdrawal.save();
+
+      await sendSuccessEmail(withdrawal);
+      console.log(`✅ Cregis Payout Confirmed On-Chain: ${targetOrderId}`);
+    } else {
+      // Cregis accepted the payout request earlier (code "00000" in the initial API
+      // response, status left as "Processing"), but the on-chain transaction has now
+      // definitively failed. Mark Failed only - do NOT auto-refund. The funds stay
+      // held (already deducted from MT5 at request time) so an admin can still
+      // manually transfer them instead. Only the explicit admin "Reject & Refund"
+      // action (rejectPayoutRequest) is allowed to move money back to MT5.
+      withdrawal.status = "Failed";
+      withdrawal.response = { ...withdrawal.response, payoutCallback: req.body };
+      await withdrawal.save();
+
+      console.log(`❌ Cregis Payout Failed (status ${statusCode}, awaiting admin action): ${targetOrderId}`);
+    }
+
+    return res.status(200).send("success");
+  } catch (error) {
+    console.error("Cregis payout callback error:", error.message);
+    return res.status(200).send("success");
+  }
+}
 
 exports.handleCregisCallback = async (req, res) => {
   try {
     console.log("========== CREGIS CALLBACK ==========");
     console.log(JSON.stringify(req.body, null, 2));
+
+    // Payout webhooks are flat (no event_type/data wrapper) and correlate via
+    // third_party_id with a numeric status - detect and hand off before the
+    // order/deposit-shaped validation below.
+    if (
+      req.body.event_type === undefined &&
+      req.body.third_party_id !== undefined &&
+      req.body.status !== undefined
+    ) {
+      return handleCregisPayoutCallback(req, res);
+    }
 
     const { event_type, data } = req.body;
 
@@ -35,46 +106,9 @@ exports.handleCregisCallback = async (req, res) => {
 
     const targetOrderId = String(order_id);
 
-    // =========================================================================
-    // CHECK 1: WITHDRAWALS / PAYOUTS
-    // =========================================================================
-    const withdrawal = await Withdrawal.findOne({ orderid: targetOrderId });
-
-    if (withdrawal) {
-      console.log("📌 Cregis Withdrawal Matched:", targetOrderId);
-
-      if (["Completed", "Failed"].includes(withdrawal.status)) {
-        console.log("Withdrawal already processed:", targetOrderId);
-        return res.status(200).send("success");
-      }
-
-      if (event_type === "paid" || event_type === "success") {
-        withdrawal.status = "Completed";
-        withdrawal.transactionReference = tx_id || withdrawal.transactionReference;
-        withdrawal.response = { ...withdrawal.response, callbackData: data, event_type };
-        await withdrawal.save();
-
-        await sendSuccessEmail(withdrawal);
-        console.log(`✅ Cregis Withdrawal Completed: ${targetOrderId}`);
-      } else if (["failed", "expired", "refunded", "cancelled"].includes(event_type)) {
-        withdrawal.status = "Failed";
-        withdrawal.response = { ...withdrawal.response, callbackData: data, event_type };
-        await withdrawal.save();
-
-        await refundToMT5(
-          withdrawal.accountNo,
-          withdrawal.amount,
-          withdrawal.currency
-        );
-        console.log(`❌ Cregis Withdrawal Failed & Refunded: ${targetOrderId}`);
-      }
-
-      return res.status(200).send("success");
-    }
-
-    // =========================================================================
-    // CHECK 2: DEPOSITS / PAYINS
-    // =========================================================================
+    // Withdrawal/payout webhooks never reach here (they're flat, no event_type/data,
+    // and are routed to handleCregisPayoutCallback above) - this shape is always a
+    // deposit/order callback.
     const order = await Order.findOne({ orderid: targetOrderId });
 
     if (!order) {

@@ -1,645 +1,4 @@
-// const axios = require("axios");
-// const express = require("express");
-// const router = express.Router();
-// const mongoose = require("mongoose");
-// const crypto = require('crypto');
-// require("dotenv").config();
-
-// const Withdrawal = require("../models/withdrawal");
-// const User = require("../models/User");
-// const sendEmail = require("../utils/sendEmail");
-// const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
-
-
-// const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
-// const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
-
-
-// fetchRate = async () => {
-//     try {
-//         const res = await axios.get(
-//             "https://api.frankfurter.app/latest?amount=1&from=INR&to=USD",
-//         );
-//         return res.data.rates.USD; // 1 INR = ? USD
-//     } catch (err) {
-//         console.error("Error fetching INR→USD rate:", err.message);
-//         return 0.012; // fallback rate if API fails
-//     }
-// }
-
-// exports.createPayoutRequest = async (req, res) => {
-//     const session = await mongoose.startSession();
-//     session.startTransaction();
-
-//     try {
-//         const {
-//             accountNo,
-//             currency = "INR",
-//             amount,
-//             note,
-//             // INR Fields
-//             account,
-//             ifsc,
-//             upiId,
-//             accountHolderName,
-//             // USD Fields
-//             bankName,
-//             swiftCode,
-//             // Crypto Fields
-//             cryptoSymbol,
-//             walletAddress,
-//             network,
-//             memo,
-//             // Common / Optional Metadata
-//             name,
-//             mobile,
-//         } = req.body;
-
-//         // 1️⃣ Basic Input Validation
-//         if (!accountNo || !amount) {
-//             await session.abortTransaction();
-//             session.endSession();
-//             return res
-//                 .status(400)
-//                 .json({ success: false, message: "Missing required fields: accountNo and amount" });
-//         }
-
-//         const numericAmount = parseFloat(amount);
-//         if (isNaN(numericAmount) || numericAmount <= 0) {
-//             await session.abortTransaction();
-//             session.endSession();
-//             return res
-//                 .status(400)
-//                 .json({ success: false, message: "Invalid withdrawal amount" });
-//         }
-
-//         // 2️⃣ Dynamic Currency Method Validation
-//         if (currency === "CRYPTO") {
-//             if (!walletAddress) {
-//                 await session.abortTransaction();
-//                 session.endSession();
-//                 return res
-//                     .status(400)
-//                     .json({ success: false, message: "Wallet Address is required for Crypto withdrawal." });
-//             }
-//         } else if (currency === "INR") {
-//             if (!upiId && (!account || !ifsc)) {
-//                 await session.abortTransaction();
-//                 session.endSession();
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Please provide either a UPI ID or Bank Account Number with IFSC code.",
-//                 });
-//             }
-//         } else if (currency === "USD") {
-//             if (!account || !bankName) {
-//                 await session.abortTransaction();
-//                 session.endSession();
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Account Number and Bank Name are required for USD wire transfer.",
-//                 });
-//             }
-//         }
-
-//         // 🔒 3️⃣ BLOCK MULTIPLE PENDING REQUESTS
-//         const existingPending = await Withdrawal.findOne(
-//             { accountNo, status: "Pending" },
-//             null,
-//             { session }
-//         );
-
-//         if (existingPending) {
-//             await session.abortTransaction();
-//             session.endSession();
-//             return res.status(400).json({
-//                 success: false,
-//                 message: "You already have a pending withdrawal request.",
-//             });
-//         }
-
-//         // ⏱️ 4️⃣ 5-MINUTE COOLDOWN CHECK
-//         const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
-//             session,
-//         }).sort({ createdAt: -1 });
-
-//         if (lastWithdrawal) {
-//             const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
-//             const fiveMinutes = 5 * 60 * 1000;
-
-//             if (diff < fiveMinutes) {
-//                 await session.abortTransaction();
-//                 session.endSession();
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "You can only request withdrawal once every 5 minutes.",
-//                 });
-//             }
-//         }
-
-//         // 📅 5️⃣ DAILY LIMIT CHECK (3 per day)
-//         const startOfDay = new Date();
-//         startOfDay.setHours(0, 0, 0, 0);
-
-//         const todayCount = await Withdrawal.countDocuments(
-//             {
-//                 accountNo,
-//                 createdAt: { $gte: startOfDay },
-//             },
-//             { session }
-//         );
-
-//         if (todayCount >= 3) {
-//             await session.abortTransaction();
-//             session.endSession();
-//             return res.status(400).json({
-//                 success: false,
-//                 message: "Daily withdrawal limit reached (3 per day).",
-//             });
-//         }
-
-//         const orderid = `WDR${Date.now()}`;
-
-//         // 🔹 Calculate USD Rate Deduction
-//         const usdRate = await fetchRate();
-//         let amountUSD;
-//         if (currency === 'INR') {
-//             amountUSD = Number((numericAmount * usdRate).toFixed(2));
-//         } else {
-//             amountUSD = Number(numericAmount.toFixed(2));
-//         }
-
-//         const negativeAmountUSD = -Math.abs(amountUSD);
-//         // 🔹 Lock balance by deducting from system backend / MoneyPlant
-
-
-//         const mt5Response = await updateMT5Balance({
-//             login: accountNo,
-//             type: 2, // Deposit type
-//             balance: negativeAmountUSD,
-//             comment: `${orderid}`.substring(0, 31),
-//         });
-
-//         console.log("💰 MT5 Response:", mt5Response);
-
-//         const retCode = String(mt5Response.retcode || "");
-
-//         if (!retCode.startsWith("0") && retCode !== "0 Done") {
-//             throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
-//         }
-
-//         console.log(
-//             "MT5 Response:",
-//             mt5Response.data
-//         );
-
-//         // 🔹 Save Withdrawal Record with Full Currency Context
-//         const withdrawalRecord = new Withdrawal({
-//             orderid,
-//             accountNo,
-//             currency,
-//             amount: numericAmount,
-//             amountUSD,
-//             note,
-//             status: "Pending",
-//             // INR Fields
-//             account: account || "",
-//             ifsc: ifsc || "",
-//             upiId: upiId || "",
-//             name: accountHolderName || name || "",
-//             mobile: mobile || "",
-//             // USD Fields
-//             bankName: bankName || "",
-//             swiftCode: swiftCode || "",
-//             // Crypto Fields
-//             cryptoSymbol: cryptoSymbol || "USDT",
-//             walletAddress: walletAddress || "",
-//             network: network || "TRC20",
-//             memo: memo || "",
-//         });
-
-//         await withdrawalRecord.save({ session });
-
-//         // Commit Transaction
-//         await session.commitTransaction();
-//         session.endSession();
-
-//         // ✉️ Dynamic Admin Email Notification Formatting
-//         let paymentDetailsHTML = "";
-//         if (currency === "CRYPTO") {
-//             paymentDetailsHTML = `
-//         <li><strong>Asset:</strong> ${cryptoSymbol} (${network})</li>
-//         <li><strong>Wallet Address:</strong> ${walletAddress}</li>
-//         ${memo ? `<li><strong>Memo/Tag:</strong> ${memo}</li>` : ""}
-//       `;
-//         } else if (currency === "INR") {
-//             paymentDetailsHTML = `
-//         <li><strong>Account Holder:</strong> ${accountHolderName || name || "N/A"}</li>
-//         ${upiId ? `<li><strong>UPI ID:</strong> ${upiId}</li>` : ""}
-//         ${account ? `<li><strong>Bank Account:</strong> ${account}</li>` : ""}
-//         ${ifsc ? `<li><strong>IFSC Code:</strong> ${ifsc}</li>` : ""}
-//       `;
-//         } else if (currency === "USD") {
-//             paymentDetailsHTML = `
-//         <li><strong>Bank Name:</strong> ${bankName}</li>
-//         <li><strong>Account / IBAN:</strong> ${account}</li>
-//         <li><strong>SWIFT / BIC:</strong> ${swiftCode || "N/A"}</li>
-//       `;
-//         }
-
-//         await sendEmail({
-//             to: "support@billiondollarfx.com",
-//             subject: `⚠️ New Withdrawal Request (${currency}) - Order #${orderid}`,
-//             html: `
-//         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
-//           <h2 style="color: #e74c3c;">New ${currency} Withdrawal Request</h2>
-//           <p>A user has requested a withdrawal. Please review and process it in the admin dashboard.</p>
-
-//           <p><strong>Request Overview:</strong></p>
-//           <ul>
-//             <li><strong>Order ID:</strong> ${orderid}</li>
-//             <li><strong>Source MT5 Account:</strong> ${accountNo}</li>
-//             <li><strong>Requested Amount:</strong> $${numericAmount} (≈ $${amountUSD})</li>
-//             <li><strong>Payment Method:</strong> ${currency}</li>
-//             <li><strong>Note:</strong> ${note || "N/A"}</li>
-//           </ul>
-
-//           <p><strong>Payout Details:</strong></p>
-//           <ul>
-//             ${paymentDetailsHTML}
-//           </ul>
-
-//           <br/>
-//           <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
-//         </div>
-//       `,
-//         });
-
-//         return res.json({
-//             success: true,
-//             message: "Withdrawal request submitted successfully",
-//             withdrawalRecord,
-//         });
-//     } catch (err) {
-//         await session.abortTransaction();
-//         session.endSession();
-//         console.log(err)
-//         console.error("❌ Error saving withdrawal request:", err.message);
-//         return res.status(500).json({ success: false, error: "Failed to save request" });
-//     }
-// }
-
-// function generateCregisSignature(params, secretKey) {
-//     const sortedKeys = Object.keys(params).sort();
-//     let str = "";
-//     for (const key of sortedKeys) {
-//         if (params[key] !== undefined && params[key] !== null && params[key] !== "") {
-//             str += `${key}=${params[key]}&`;
-//         }
-//     }
-//     str += `key=${secretKey}`;
-//     return crypto.createHash("md5").update(str).digest("hex");
-// }
-
-// const getCregisCurrencyId = (network, cryptoSymbol) => {
-//     const net = (network || "").toUpperCase();
-//     const symbol = (cryptoSymbol || "USDT").toUpperCase();
-
-//     if (symbol === "USDT") {
-//         if (net.includes("BEP20") || net.includes("BSC") || net.includes("BNB")) {
-//             return "195@56"; // USDT-BEP20
-//         }
-//         if (net.includes("ERC20") || net.includes("ETH")) {
-//             return "195@60"; // USDT-ERC20
-//         }
-//         if (net.includes("POLYGON") || net.includes("MATIC")) {
-//             return "195@137"; // USDT-Polygon
-//         }
-//         return "195@195"; // USDT-TRC20 (Default)
-//     }
-
-//     // Native token fallbacks
-//     if (net.includes("BEP20") || net.includes("BSC")) return "56";  // BNB
-//     if (net.includes("TRC20") || net.includes("TRX")) return "195"; // TRX
-//     if (net.includes("ERC20") || net.includes("ETH")) return "60";  // ETH
-
-//     return "195@195";
-// };
-
-// exports.approvePayoutReq = async (req, res) => {
-//     try {
-//         const { id } = req.params;
-//         const { processType, txId, adminNote } = req.body; // 'manual' | 'rameepay' | 'cregis'
-
-//         const withdrawal = await Withdrawal.findById(id);
-//         if (!withdrawal) {
-//             return res.status(404).json({ success: false, message: "Withdrawal request not found." });
-//         }
-
-//         // Only allow processing if the request is still pending
-//         if (withdrawal.status !== "Pending") {
-//             return res.status(400).json({
-//                 success: false,
-//                 message: `Request is already ${withdrawal.status}. Cannot re-process.`
-//             });
-//         }
-
-//         const {
-//             currency,
-//             account,
-//             ifsc,
-//             name,
-//             mobile,
-//             amount,
-//             note,
-//             orderid,
-//             accountNo,
-//             walletAddress,
-//             cryptoSymbol,
-//             memo,
-//         } = withdrawal;
-
-//         // Fallback execution type resolution
-//         const executionType =
-//             processType ||
-//             (withdrawal.isManual ? "manual" : currency === "CRYPTO" ? "cregis" : "rameepay");
-
-//         // =========================================================================
-//         // OPTION 1: MANUAL TRANSFER
-//         // =========================================================================
-//         if (executionType === "manual") {
-//             if (!txId) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Transaction ID / Reference Hash is required for manual processing."
-//                 });
-//             }
-
-//             withdrawal.status = "Completed";
-//             withdrawal.processType = "Manual";
-//             withdrawal.transactionReference = txId;
-//             withdrawal.response = {
-//                 message: "Manually processed by Admin",
-//                 adminNote: adminNote || "",
-//                 completedAt: new Date(),
-//             };
-
-//             await withdrawal.save();
-
-//             // Asynchronous success notification
-//             sendSuccessEmail(withdrawal).catch((e) =>
-//                 console.error("Payout Email Failed:", e.message)
-//             );
-
-//             return res.json({
-//                 success: true,
-//                 message: "Withdrawal marked as Completed (Manual Transfer)",
-//                 data: withdrawal,
-//             });
-//         }
-
-//         // =========================================================================
-//         // OPTION 2: CREGIS GATEWAY (Crypto)
-//         // =========================================================================
-//         if (executionType === "cregis") {
-//             if (!walletAddress) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Wallet address is missing for Cregis payout."
-//                 });
-//             }
-
-//             const nonce = Math.random().toString(36).substring(2, 8);
-//             const timestamp = Date.now();
-
-//             const currencyId = getCregisCurrencyId(withdrawal.network, withdrawal.cryptoSymbol);
-
-//             const cregisPayload = {
-//                 nonce,
-//                 timestamp,
-//                 pid: parseInt(process.env.CREGIS_WITHDRAWAL_PID, 10),
-//                 currency: currencyId || "195@195", // Default TRC20 USDT currency ID
-//                 address: walletAddress,
-//                 amount: String(amount),
-//                 third_party_id: String(orderid),
-//                 callback_url: `${process.env.APP_BASE_URL}/api/payment/cregis-callback`,
-//                 remark: note || "Crypto Withdrawal",
-//                 memo: memo || "",
-//             };
-
-//             // Generate signature
-//             cregisPayload.sign = generateCregisSignature(cregisPayload, process.env.CREGIS_WITHDRAWAL_API_KEY);
-
-//             const { data: cregisRes } = await axios.post(
-//                 "https://t-jcgfykxv.cregis.io/api/v1/payout",
-//                 cregisPayload,
-//                 { headers: { "Content-Type": "application/json" } }
-//             );
-
-//             if (cregisRes.code === "00000") {
-//                 withdrawal.status = "Completed";
-//                 withdrawal.processType = "Cregis API";
-//                 withdrawal.cregisCid = cregisRes.data?.cid;
-//                 withdrawal.response = cregisRes;
-//                 await withdrawal.save();
-
-//                 sendSuccessEmail(withdrawal).catch((e) =>
-//                     console.error("Payout Email Failed:", e.message)
-//                 );
-
-//                 return res.json({
-//                     success: true,
-//                     message: "Crypto payout initiated successfully via Cregis",
-//                     response: cregisRes,
-//                 });
-//             } else {
-//                 // Mark status as Failed without auto-refunding to MT5
-//                 withdrawal.status = "Failed";
-//                 withdrawal.response = cregisRes;
-//                 await withdrawal.save();
-
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: cregisRes.msg || "Cregis payout failed. You can process this payout manually.",
-//                     gatewayResponse: cregisRes,
-//                 });
-//             }
-//         }
-
-//         // =========================================================================
-//         // OPTION 3: RAMEEPAY GATEWAY (INR / Crypto)
-//         // =========================================================================
-//         if (executionType === "rameepay") {
-//             try {
-//                 let payload;
-
-//                 if (currency === "CRYPTO") {
-//                     payload = {
-//                         amount: Number(parseFloat(amount).toFixed(2)),
-//                         orderid: String(orderid),
-//                     };
-//                 } else {
-//                     payload = {
-//                         type: "FIAT",
-//                         account,
-//                         ifsc,
-//                         name,
-//                         mobile,
-//                         amount: Number(parseFloat(amount).toFixed(2)),
-//                         note: note || "INR Withdrawal payout",
-//                         orderid: String(orderid),
-//                     };
-//                 }
-
-//                 const endpoint = currency === "CRYPTO" ? RAMEEPAY_Crypto_API : RAMEEPAY_API;
-//                 const encryptedReqData = encryptData(payload);
-
-//                 const { data } = await axios.post(
-//                     endpoint,
-//                     {
-//                         reqData: encryptedReqData,
-//                         agentCode: process.env.RAMEEPAY_AGENT_CODE,
-//                     },
-//                     {
-//                         headers: { "Content-Type": "application/json" },
-//                         timeout: 15000,
-//                     }
-//                 );
-
-//                 const rawResponseData = data?.data || data?.reqData;
-//                 const responsePayload =
-//                     typeof rawResponseData === "string"
-//                         ? decryptData(rawResponseData)
-//                         : rawResponseData || {};
-
-//                 const isSuccess =
-//                     data?.status === "true" ||
-//                     data?.status === true ||
-//                     responsePayload?.status === "SUCCESS" ||
-//                     responsePayload?.success === true;
-
-//                 if (isSuccess) {
-//                     withdrawal.status = "Completed";
-//                     withdrawal.processType = `RameePay API (${currency})`;
-//                     withdrawal.response = responsePayload;
-//                     await withdrawal.save();
-
-//                     sendSuccessEmail(withdrawal).catch((e) =>
-//                         console.error("Payout Email Failed:", e.message)
-//                     );
-
-//                     return res.json({
-//                         success: true,
-//                         message: `Payout initiated via RameePay (${currency})`,
-//                         response: responsePayload,
-//                     });
-//                 }
-
-//                 throw new Error(
-//                     responsePayload?.message || responsePayload?.error || "RameePay payout failed at gateway."
-//                 );
-//             } catch (err) {
-//                 console.error("RameePay Payout Error:", err.response?.data || err.message);
-
-//                 // Mark as Failed without auto-refunding to MT5
-//                 withdrawal.status = "Failed";
-//                 withdrawal.response = err.response?.data || { error: err.message };
-//                 await withdrawal.save();
-
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: err.message || "RameePay payout failed. You can process this payout manually.",
-//                 });
-//             }
-//         }
-
-//         return res.status(400).json({ success: false, message: "Invalid processing type specified." });
-//     } catch (err) {
-//         console.error("Payout Processing Error:", err);
-//         res.status(500).json({
-//             success: false,
-//             message: err.message || "Failed to process withdrawal payout.",
-//         });
-//     }
-// };
-
-// // =============================================================================
-// // HELPER FUNCTIONS
-// // =============================================================================
-// exports.refundToMT5 = async (accountNo, amount, currency) => {
-//     try {
-//         const usdRate = await fetchRate();
-//         const parsedAmount = parseFloat(amount);
-
-//         if (isNaN(parsedAmount) || parsedAmount <= 0) {
-//             throw new Error(`Invalid refund amount provided: ${amount}`);
-//         }
-
-//         // Convert INR to USD if needed, otherwise format to 2 decimal places
-//         const amountUSD = currency === "INR"
-//             ? (parsedAmount / usdRate).toFixed(2)
-//             : parsedAmount.toFixed(2);
-
-//         const refundOrderId = `RF${Date.now()}`;
-//         const formattedComment = `REF-${refundOrderId}`.substring(0, 31);
-
-//         console.log(`🔄 Refunding MT5 Account ${accountNo}: $${amountUSD} USD (Comment: ${formattedComment})`);
-
-//         const mt5Response = await updateMT5Balance({
-//             login: accountNo,
-//             type: 2, // Deposit/Balance Operation
-//             balance: amountUSD,
-//             comment: formattedComment,
-//         });
-
-//         console.log("💰 MT5 Refund Response:", mt5Response);
-
-//         // Validate retcode directly from the return object
-//         const retCode = String(mt5Response.retcode || "");
-
-//         if (!retCode.startsWith("0") && retCode !== "0 Done") {
-//             throw new Error(`MT5 Refund Failed for account ${accountNo}: ${mt5Response.retcode}`);
-//         }
-
-//         return mt5Response;
-//     } catch (error) {
-//         console.error("❌ refundToMT5 Error:", error.message);
-//         throw error; // Re-throw so caller webhooks log or handle the failure
-//     }
-// };
-
-// exports.sendSuccessEmail = async (withdrawal) => {
-//     const user = await User.findOne({
-//         $or: [{ phone: withdrawal.mobile }, { accountNo: withdrawal.accountNo }]
-//     });
-
-//     if (user && user.email) {
-//         const formattedAmount =
-//             withdrawal.currency === "CRYPTO"
-//                 ? `${withdrawal.amount} ${withdrawal.cryptoSymbol || "USDT"}`
-//                 : withdrawal.currency === "INR"
-//                     ? `₹${withdrawal.amount}`
-//                     : `$${withdrawal.amount}`;
-
-//         await sendEmail({
-//             to: user.email,
-//             subject: "Withdrawal Request Processed",
-//             html: `
-//         <p>Hi ${user.fullName || "Valued Customer"},</p>
-//         <p>Your withdrawal request of <strong>${formattedAmount}</strong> (Order ID: ${withdrawal.orderid}) has been successfully processed.</p>
-//         ${withdrawal.transactionReference ? `<p><strong>Reference/TxID:</strong> ${withdrawal.transactionReference}</p>` : ''}
-//         <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/Your_Withdrawal_Processed_p4rluh.jpg" 
-//              alt="Withdrawal Processed" 
-//              style="width:600px; max-width:100%; height:auto; display:block; margin-top:20px;" />
-//         <p>Thank you for trading with us!</p>
-//       `,
-//         });
-//     }
-// }
-
 const axios = require("axios");
-const express = require("express");
-const router = express.Router();
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 require("dotenv").config();
@@ -1045,10 +404,10 @@ exports.approvePayoutReq = async (req, res) => {
                 });
             }
             if (!process.env.CREGIS_WITHDRAWAL_API_KEY || !process.env.CREGIS_WITHDRAWAL_PID) {
-                console.error("Cregis deposit: CREGIS credentials are not configured");
+                console.error("Cregis payout: CREGIS withdrawal credentials are not configured");
                 return res.status(503).json({
                     success: false,
-                    message: "We’re unable to process your deposit right now. Please try again in a few moments.",
+                    message: "We’re unable to process your withdrawal right now. Please try again in a few moments.",
                 });
             }
 
@@ -1080,19 +439,21 @@ exports.approvePayoutReq = async (req, res) => {
                 );
 
                 if (cregisRes.code === "00000") {
-                    withdrawal.status = "Completed";
+                    // "00000" only means Cregis ACCEPTED the payout request (assigned a
+                    // cid) - it does not mean the on-chain transaction has succeeded yet.
+                    // The real outcome (status 6 = success, 2/4/7 = failure) arrives later
+                    // via the Cregis payout webhook (handleCregisCallback's payout branch
+                    // in controllers/payments/cregis.controller.js), which is what actually
+                    // flips this to Completed (+ email) or Failed (+ auto refund).
+                    withdrawal.status = "Processing";
                     withdrawal.processType = "Cregis API";
                     withdrawal.cregisCid = cregisRes.data?.cid;
                     withdrawal.response = cregisRes;
                     await withdrawal.save();
 
-                    exports.sendSuccessEmail(withdrawal).catch((e) =>
-                        console.error("Payout Email Failed:", e.message)
-                    );
-
                     return res.json({
                         success: true,
-                        message: "Crypto payout initiated successfully via Cregis",
+                        message: "Crypto payout submitted to Cregis and is awaiting on-chain confirmation.",
                         response: cregisRes,
                     });
                 } else {
@@ -1243,8 +604,12 @@ exports.refundToMT5 = async (accountNo, amount, currency) => {
             throw new Error(`Invalid refund amount provided: ${amount}`);
         }
 
+        // fetchRate() returns "1 INR = X USD" (X ~ 0.012) - converting INR to USD
+        // means multiplying by that rate, same as createPayoutRequest does when it
+        // first computes amountUSD. (Dividing here previously inflated INR refunds
+        // by ~1/rate, e.g. ~83x.)
         const amountUSD = currency === "INR"
-            ? (parsedAmount / usdRate).toFixed(2)
+            ? (parsedAmount * usdRate).toFixed(2)
             : parsedAmount.toFixed(2);
 
         const refundOrderId = `RF${Date.now()}`;
@@ -1309,39 +674,47 @@ exports.rejectPayoutRequest = async (req, res) => {
                 .json({ success: false, message: "Withdrawal not found" });
         }
 
-        if (withdrawal.status !== "Pending") {
+        // Allow rejecting from "Failed" too - a Failed withdrawal means the
+        // gateway (Cregis/RameePay) couldn't complete the payout, but the funds
+        // are still held (deducted from MT5 at request time). This is how an
+        // admin gives the customer their money back instead of retrying/manually
+        // transferring when the payout portal isn't working.
+        if (withdrawal.status !== "Pending" && withdrawal.status !== "Failed") {
             return res
                 .status(400)
-                .json({ success: false, message: "Withdrawal already processed" });
+                .json({ success: false, message: `Withdrawal is already ${withdrawal.status}. Cannot reject.` });
         }
 
-        // Refund via MoneyPlant
-        const usdRate = await fetchRate();
-        const amountUSD = withdrawal.amount;
+        // Refund the amount that was actually deducted from MT5 when the request
+        // was created (amountUSD, already USD - fall back to converting `amount`
+        // for any older record saved before that field existed).
+        const amountUSD = withdrawal.amountUSD
+            ? Number(withdrawal.amountUSD)
+            : withdrawal.currency === "INR"
+                ? Number((Number(withdrawal.amount) * (await fetchRate())).toFixed(2))
+                : Number(withdrawal.amount);
 
         const refundOrderId = `RF${Date.now()}`;
 
         console.log(withdrawal.accountNo, amountUSD, refundOrderId);
 
+        // Positive balance - this reverses the negative deduction made at
+        // request time (createPayoutRequest), refunding the held funds back.
         const mt5Response = await updateMT5Balance({
             login: withdrawal.accountNo,
             type: 2,
-            balance: -amountUSD,
-            comment: `refundOrderId`.substring(0, 32),
+            balance: Math.abs(amountUSD).toFixed(2),
+            comment: `REF-${refundOrderId}`.substring(0, 31),
         });
 
-        console.log("MT5 Response:", mt5Response.data);
+        console.log("MT5 Response:", mt5Response);
 
         // --------------------------------------------
         // Validate MT5 response
         // --------------------------------------------
-        if (
-            mt5Response.data.retcode !== "0 Done" &&
-            mt5Response.data.retcode !== 0
-        ) {
-            throw new Error(
-                `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-            );
+        const retCode = String(mt5Response.retcode || "");
+        if (!retCode.startsWith("0") && retCode !== "0 Done") {
+            throw new Error(`MT5 Refund Failed: ${mt5Response.retcode}`);
         }
 
         withdrawal.status = "Rejected";
@@ -1375,7 +748,7 @@ exports.rejectPayoutRequest = async (req, res) => {
         );
         res.status(500).json({
             success: false,
-            error:
+            message:
                 err.response?.data?.message ||
                 err.message ||
                 "Failed to reject withdrawal",

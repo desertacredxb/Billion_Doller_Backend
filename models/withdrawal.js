@@ -14,7 +14,15 @@ const withdrawalSchema = new mongoose.Schema(
     },
 
     amount: { type: Number, required: true },
-    
+    // USD-equivalent of `amount` at request time (used to deduct/refund MT5 in a
+    // consistent currency regardless of what `amount`/`currency` the payer chose).
+    amountUSD: { type: Number, default: 0 },
+
+
+    // 🔹 Contact / Requester Metadata
+    name: { type: String, default: "" },
+    mobile: { type: String, default: "" },
+
     // 🔹 INR Payout Fields (Bank / UPI)
     account: { type: String, default: null }, // Bank Account Number
     ifsc: { type: String, default: null },
@@ -37,7 +45,19 @@ const withdrawalSchema = new mongoose.Schema(
       enum: ["Pending", "Processing", "Completed", "Failed", "Rejected"],
       default: "Pending",
     },
-    
+    // True for requests submitted with manually-entered bank details
+    // (handleManualPaymentRequest), used by approvePayoutReq to pick the
+    // manual-processing path instead of a gateway API call.
+    isManual: { type: Boolean, default: false },
+    // How a completed/failed payout was actually executed: "Manual",
+    // "Cregis API", or "RameePay API (<currency>)".
+    processType: { type: String, default: "" },
+    // Bank/blockchain reference for a completed payout (admin-entered txId for
+    // manual transfers, or the tx hash/reference reported by the gateway).
+    transactionReference: { type: String, default: "" },
+    // Cregis's own payout id (cid), stored for support/reconciliation lookups.
+    cregisCid: { type: String, default: "" },
+
     gatewayOrderId: { type: String, default: null }, // Stores Cregis tx_id
     response: { type: Object, default: {} },          // Stores API/Webhook responses
   },

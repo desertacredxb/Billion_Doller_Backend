@@ -5,7 +5,7 @@ const Withdrawal = require("../../models/withdrawal");
 const Account = require("../../models/account.model");
 const sendEmail = require("../../utils/sendEmail");
 const { updateMT5Balance } = require("../../utils/MT5/mt5Balance");
-const { sendSuccessEmail, refundToMT5 } = require("../payout.controller");
+const { sendSuccessEmail } = require("../payout.controller");
 const fetchRate = require("./fetchRate");
 
 const CRYPTO_AGENT_CODE = process.env.CRYPTO_AGENT_CODE;
@@ -140,17 +140,15 @@ exports.handleCryptoCallback = async (req, res) => {
         await sendSuccessEmail(withdrawal);
         console.log(`✅ Crypto Withdrawal Completed: ${orderid}`);
       } else if (isFailed) {
+        // Mark Failed only - do NOT auto-refund. The funds stay held (already
+        // deducted from MT5 at request time) so an admin can still manually
+        // transfer them instead. Only the explicit admin "Reject & Refund"
+        // action (rejectPayoutRequest) is allowed to move money back to MT5.
         withdrawal.status = "Failed";
         withdrawal.response = { ...withdrawal.response, callbackData: txn };
         await withdrawal.save();
 
-        // Refund user balance on MT5
-        await refundToMT5(
-          withdrawal.accountNo,
-          withdrawal.amount,
-          withdrawal.currency
-        );
-        console.log(`❌ Crypto Withdrawal Failed & Refunded: ${orderid}`);
+        console.log(`❌ Crypto Withdrawal Failed (awaiting admin action): ${orderid}`);
       }
 
       return res.status(200).json({ success: true, message: "Crypto withdrawal callback handled" });
