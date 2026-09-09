@@ -5,6 +5,7 @@ require("dotenv").config();
 
 const Withdrawal = require("../models/withdrawal");
 const User = require("../models/User");
+const Account = require("../models/account.model");
 const sendEmail = require("../utils/sendEmail");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const { encryptDataCrypto, encryptData, decryptDataCrypto, decryptData } = require("../utils/rameeCrypto");
@@ -276,6 +277,19 @@ exports.createPayoutRequest = async (req, res) => {
 
         const orderid = `WDR${Date.now()}`;
 
+        // RameePay's Withdrawal Account API requires a non-empty customer
+        // mobile (and rejects the request otherwise: '"Customer Mobile" is
+        // not allowed to be empty'), but the withdrawal form doesn't collect
+        // one. Fall back to the phone number already on file for this
+        // account's user instead of forcing a new required field.
+        let resolvedMobile = mobile;
+        let resolvedName = accountHolderName || name;
+        if (!resolvedMobile || !resolvedName) {
+            const ownerAccount = await Account.findOne({ accountNo }, null, { session }).populate("user");
+            resolvedMobile = resolvedMobile || ownerAccount?.user?.phone || "";
+            resolvedName = resolvedName || ownerAccount?.user?.fullName || "";
+        }
+
         // Calculate USD Rate Deduction
         const usdRate = await fetchRate();
         let amountUSD;
@@ -312,8 +326,8 @@ exports.createPayoutRequest = async (req, res) => {
             account: account || "",
             ifsc: ifsc || "",
             upiId: upiId || "",
-            name: accountHolderName || name || "",
-            mobile: mobile || "",
+            name: resolvedName,
+            mobile: resolvedMobile,
             bankName: bankName || "",
             swiftCode: swiftCode || "",
             cryptoSymbol: cryptoSymbol || "USDT",
