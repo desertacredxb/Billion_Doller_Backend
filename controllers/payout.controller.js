@@ -219,20 +219,20 @@ exports.createPayoutRequest = async (req, res) => {
         }
 
         // 3️⃣ BLOCK MULTIPLE PENDING REQUESTS
-        const existingPending = await Withdrawal.findOne(
-            { accountNo, status: "Pending" },
-            null,
-            { session }
-        );
+        // const existingPending = await Withdrawal.findOne(
+        //     { accountNo, status: "Pending" },
+        //     null,
+        //     { session }
+        // );
 
-        if (existingPending) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({
-                success: false,
-                message: "You already have a pending withdrawal request.",
-            });
-        }
+        // if (existingPending) {
+        //     await session.abortTransaction();
+        //     session.endSession();
+        //     return res.status(400).json({
+        //         success: false,
+        //         message: "You already have a pending withdrawal request.",
+        //     });
+        // }
 
         // 4️⃣ COOLDOWN CHECK
         const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
