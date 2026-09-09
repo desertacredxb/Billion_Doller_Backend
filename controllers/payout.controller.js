@@ -14,6 +14,8 @@ const {
     MIN_WITHDRAWAL_INR,
     WITHDRAWAL_COOLDOWN_MINUTES,
     MAX_WITHDRAWALS_PER_DAY,
+    RAMEEPAY_MIN_INR,
+    RAMEEPAY_MAX_INR,
 } = require("../config/withdrawalLimits");
 
 // "/order/generate" is the DEPOSIT (payin) endpoint - payouts must go to the
@@ -619,6 +621,18 @@ exports.approvePayoutReq = async (req, res) => {
                 return res.status(400).json({
                     success: false,
                     message: "This is a UPI withdrawal - RameePay's API doesn't support UPI payouts. Please process it manually.",
+                });
+            }
+
+            // RameePay's own gateway limit ("Transaction amount must be
+            // between 100 and 100000") - independent of our configurable
+            // MIN_WITHDRAWAL_INR, which can be set lower for testing but
+            // won't make the gateway accept a smaller amount.
+            const payoutAmount = Number(amount);
+            if (currency === "INR" && (payoutAmount < RAMEEPAY_MIN_INR || payoutAmount > RAMEEPAY_MAX_INR)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `RameePay only accepts INR withdrawals between ₹${RAMEEPAY_MIN_INR} and ₹${RAMEEPAY_MAX_INR}. This amount is outside that range - process it manually instead.`,
                 });
             }
 

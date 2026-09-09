@@ -8,4 +8,11 @@ module.exports = {
   WITHDRAWAL_COOLDOWN_MINUTES: 1,
   // Maximum number of withdrawal requests a single account can submit per day.
   MAX_WITHDRAWALS_PER_DAY: 15,
+
+  // RameePay's own hard limits on its Withdrawal Account (INR) API -
+  // "Transaction amount must be between 100 and 100000." This is enforced by
+  // RameePay itself, NOT something we control - lowering MIN_WITHDRAWAL_INR
+  // below this for testing will still get rejected at the gateway.
+  RAMEEPAY_MIN_INR: 100,
+  RAMEEPAY_MAX_INR: 100000,
 };
