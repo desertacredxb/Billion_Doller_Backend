@@ -662,7 +662,11 @@ exports.approvePayoutReq = async (req, res) => {
                         name: payoutName,
                         mobile: payoutMobile,
                         amount: Number(parseFloat(amount).toFixed(2)),
-                        note: note || "INR Withdrawal payout",
+                        // RameePay caps "note" at 20 characters (both the
+                        // user-supplied note and our own fallback text must
+                        // fit - "INR Withdrawal payout" was 22 chars and got
+                        // rejected outright).
+                        note: (note || "INR Withdrawal").slice(0, 20),
                         orderid: String(orderid),
                     };
                 }
