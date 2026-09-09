@@ -600,6 +600,19 @@ exports.approvePayoutReq = async (req, res) => {
                 });
             }
 
+            // RameePay rejects the request outright if "name"/"mobile" are
+            // empty. createPayoutRequest now fills these in from the
+            // account's user record for NEW requests, but records created
+            // before that fix (or otherwise saved without them) would keep
+            // failing identically on every retry - so re-resolve here too.
+            let payoutMobile = mobile;
+            let payoutName = name;
+            if (currency !== "CRYPTO" && (!payoutMobile || !payoutName)) {
+                const ownerAccount = await Account.findOne({ accountNo }).populate("user");
+                payoutMobile = payoutMobile || ownerAccount?.user?.phone || "";
+                payoutName = payoutName || ownerAccount?.user?.fullName || "";
+            }
+
             try {
                 let payload;
 
@@ -616,8 +629,8 @@ exports.approvePayoutReq = async (req, res) => {
                     payload = {
                         account,
                         ifsc,
-                        name,
-                        mobile,
+                        name: payoutName,
+                        mobile: payoutMobile,
                         amount: Number(parseFloat(amount).toFixed(2)),
                         note: note || "INR Withdrawal payout",
                         orderid: String(orderid),
