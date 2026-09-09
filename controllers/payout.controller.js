@@ -1298,3 +1298,87 @@ exports.sendSuccessEmail = async (withdrawal) => {
         });
     }
 };
+
+// Reject withdrawal request (Admin action)
+exports.rejectPayoutRequest = async (req, res) => {
+    try {
+        const withdrawal = await Withdrawal.findById(req.params.id);
+        if (!withdrawal) {
+            return res
+                .status(404)
+                .json({ success: false, message: "Withdrawal not found" });
+        }
+
+        if (withdrawal.status !== "Pending") {
+            return res
+                .status(400)
+                .json({ success: false, message: "Withdrawal already processed" });
+        }
+
+        // Refund via MoneyPlant
+        const usdRate = await fetchRate();
+        const amountUSD = withdrawal.amount;
+
+        const refundOrderId = `RF${Date.now()}`;
+
+        console.log(withdrawal.accountNo, amountUSD, refundOrderId);
+
+        const mt5Response = await updateMT5Balance({
+            login: withdrawal.accountNo,
+            type: 2,
+            balance: -amountUSD,
+            comment: `refundOrderId`.substring(0, 32),
+        });
+
+        console.log("MT5 Response:", mt5Response.data);
+
+        // --------------------------------------------
+        // Validate MT5 response
+        // --------------------------------------------
+        if (
+            mt5Response.data.retcode !== "0 Done" &&
+            mt5Response.data.retcode !== 0
+        ) {
+            throw new Error(
+                `MT5 Deposit Failed: ${mt5Response.data.retcode}`
+            );
+        }
+
+        withdrawal.status = "Rejected";
+        withdrawal.response = { message: "Rejected by admin" };
+        await withdrawal.save();
+
+        // Notify user
+        const user = await User.findOne({ phone: withdrawal.mobile });
+        if (user) {
+            await sendEmail({
+                to: user.email,
+                subject: "Withdrawal Request Rejected",
+                html: `
+          <p>Dear ${user.fullName || "Customer"},</p>
+          <p>Your withdrawal request (Order ID: <b>${withdrawal.orderid
+                    }</b>) has been <b>rejected</b> by the admin.</p>
+          <p>Amount Requested: ₹${withdrawal.amount}</p>
+          <p>The amount has been refunded to your account.</p>
+          <br/>
+          <p>Best Regards,<br/>Support Team</p>
+        `,
+            });
+        }
+
+        res.json({ success: true, message: "Withdrawal rejected & refunded" });
+    } catch (err) {
+        console.error(
+            "❌ Reject withdrawal error:",
+            err.message,
+            err.response?.data,
+        );
+        res.status(500).json({
+            success: false,
+            error:
+                err.response?.data?.message ||
+                err.message ||
+                "Failed to reject withdrawal",
+        });
+    }
+};
