@@ -81,6 +81,16 @@ function generateCregisSignature(params, secretKey) {
 }
 
 /**
+ * RameePay requires a bare 10-digit Indian mobile number ("Mobile number
+ * must have 10 digits."). Numbers on file may include a "+91"/"91" country
+ * code, spaces, or dashes, so strip all non-digits and keep the last 10.
+ */
+function toRameeMobile(rawMobile) {
+    const digitsOnly = String(rawMobile || "").replace(/\D/g, "");
+    return digitsOnly.slice(-10);
+}
+
+/**
  * Maps Network and Token Symbol to official Cregis Currency Codes
  */
 const getCregisCurrencyId = (network, cryptoSymbol) => {
@@ -288,6 +298,18 @@ exports.createPayoutRequest = async (req, res) => {
             const ownerAccount = await Account.findOne({ accountNo }, null, { session }).populate("user");
             resolvedMobile = resolvedMobile || ownerAccount?.user?.phone || "";
             resolvedName = resolvedName || ownerAccount?.user?.fullName || "";
+        }
+        resolvedMobile = toRameeMobile(resolvedMobile);
+
+        // Fail fast, before any MT5 balance is held, if RameePay would reject
+        // this later - it requires an exact 10-digit mobile number.
+        if (currency === "INR" && resolvedMobile.length !== 10) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+                success: false,
+                message: "A valid 10-digit mobile number is required for INR withdrawals.",
+            });
         }
 
         // Calculate USD Rate Deduction
@@ -611,6 +633,14 @@ exports.approvePayoutReq = async (req, res) => {
                 const ownerAccount = await Account.findOne({ accountNo }).populate("user");
                 payoutMobile = payoutMobile || ownerAccount?.user?.phone || "";
                 payoutName = payoutName || ownerAccount?.user?.fullName || "";
+            }
+            payoutMobile = toRameeMobile(payoutMobile);
+
+            if (currency !== "CRYPTO" && payoutMobile.length !== 10) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Withdrawal has an invalid mobile number ("${mobile || ""}") - it must resolve to exactly 10 digits for RameePay. Please correct it and retry.`,
+                });
             }
 
             try {
