@@ -10,7 +10,11 @@ const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const { encryptDataCrypto, encryptData, decryptDataCrypto, decryptData } = require("../utils/rameeCrypto");
 const { MIN_WITHDRAWAL_USD, MIN_WITHDRAWAL_INR } = require("../config/withdrawalLimits");
 
-const RAMEEPAY_API = "https://apis.rameepay.io/order/generate";
+// "/order/generate" is the DEPOSIT (payin) endpoint - payouts must go to the
+// dedicated Withdrawal Account API instead (see RameePay Integration Docs,
+// "Withdrawal Account (India Only) API"). Reusing the deposit endpoint here
+// was the reason RameePay INR payouts never actually paid out.
+const RAMEEPAY_WITHDRAWAL_API = "https://apis.rameepay.io/withdrawal/account";
 const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
 
 const fetchRate = async () => {
@@ -414,6 +418,7 @@ exports.approvePayoutReq = async (req, res) => {
             cryptoSymbol,
             network,
             memo,
+            upiId,
         } = withdrawal;
 
         // Standardize string comparison to lowercase
@@ -564,6 +569,18 @@ exports.approvePayoutReq = async (req, res) => {
         // OPTION 3: RAMEEPAY GATEWAY (INR / Crypto)
         // =========================================================================
         if (executionType === "rameepay") {
+            // RameePay's documented Withdrawal Account API only takes a bank
+            // account + IFSC (see RameePay Integration Docs) - there is no
+            // UPI field/endpoint in it. A UPI-only INR request would otherwise
+            // hit that API with blank account/ifsc and fail in a confusing way
+            // at the gateway, so route it to manual processing up front instead.
+            if (currency === "INR" && (!account || !ifsc) && upiId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "This is a UPI withdrawal - RameePay's API doesn't support UPI payouts. Please process it manually.",
+                });
+            }
+
             try {
                 let payload;
 
@@ -573,8 +590,11 @@ exports.approvePayoutReq = async (req, res) => {
                         orderid: String(orderid),
                     };
                 } else {
+                    // Exact field set per RameePay's "Withdrawal Account (India Only)
+                    // API" doc - account, ifsc, name, mobile, amount, note, orderid.
+                    // No "type" field is documented there; it was previously sent
+                    // but isn't part of this endpoint's schema.
                     payload = {
-                        type: "FIAT",
                         account,
                         ifsc,
                         name,
@@ -585,7 +605,7 @@ exports.approvePayoutReq = async (req, res) => {
                     };
                 }
 
-                const endpoint = currency === "CRYPTO" ? RAMEEPAY_Crypto_API : RAMEEPAY_API;
+                const endpoint = currency === "CRYPTO" ? RAMEEPAY_Crypto_API : RAMEEPAY_WITHDRAWAL_API;
                 const encryptedReqData = currency === "CRYPTO" ? encryptDataCrypto(payload) : encryptData(payload);
 
                 const { data } = await axios.post(

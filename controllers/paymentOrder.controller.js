@@ -2,6 +2,7 @@ const axios = require("axios");
 const Order = require("../models/Order");
 const Account = require("../models/account.model");
 const crypto = require("crypto");
+const { MIN_DEPOSIT_USD } = require("../config/depositLimits");
 
 // const generateCregisSignature = (params) => {
 //   const sortedString = Object.keys(params)
@@ -285,11 +286,11 @@ exports.createCregisCheckout = async (req, res) => {
 
     const requestedAmount = Number(amount);
 
-    // 1. Validate request (Minimum $10 USD, based on what the payer asked to deposit)
-    if (!accountNo || !Number.isFinite(requestedAmount) || requestedAmount < 10) {
+    // 1. Validate request (based on what the payer asked to deposit)
+    if (!accountNo || !Number.isFinite(requestedAmount) || requestedAmount < MIN_DEPOSIT_USD) {
       return res.status(400).json({
         success: false,
-        message: "A valid account number and minimum deposit of $10 USD are required",
+        message: `A valid account number and minimum deposit of $${MIN_DEPOSIT_USD} USD are required`,
       });
     }
 

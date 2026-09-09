@@ -3,6 +3,7 @@ const Order = require("../../models/Order");
 const Account = require("../../models/account.model");
 const { updateMT5Balance } = require("../../utils/MT5/mt5Balance");
 const fetchRate = require("./fetchRate");
+const { MIN_DEPOSIT_INR } = require("../../config/depositLimits");
 
 const TRUSTPAY_API = "https://trustpay24.online";
 
@@ -17,11 +18,11 @@ exports.handleTrustpay24Deposit = async (req, res) => {
     if (
       !accountNo ||
       !Number.isFinite(numericAmount) ||
-      numericAmount < 1000
+      numericAmount < MIN_DEPOSIT_INR
     ) {
       return res.status(400).json({
         success: false,
-        message: "A valid account number and minimum amount of 1000 are required",
+        message: `A valid account number and minimum amount of ${MIN_DEPOSIT_INR} are required`,
       });
     }
 
