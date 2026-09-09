@@ -11,8 +11,22 @@ const orderSchema = new mongoose.Schema(
     amount: { type: Number, required: true },
     status: {
       type: String,
-      enum: ["PENDING", "SUCCESS", "FAILED"],
+      enum: ["PENDING", "PARTIALLY_PAID", "SUCCESS", "FAILED"],
       default: "PENDING",
+    },
+    // Cumulative amount (USD-equivalent) already credited to MT5 for this order.
+    // Used to credit only the delta when a partial payment is later topped up,
+    // instead of re-crediting the full amount and double-paying the customer.
+    creditedAmount: {
+      type: Number,
+      default: 0,
+    },
+    // Payment-processor surcharge already folded into `amount` (e.g. Cregis's
+    // 0.5% charge). Kept separately just so the breakdown is visible later
+    // (support/accounting) - `amount` itself is the real total asked from the payer.
+    paymentChargeAmount: {
+      type: Number,
+      default: 0,
     },
     provider: {
       type: String,

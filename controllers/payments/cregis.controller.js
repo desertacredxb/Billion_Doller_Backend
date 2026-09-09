@@ -23,6 +23,8 @@ exports.handleCregisCallback = async (req, res) => {
       order_amount,
       pay_amount,
       pay_currency,
+      receive_amount,
+      receive_currency,
       tx_id,
     } = data;
 
@@ -89,8 +91,17 @@ exports.handleCregisCallback = async (req, res) => {
     }
 
     switch (event_type) {
-      case "paid": {
-        console.log("Cregis payment successful:", targetOrderId);
+      // "paid" = fully paid in one shot.
+      // "paid_partial" = payment received but less than the order amount - credit what
+      // actually came in now, and leave the order open for the remainder.
+      // "paid_remain" = the top-up that completes an order previously left "paid_partial".
+      // "paid_over" = order paid in full (and then some) in one shot - already fully covered,
+      // no further webhook will follow, so it must be credited now rather than left PENDING.
+      case "paid":
+      case "paid_partial":
+      case "paid_remain":
+      case "paid_over": {
+        console.log(`Cregis payment update (${event_type}):`, targetOrderId);
 
         const accountno = order.accountNo;
         if (!accountno) {
@@ -98,23 +109,53 @@ exports.handleCregisCallback = async (req, res) => {
           return res.status(200).send("success");
         }
 
-        // Direct 1:1 USD settlement. Use original order amount in USD.
-        const usdAmountToCredit = Number(order.amount || order_amount).toFixed(2);
+        // Cregis reports the order's cumulative settled total on every callback
+        // (receive_amount), not a per-transaction delta - so we credit only the
+        // difference vs what we've already put into MT5 for this order
+        // (order.creditedAmount), which makes paid_partial -> paid_remain safe to
+        // credit twice without double-paying the customer. receive_currency should
+        // be a USD-equivalent since orders are created with order_currency "USD"
+        // and stablecoin_realtime_rate locked to 1:1; if it's anything else (or
+        // missing), fall back to the fixed order amount rather than crediting a
+        // number denominated in the wrong currency.
+        const settlementCurrency = String(receive_currency || "").toUpperCase();
+        const isUsdEquivalent =
+          !settlementCurrency || ["USD", "USDT", "USDC"].includes(settlementCurrency);
 
-        if (!usdAmountToCredit || Number(usdAmountToCredit) <= 0) {
-          console.error("Invalid USD amount to credit:", usdAmountToCredit);
+        const reportedTotal =
+          isUsdEquivalent && receive_amount
+            ? Number(receive_amount)
+            : Number(order.amount || order_amount);
+
+        if (!Number.isFinite(reportedTotal) || reportedTotal <= 0) {
+          console.error("Invalid settlement amount reported by Cregis:", receive_amount, order_amount);
           return res.status(200).send("success");
         }
 
-        // Update MT5 Trading Account Balance in USD
+        const alreadyCredited = Number(order.creditedAmount || 0);
+        const creditDelta = Number((reportedTotal - alreadyCredited).toFixed(2));
+
+        if (creditDelta <= 0) {
+          // Nothing new to credit - duplicate/replayed webhook, or already settled.
+          console.log(
+            `No new amount to credit for ${targetOrderId} (event ${event_type}); already credited $${alreadyCredited}.`
+          );
+          if (event_type !== "paid_partial" && order.status !== "SUCCESS") {
+            order.status = "SUCCESS";
+            await order.save();
+          }
+          return res.status(200).send("success");
+        }
+
+        // Update MT5 Trading Account Balance in USD with just the new amount
         try {
-          console.log(`Crediting $${usdAmountToCredit} USD to MT5 account ${accountno}...`);
+          console.log(`Crediting $${creditDelta.toFixed(2)} USD to MT5 account ${accountno}...`);
 
           const mt5Response = await updateMT5Balance({
             login: accountno,
             type: 2, // Deposit type
-            balance: usdAmountToCredit,
-            comment: `DEP-${targetOrderId}`.substring(0, 31),
+            balance: creditDelta.toFixed(2),
+            comment: `${alreadyCredited > 0 ? "TOP" : "DEP"}-${targetOrderId}`.substring(0, 31),
           });
 
           console.log("💰 MT5 Response:", mt5Response);
@@ -125,22 +166,31 @@ exports.handleCregisCallback = async (req, res) => {
             throw new Error(`MT5 Deposit Failed: ${mt5Response.retcode}`);
           }
 
-          order.status = "SUCCESS";
+          order.creditedAmount = Number((alreadyCredited + creditDelta).toFixed(2));
+          order.status = event_type === "paid_partial" ? "PARTIALLY_PAID" : "SUCCESS";
           await order.save();
-          console.log("Order marked SUCCESS:", targetOrderId);
+          console.log(`Order ${targetOrderId} now: status=${order.status}, creditedAmount=$${order.creditedAmount}`);
 
           // Email Notification
           try {
             const account = await Account.findOne({ accountNo: accountno }).populate("user");
+            const isFinal = order.status === "SUCCESS";
+            const remaining = Number((Number(order.amount) - order.creditedAmount).toFixed(2));
+
             if (account?.user?.email) {
               await sendEmail({
                 to: account.user.email,
-                subject: "Deposit Successful - Balance Updated",
+                subject: isFinal
+                  ? "Deposit Successful - Balance Updated"
+                  : "Partial Deposit Received - Balance Updated",
                 html: `
                   <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                    <h2 style="color: #2c3e50;">Deposit Confirmation</h2>
+                    <h2 style="color: #2c3e50;">${isFinal ? "Deposit Confirmation" : "Partial Deposit Received"}</h2>
                     <p>Dear ${account.user.fullName || "Customer"},</p>
-                    <p>Your deposit of <strong>$${usdAmountToCredit} USD</strong> has been credited to your MT5 trading account.</p>
+                    <p>${isFinal
+                      ? `Your deposit of <strong>$${creditDelta.toFixed(2)} USD</strong> has been credited to your MT5 trading account.`
+                      : `We've received a partial payment of <strong>$${creditDelta.toFixed(2)} USD</strong> towards your deposit and credited it to your MT5 trading account. Please send the remaining <strong>$${remaining > 0 ? remaining.toFixed(2) : "0.00"} USD</strong> to complete this order.`
+                    }</p>
                     <p><strong>Transaction Details:</strong></p>
                     <ul>
                       <li><strong>Order ID:</strong> ${targetOrderId}</li>
@@ -148,9 +198,10 @@ exports.handleCregisCallback = async (req, res) => {
                       <li><strong>Transaction ID:</strong> ${tx_id || "N/A"}</li>
                       <li><strong>Ticket ID:</strong> ${mt5Response.ticket || "N/A"}</li>
                       <li><strong>Paid In Crypto:</strong> ${pay_amount || "N/A"} ${pay_currency || ""}</li>
-                      <li><strong>Amount Credited:</strong> $${usdAmountToCredit} USD</li>
+                      <li><strong>Amount Credited This Update:</strong> $${creditDelta.toFixed(2)} USD</li>
+                      <li><strong>Total Credited So Far:</strong> $${order.creditedAmount} USD</li>
                       <li><strong>Trading Account:</strong> ${accountno}</li>
-                      <li><strong>Status:</strong> Successful</li>
+                      <li><strong>Status:</strong> ${isFinal ? "Successful" : "Partially Paid"}</li>
                     </ul>
                   </div>
                 `,
@@ -161,17 +212,10 @@ exports.handleCregisCallback = async (req, res) => {
           }
         } catch (mt5Error) {
           console.error("MT5 Deposit Error:", mt5Error.message);
-          order.status = "PENDING";
+          // Don't lose track of a prior successful partial credit if this top-up attempt fails.
+          order.status = alreadyCredited > 0 ? "PARTIALLY_PAID" : "PENDING";
           await order.save();
         }
-        break;
-      }
-
-      case "paid_partial":
-      case "paid_over": {
-        console.warn(`Cregis ${event_type}:`, targetOrderId, pay_amount);
-        order.status = "PENDING";
-        await order.save();
         break;
       }
 

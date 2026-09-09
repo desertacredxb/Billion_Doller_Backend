@@ -121,6 +121,10 @@ exports.listAllDeposits = async (req, res) => {
       orderid: d.orderid,
       amount: d.amount,
       status: d.status,
+      // How much of `amount` has actually been credited to MT5 so far - relevant
+      // when status is PARTIALLY_PAID (a Cregis order still owed a top-up).
+      creditedAmount: d.creditedAmount || 0,
+      remainingAmount: Math.max(0, Number((d.amount - (d.creditedAmount || 0)).toFixed(2))),
       createdAt: d.createdAt,
       accountNo: d.account?.accountNo || d.accountNo, // fallback
       balance: d.account?.balance || 0,

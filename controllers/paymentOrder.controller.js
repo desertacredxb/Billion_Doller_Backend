@@ -272,21 +272,31 @@ function generateCregisSignature(params) {
 /**
  * CREATE CREGIS CHECKOUT (USD Native)
  */
+// Cregis charges a payment-processing fee on each transaction; we pass it on to
+// the payer by asking for slightly more than they intend to deposit, rather than
+// absorbing it ourselves.
+const CREGIS_PAYMENT_CHARGE_RATE = 0.005; // 0.5%
+
 exports.createCregisCheckout = async (req, res) => {
   try {
     const { accountNo, amount } = req.body;
 
     console.log("Cregis deposit request:", accountNo, amount);
 
-    const numericAmount = Number(amount);
+    const requestedAmount = Number(amount);
 
-    // 1. Validate request (Minimum $10 USD)
-    if (!accountNo || !Number.isFinite(numericAmount) || numericAmount < 10) {
+    // 1. Validate request (Minimum $10 USD, based on what the payer asked to deposit)
+    if (!accountNo || !Number.isFinite(requestedAmount) || requestedAmount < 10) {
       return res.status(400).json({
         success: false,
         message: "A valid account number and minimum deposit of $10 USD are required",
       });
     }
+
+    // Add Cregis's payment charge on top of the requested deposit - this becomes
+    // the actual order amount asked from the payer and credited on completion.
+    const paymentChargeAmount = Number((requestedAmount * CREGIS_PAYMENT_CHARGE_RATE).toFixed(2));
+    const numericAmount = Number((requestedAmount + paymentChargeAmount).toFixed(2));
 
     // 2. Validate Cregis configuration
     if (!process.env.CREGIS_DEPOSIT_API_KEY || !process.env.CREGIS_DEPOSIT_PID) {
@@ -337,8 +347,13 @@ exports.createCregisCheckout = async (req, res) => {
       language: "en",
       remark: `USD Deposit for MT5 Account ${account.accountNo}`,
 
-      accept_partial_payment: "false",
-      accept_over_payment: "false",
+      accept_partial_payment: "true",
+      accept_over_payment: "true",
+
+      // Lock USDT/USDC -> USD at a fixed 1:1 rate instead of a live CoinMarketCap
+      // rate, so a customer paying in a stablecoin can't fall out of sync with the
+      // quoted amount while the order is open (reduces paid_partial/paid_over).
+      stablecoin_realtime_rate: "false",
     };
 
     // 6. Append Signature
@@ -373,7 +388,8 @@ exports.createCregisCheckout = async (req, res) => {
       orderid: merchantOrderId,
       account: account._id,
       accountNo: String(account.accountNo),
-      amount: numericAmount, // Amount in USD
+      amount: numericAmount, // Amount in USD, includes the Cregis payment charge
+      paymentChargeAmount,
       status: "PENDING",
       provider: "CREGIS",
       providerOrderId: String(cregisOrder.cregis_id),
@@ -385,6 +401,8 @@ exports.createCregisCheckout = async (req, res) => {
       order_id: order.orderid,
       cregis_id: cregisOrder.cregis_id,
       checkout_url: cregisOrder.checkout_url,
+      requested_amount: requestedAmount,
+      payment_charge_amount: paymentChargeAmount,
       order_amount: cregisOrder.order_amount,
       order_currency: cregisOrder.order_currency,
       created_time: cregisOrder.created_time,

@@ -39,7 +39,10 @@ function generateCregisSignature(params) {
   return crypto.createHash("md5").update(stringToSign).digest("hex").toLowerCase();
 }
 
-async function checkCregisOrderStatus(cregisId) {
+// Returns the full order-info object (status + settlement amounts), not just the
+// status string, so the caller can credit the actual settled amount for
+// paid_partial/paid_over orders instead of assuming the full order.amount arrived.
+async function checkCregisOrderInfo(cregisId) {
   try {
     const nonce = crypto.randomBytes(3).toString("hex");
     const timestamp = Date.now();
@@ -62,12 +65,95 @@ async function checkCregisOrderStatus(cregisId) {
     console.log(data)
 
     if (data?.code === "00000" && data?.data) {
-      return data.data.status; // "new", "paid", "expired", "paid_over", "paid_partial", "canceled"
+      // status: "new", "paid", "expired", "paid_over", "paid_partial", "canceled"
+      // also carries order_amount, receive_amount, receive_currency, pay_amount, pay_currency
+      return data.data;
     }
     return null;
   } catch (error) {
     console.error("Cregis status query error:", error.response?.data || error.message);
     return null;
+  }
+}
+
+// Mirrors the delta-crediting logic in controllers/payments/cregis.controller.js:
+// credit only the difference between what Cregis reports as settled and what
+// we've already put into MT5 for this order (order.creditedAmount), so a
+// paid_partial order picked up here behaves the same whether it's finalized by
+// a webhook or by this reconciliation job.
+async function reconcileCregisOrder(order, cregisInfo) {
+  if (!cregisInfo) {
+    console.log(`⏳ Order ${order.orderid} - no response from Cregis order-info API.`);
+    return;
+  }
+
+  const status = cregisInfo.status;
+  console.log(`Cregis order-info status for ${order.orderid}:`, status);
+
+  if (status === "expired" || status === "canceled") {
+    order.status = "FAILED";
+    order.comment = `Marked FAILED during reconciliation (Cregis status: ${status}).`;
+    await order.save();
+    console.log(`❌ Order ${order.orderid} marked FAILED in DB.`);
+    return;
+  }
+
+  if (!["paid", "paid_over", "paid_partial"].includes(status)) {
+    console.log(`⏳ Order ${order.orderid} still pending on Cregis side (status: ${status || "unknown"}).`);
+    return;
+  }
+
+  const accountno = order.accountNo;
+  const settlementCurrency = String(cregisInfo.receive_currency || "").toUpperCase();
+  const isUsdEquivalent = !settlementCurrency || ["USD", "USDT", "USDC"].includes(settlementCurrency);
+
+  const reportedTotal =
+    isUsdEquivalent && cregisInfo.receive_amount
+      ? Number(cregisInfo.receive_amount)
+      : Number(order.amount || cregisInfo.order_amount);
+
+  if (!Number.isFinite(reportedTotal) || reportedTotal <= 0) {
+    console.error(`❌ Invalid settlement amount from Cregis for ${order.orderid}:`, cregisInfo.receive_amount);
+    return;
+  }
+
+  const alreadyCredited = Number(order.creditedAmount || 0);
+  const creditDelta = Number((reportedTotal - alreadyCredited).toFixed(2));
+
+  if (creditDelta <= 0) {
+    // Nothing new to credit, but finalize the status if Cregis now shows it fully paid.
+    if (status !== "paid_partial" && order.status !== "SUCCESS") {
+      order.status = "SUCCESS";
+      order.comment = `Reconciled manually on ${new Date().toISOString()}`;
+      await order.save();
+      console.log(`🎉 Order ${order.orderid} finalized as SUCCESS during reconciliation (already fully credited).`);
+    }
+    return;
+  }
+
+  try {
+    const mt5Response = await updateMT5Balance({
+      login: accountno,
+      type: 2,
+      balance: creditDelta.toFixed(2),
+      comment: `RECON-${order.orderid}`.substring(0, 32),
+    });
+
+    const retcode = String(mt5Response?.retcode ?? mt5Response?.data?.retcode ?? "");
+
+    if (retcode === "0 Done" || retcode === "0" || retcode.startsWith("0 ")) {
+      order.creditedAmount = Number((alreadyCredited + creditDelta).toFixed(2));
+      order.status = status === "paid_partial" ? "PARTIALLY_PAID" : "SUCCESS";
+      order.comment = `Reconciled manually on ${new Date().toISOString()}`;
+      await order.save();
+      console.log(
+        `🎉 Account ${accountno} credited with $${creditDelta.toFixed(2)} USD (order ${order.orderid}, status: ${order.status}).`
+      );
+    } else {
+      console.error(`❌ MT5 deposit error: ${retcode || "missing retcode"}`);
+    }
+  } catch (mt5Err) {
+    console.error(`❌ MT5 API Exception for ${order.orderid}:`, mt5Err.message);
   }
 }
 
@@ -153,7 +239,9 @@ async function reconcilePendingOrders(orderCount = null) {
         : "🔍 Starting pending orders reconciliation job..."
     );
 
-    const pendingOrderQuery = Order.find({ status: "PENDING" }).sort({ createdAt: -1 });
+    // PARTIALLY_PAID is included so a Cregis order still owed a top-up gets
+    // re-checked here too, in case its "paid_remain" webhook never arrived.
+    const pendingOrderQuery = Order.find({ status: { $in: ["PENDING", "PARTIALLY_PAID"] } }).sort({ createdAt: -1 });
     if (orderCount !== null) pendingOrderQuery.limit(orderCount);
     const pendingOrders = await pendingOrderQuery;
 
@@ -188,6 +276,15 @@ async function reconcilePendingOrders(orderCount = null) {
         console.log(`⚙️ Inferred provider as: ${provider}`);
       }
 
+      // CREGIS needs the full settlement breakdown (not just a status string) to
+      // credit only what's actually been paid, so it gets its own dedicated path.
+      if (provider === "CREGIS") {
+        const queryId = order.providerOrderId || order.orderid;
+        const cregisInfo = await checkCregisOrderInfo(queryId);
+        await reconcileCregisOrder(order, cregisInfo);
+        continue;
+      }
+
       let orderStatus = null;
 
       // -------------------------------------------------------------
@@ -195,9 +292,6 @@ async function reconcilePendingOrders(orderCount = null) {
       // -------------------------------------------------------------
       if (provider === "RAMEE" || provider === "CRYPTO") {
         orderStatus = await checkRameeOrderStatus(order.orderid, provider);
-      } else if (provider === "CREGIS") {
-        const queryId = order.providerOrderId || order.orderid;
-        orderStatus = await checkCregisOrderStatus(queryId);
       } else if (provider === "TRUSTPAY24") {
         const queryId = order.providerOrderId || order.orderid;
         orderStatus = await checkTrustPayOrderStatus(queryId);
@@ -210,12 +304,10 @@ async function reconcilePendingOrders(orderCount = null) {
       // -------------------------------------------------------------
       const isSuccess =
         ((provider === "RAMEE" || provider === "CRYPTO") && orderStatus === "SUCCESS") ||
-        (provider === "CREGIS" && ["paid", "paid_over", "paid_partial"].includes(orderStatus)) ||
         (provider === "TRUSTPAY24" && orderStatus === "cleared");
 
       const isFailed =
         ((provider === "RAMEE" || provider === "CRYPTO") && orderStatus === "FAILED") ||
-        (provider === "CREGIS" && ["expired", "canceled"].includes(orderStatus)) ||
         (provider === "TRUSTPAY24" && ["rejected", "refunded"].includes(orderStatus));
 
       if (isSuccess) {
@@ -226,7 +318,9 @@ async function reconcilePendingOrders(orderCount = null) {
           console.error(`❌ Invalid order amount for ${order.orderid}:`, order.amount);
           continue;
         }
-        const usdAmount = ["CREGIS", "CRYPTO"].includes(provider)
+        // CREGIS is handled separately above (reconcileCregisOrder), so only
+        // CRYPTO reaches here needing a 1:1 USD amount; RAMEE/TRUSTPAY24 need INR->USD.
+        const usdAmount = provider === "CRYPTO"
           ? orderAmount.toFixed(2)
           : (orderAmount * await fetchRate()).toFixed(2);
         const accountno = order.accountNo;
