@@ -13,6 +13,6 @@ module.exports = {
   // "Transaction amount must be between 100 and 100000." This is enforced by
   // RameePay itself, NOT something we control - lowering MIN_WITHDRAWAL_INR
   // below this for testing will still get rejected at the gateway.
-  RAMEEPAY_MIN_INR: 100,
+  RAMEEPAY_MIN_INR: 1000,
   RAMEEPAY_MAX_INR: 100000,
 };

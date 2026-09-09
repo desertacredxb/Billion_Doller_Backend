@@ -273,10 +273,16 @@ function generateCregisSignature(params) {
 /**
  * CREATE CREGIS CHECKOUT (USD Native)
  */
-// Cregis charges a payment-processing fee on each transaction; we pass it on to
-// the payer by asking for slightly more than they intend to deposit, rather than
-// absorbing it ourselves.
-const CREGIS_PAYMENT_CHARGE_RATE = 0.005; // 0.5%
+// Cregis charges a payment-processing fee on each transaction. Whether we pass
+// it on to the payer (by asking for slightly more than they intend to
+// deposit) is controlled by CREGIS_PAYMENT_CHARGE_ENABLED in .env, so it can
+// be toggled without a code change. Rate is also env-configurable, defaulting
+// to Cregis's actual 0.5% fee when enabled.
+const CREGIS_PAYMENT_CHARGE_ENABLED =
+  String(process.env.CREGIS_PAYMENT_CHARGE_ENABLED || "false").toLowerCase() === "true";
+const CREGIS_PAYMENT_CHARGE_RATE = CREGIS_PAYMENT_CHARGE_ENABLED
+  ? Number(process.env.CREGIS_PAYMENT_CHARGE_RATE) || 0.005
+  : 0;
 
 exports.createCregisCheckout = async (req, res) => {
   try {

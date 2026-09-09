@@ -141,7 +141,13 @@ async function reconcileCregisOrder(order, cregisInfo) {
 
     const retcode = String(mt5Response?.retcode ?? mt5Response?.data?.retcode ?? "");
 
-    if (retcode === "0 Done" || retcode === "0" || retcode.startsWith("0 ")) {
+    // Matches the check mt5Request.js itself already gates success on, and
+    // what every other caller (webhook handlers, payout.controller.js) uses -
+    // this used to be a stricter exact-match check that misclassified some
+    // genuine MT5 successes (e.g. "0Done" with no space, or trailing
+    // whitespace from the raw socket protocol) as failures, silently leaving
+    // the order's status/creditedAmount unchanged.
+    if (retcode.startsWith("0")) {
       order.creditedAmount = Number((alreadyCredited + creditDelta).toFixed(2));
       order.status = status === "paid_partial" ? "PARTIALLY_PAID" : "SUCCESS";
       order.comment = `Reconciled manually on ${new Date().toISOString()}`;
@@ -335,7 +341,7 @@ async function reconcilePendingOrders(orderCount = null) {
 
           const retcode = String(mt5Response?.retcode ?? mt5Response?.data?.retcode ?? "");
 
-          if (retcode === "0 Done" || retcode === "0" || retcode.startsWith("0 ")) {
+          if (retcode.startsWith("0")) {
             order.status = "SUCCESS";
             order.comment = `Reconciled manually on ${new Date().toISOString()}`;
             await order.save();
