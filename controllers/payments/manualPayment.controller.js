@@ -2,7 +2,11 @@ const { default: mongoose } = require("mongoose");
 const Withdrawal = require("../../models/withdrawal");
 const sendEmail = require("../../utils/sendEmail");
 const fetchRate = require("./fetchRate");
-const { MIN_WITHDRAWAL_INR } = require("../../config/withdrawalLimits");
+const {
+  MIN_WITHDRAWAL_INR,
+  WITHDRAWAL_COOLDOWN_MINUTES,
+  MAX_WITHDRAWALS_PER_DAY,
+} = require("../../config/withdrawalLimits");
 
 exports.handleManualPaymentRequest = async (req, res) => {
   const session = await mongoose.startSession();
@@ -64,26 +68,26 @@ exports.handleManualPaymentRequest = async (req, res) => {
       });
     }
 
-    // 5 MINUTE COOLDOWN
+    // COOLDOWN CHECK
     const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
       session,
     }).sort({ createdAt: -1 });
 
     if (lastWithdrawal) {
       const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
-      const fiveMinutes = 5 * 60 * 1000;
+      const cooldownMs = WITHDRAWAL_COOLDOWN_MINUTES * 60 * 1000;
 
-      if (diff < fiveMinutes) {
+      if (diff < cooldownMs) {
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
           success: false,
-          message: "You can only request withdrawal once every 5 minutes.",
+          message: `You can only request withdrawal once every ${WITHDRAWAL_COOLDOWN_MINUTES} minutes.`,
         });
       }
     }
 
-    // DAILY LIMIT (3 per day)
+    // DAILY LIMIT CHECK
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -95,12 +99,12 @@ exports.handleManualPaymentRequest = async (req, res) => {
       { session },
     );
 
-    if (todayCount >= 3) {
+    if (todayCount >= MAX_WITHDRAWALS_PER_DAY) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Daily withdrawal limit reached (3 per day).",
+        message: `Daily withdrawal limit reached (${MAX_WITHDRAWALS_PER_DAY} per day).`,
       });
     }
 

@@ -8,7 +8,12 @@ const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const { encryptDataCrypto, encryptData, decryptDataCrypto, decryptData } = require("../utils/rameeCrypto");
-const { MIN_WITHDRAWAL_USD, MIN_WITHDRAWAL_INR } = require("../config/withdrawalLimits");
+const {
+    MIN_WITHDRAWAL_USD,
+    MIN_WITHDRAWAL_INR,
+    WITHDRAWAL_COOLDOWN_MINUTES,
+    MAX_WITHDRAWALS_PER_DAY,
+} = require("../config/withdrawalLimits");
 
 // "/order/generate" is the DEPOSIT (payin) endpoint - payouts must go to the
 // dedicated Withdrawal Account API instead (see RameePay Integration Docs,
@@ -229,26 +234,26 @@ exports.createPayoutRequest = async (req, res) => {
             });
         }
 
-        // 4️⃣ 5-MINUTE COOLDOWN CHECK
+        // 4️⃣ COOLDOWN CHECK
         const lastWithdrawal = await Withdrawal.findOne({ accountNo }, null, {
             session,
         }).sort({ createdAt: -1 });
 
         if (lastWithdrawal) {
             const diff = Date.now() - new Date(lastWithdrawal.createdAt).getTime();
-            const fiveMinutes = 5 * 60 * 1000;
+            const cooldownMs = WITHDRAWAL_COOLDOWN_MINUTES * 60 * 1000;
 
-            if (diff < fiveMinutes) {
+            if (diff < cooldownMs) {
                 await session.abortTransaction();
                 session.endSession();
                 return res.status(400).json({
                     success: false,
-                    message: "You can only request withdrawal once every 5 minutes.",
+                    message: `You can only request withdrawal once every ${WITHDRAWAL_COOLDOWN_MINUTES} minutes.`,
                 });
             }
         }
 
-        // 5️⃣ DAILY LIMIT CHECK (3 per day)
+        // 5️⃣ DAILY LIMIT CHECK
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
 
@@ -260,12 +265,12 @@ exports.createPayoutRequest = async (req, res) => {
             { session }
         );
 
-        if (todayCount >= 3) {
+        if (todayCount >= MAX_WITHDRAWALS_PER_DAY) {
             await session.abortTransaction();
             session.endSession();
             return res.status(400).json({
                 success: false,
-                message: "Daily withdrawal limit reached (3 per day).",
+                message: `Daily withdrawal limit reached (${MAX_WITHDRAWALS_PER_DAY} per day).`,
             });
         }
 
