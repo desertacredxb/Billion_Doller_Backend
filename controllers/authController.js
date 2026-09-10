@@ -4,6 +4,7 @@ const IB = require("../models/Broker.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../utils/sendEmail");
+const { sendPasswordResetOtpEmail } = require("../utils/Email");
 // const sendWhatsAppOTP = require("../utils/sendWhatsAppOTP");
 const axios = require("axios");
 
@@ -392,27 +393,10 @@ exports.requestPasswordReset = async (req, res) => {
     user.resetOtpExpires = otpExpires;
     await user.save();
 
-    await sendEmail({
-      to: email,
-      subject: "Password Reset Request - OTP Code",
-      html: `
-    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-      <h2 style="color: #2c3e50;">Password Reset Verification</h2>
-      <p>Dear ${user.fullName || "User"},</p>
-      <p>We received a request to reset the password for your account. To proceed, please use the One-Time Password (OTP) provided below:</p>
-      
-      <p style="font-size: 20px; font-weight: bold; color: #2c3e50; text-align: center; margin: 20px 0;">
-        ${otp}
-      </p>
-      
-      <p>This OTP is valid for <strong>5 minutes</strong>. Do not share this code with anyone for security purposes.</p>
-      
-      <p>If you did not request a password reset, please ignore this email. Your account remains secure.</p>
-      
-      <br/>
-      <p>Best Regards,<br/>The Support Team</p>
-    </div>
-  `,
+    await sendPasswordResetOtpEmail({
+      email,
+      name: user.fullName,
+      otp,
     });
 
     // Send WhatsApp

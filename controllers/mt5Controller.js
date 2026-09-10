@@ -161,6 +161,7 @@ exports.registerUserWithMT5 = async (req, res) => {
         userType: Utype,
         mt5Password: Password,
         mt5InvestorPassword: investorPassword,
+        leverage: process.env.MT5_LEVERAGE,
       });
     } catch (emailError) {
       // Don't fail account creation because email failed
