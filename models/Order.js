@@ -39,7 +39,19 @@ const orderSchema = new mongoose.Schema(
     comment:{
       type: String,
       default: ""
-    }
+    },
+    // TrustPay24 webhook bookkeeping - nested since these fields are only
+    // meaningful for that provider. Purely additive: previously these were
+    // top-level fields the schema didn't declare, so Mongoose's default
+    // strict mode was silently dropping them on save().
+    trustpay24: {
+      utrNumber: { type: String, default: "" },
+      transactionId: { type: String, default: "" },
+      transactionRef: { type: String, default: "" },
+      approvedAt: { type: Date },
+      expiredAt: { type: Date },
+      failedAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

@@ -151,6 +151,7 @@ exports.handleTrustpay24Callback = async (req, res) => {
       status,
       approved_at,
       expired_at,
+      failed_at,
     } = req.body;
 
     console.log("🔔 TrustPay24 Webhook:", req.body);
@@ -211,11 +212,11 @@ exports.handleTrustpay24Callback = async (req, res) => {
         });
       }
 
-      // If your Order schema has these fields, save them
-      order.utrNumber = utr_number || null;
-      order.transactionId = transaction_id || null;
-      order.transactionRef = transaction_ref || null;
-      order.approvedAt = approved_at
+      order.trustpay24 = order.trustpay24 || {};
+      order.trustpay24.utrNumber = utr_number || null;
+      order.trustpay24.transactionId = transaction_id || null;
+      order.trustpay24.transactionRef = transaction_ref || null;
+      order.trustpay24.approvedAt = approved_at
         ? new Date(approved_at)
         : new Date();
 
@@ -255,12 +256,14 @@ exports.handleTrustpay24Callback = async (req, res) => {
         order.status = "SUCCESS";
         await order.save();
         console.log(`Deposit successful! Ticket ID: ${mt5Response.ticket}`);
-
       } catch (error) {
-        console.error("MT5 Operation Failed:", error);
-        throw new Error(
-          `MT5 Deposit Failed: ${mt5Response.data.retcode}`
-        );
+        // Was previously re-throwing `mt5Response.data.retcode` here -
+        // mt5Response is flat (no .data) and may be out of scope entirely if
+        // updateMT5Balance itself threw, so this crashed with a second,
+        // unrelated TypeError that masked the real failure and left the
+        // order stuck PENDING with no useful log. Just log the real error and
+        // leave the order PENDING for reconciliation/manual review instead.
+        console.error(`❌ TrustPay24 MT5 credit failed for order ${order.orderid}:`, error.message);
       }
 
       return res.status(200).json({
@@ -291,18 +294,23 @@ exports.handleTrustpay24Callback = async (req, res) => {
         });
       }
 
-      order.status = "EXPIRED";
+      // Order.status only allows PENDING/PARTIALLY_PAID/SUCCESS/FAILED -
+      // "EXPIRED" isn't a valid enum value, so this used to throw a
+      // ValidationError on save() that got swallowed by the outer catch,
+      // meaning expired webhooks never actually persisted anything.
+      order.status = "FAILED";
+      order.trustpay24 = order.trustpay24 || {};
 
       if (transaction_id) {
-        order.transactionId = transaction_id;
+        order.trustpay24.transactionId = transaction_id;
       }
 
       if (transaction_ref) {
-        order.transactionRef = transaction_ref;
+        order.trustpay24.transactionRef = transaction_ref;
       }
 
       if (expired_at) {
-        order.expiredAt = new Date(expired_at);
+        order.trustpay24.expiredAt = new Date(expired_at);
       }
 
       await order.save();
@@ -316,6 +324,35 @@ exports.handleTrustpay24Callback = async (req, res) => {
         success: true,
         message: "Expired webhook processed successfully",
       });
+    }
+
+    // Handle a submitted-but-unmatched UTR (definitive failure per docs)
+    if (event === "payin.failed") {
+      if (String(order.status).toUpperCase() === "SUCCESS") {
+        console.log("⚠️ TrustPay24 Callback: Order already successful:", transaction_ref);
+        return res.status(200).json({ success: true, message: "Order already successful" });
+      }
+
+      order.status = "FAILED";
+      order.trustpay24 = order.trustpay24 || {};
+      if (transaction_id) order.trustpay24.transactionId = transaction_id;
+      if (transaction_ref) order.trustpay24.transactionRef = transaction_ref;
+      if (utr_number) order.trustpay24.utrNumber = utr_number;
+      if (failed_at) order.trustpay24.failedAt = new Date(failed_at);
+
+      await order.save();
+      console.log("❌ TrustPay24 Deposit Failed:", transaction_ref);
+
+      return res.status(200).json({ success: true, message: "Failed webhook processed successfully" });
+    }
+
+    // payin.disputed: customer resubmitted a corrected UTR after a failure -
+    // an operator resolves it manually on TrustPay24's side (Approved or
+    // Rejected), so just log it; the eventual payin.approved/payin.failed
+    // webhook for the same order is what actually updates status here.
+    if (event === "payin.disputed") {
+      console.log("⚠️ TrustPay24 Deposit Disputed (awaiting manual resolution):", transaction_ref);
+      return res.status(200).json({ success: true, message: "Disputed webhook acknowledged" });
     }
 
     // Unknown event
