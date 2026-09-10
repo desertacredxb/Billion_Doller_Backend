@@ -54,6 +54,7 @@ exports.handleDigipayDeposit = async (req, res) => {
       account: account._id, // link to Account
       accountNo: account.accountNo,
       amount,
+      provider: "DIGIPAY",
       status: "PENDING",
     });
     await newOrder.save();

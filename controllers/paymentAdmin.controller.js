@@ -167,6 +167,7 @@ exports.listAllDeposits = async (req, res) => {
       accountNo: d.account?.accountNo || d.accountNo, // fallback
       balance: d.account?.balance || 0,
       userName: d.account?.user?.fullName || "Unknown",
+      provider: d.provider || "",
     }));
 
     res.status(200).json({

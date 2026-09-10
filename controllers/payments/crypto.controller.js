@@ -38,6 +38,7 @@ exports.handleCryptoDeposit = async (req, res) => {
       account: account._id, // link to Account
       accountNo: account.accountNo, // backup string
       amount,
+      provider: "CRYPTO",
       status: "PENDING",
     });
     await newOrder.save();
