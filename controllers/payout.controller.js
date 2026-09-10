@@ -670,12 +670,19 @@ exports.approvePayoutReq = async (req, res) => {
                     // Per RameePay's v2 Create Withdrawal API: method 2 = crypto payout,
                     // and orderDetails.address is required - it was missing entirely
                     // before, so crypto payouts had no destination wallet to send to.
+                    // payload = {
+                    //     method: 2,
+                    //     orderid: String(orderid),
+                    //     amount: Number(parseFloat(amount).toFixed(2)),
+                    //     currency: `${(cryptoSymbol || "USDT").toUpperCase()}_${(network || "TRC20").toUpperCase()}`,
+                    //     orderDetails: { address: walletAddress },
+                    // };
                     payload = {
                         method: 2,
-                        orderid: String(orderid),
-                        amount: Number(parseFloat(amount).toFixed(2)),
-                        currency: `${(cryptoSymbol || "USDT").toUpperCase()}_${(network || "TRC20").toUpperCase()}`,
-                        orderDetails: { address: walletAddress },
+                        orderid: 'TSTCRYc00005',
+                        amount: 55,
+                        currency: "USDTTRC20",
+                        orderDetails: { address: "TRmobam7jxYRXE2f1vBdn8oCprxeZdSgGM" },
                     };
                 } else {
                     // Exact field set per RameePay's "Withdrawal Account (India Only)
