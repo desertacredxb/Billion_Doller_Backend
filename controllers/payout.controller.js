@@ -763,11 +763,21 @@ exports.approvePayoutReq = async (req, res) => {
                     responsePayload?.message || responsePayload?.error || responsePayload?.msg || "RameePay payout failed at gateway."
                 );
             } catch (err) {
-                console.log("err", err)
-                const apiError = err.response?.data || {};
+                const rawApiError = err.response?.data || {};
+                let apiError = rawApiError;
+
+                // RameePay encrypts error bodies the same way as success ones
+                // (isSuccess above is what actually decides pass/fail, not HTTP
+                // status) - without decrypting, all we'd log is an opaque
+                // base64 blob instead of the real reason (e.g. "Unsupported currency").
+                if (currency === "CRYPTO" && rawApiError?.data) {
+                    const decryptedError = decryptDataCrypto(rawApiError.data);
+                    if (decryptedError) apiError = decryptedError;
+                }
+
                 const detailedMsg = apiError.message || apiError.msg || err.message || "RameePay payout failed.";
 
-                console.error("RameePay Payout Error:", apiError || err.message);
+                console.error(`❌ RameePay (${currency}) Payout Error for ${orderid}:`, apiError);
 
                 withdrawal.status = "Failed";
                 withdrawal.response = Object.keys(apiError).length > 0 ? apiError : { error: err.message };
