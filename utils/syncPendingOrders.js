@@ -104,16 +104,20 @@ async function reconcileCregisOrder(order, cregisInfo) {
   }
 
   const accountno = order.accountNo;
-  const settlementCurrency = String(cregisInfo.receive_currency || "").toUpperCase();
+  // Use pay_amount (what the payer actually sent), NOT receive_amount - on a
+  // paid_over order receive_amount is capped at order_amount, which would
+  // under-credit the customer for a genuine overpayment. Mirrors the same
+  // fix in controllers/payments/cregis.controller.js's webhook handler.
+  const settlementCurrency = String(cregisInfo.pay_currency || cregisInfo.receive_currency || "").toUpperCase();
   const isUsdEquivalent = !settlementCurrency || ["USD", "USDT", "USDC"].includes(settlementCurrency);
 
   const reportedTotal =
-    isUsdEquivalent && cregisInfo.receive_amount
-      ? Number(cregisInfo.receive_amount)
+    isUsdEquivalent && cregisInfo.pay_amount
+      ? Number(cregisInfo.pay_amount)
       : Number(order.amount || cregisInfo.order_amount);
 
   if (!Number.isFinite(reportedTotal) || reportedTotal <= 0) {
-    console.error(`❌ Invalid settlement amount from Cregis for ${order.orderid}:`, cregisInfo.receive_amount);
+    console.error(`❌ Invalid settlement amount from Cregis for ${order.orderid}:`, cregisInfo.pay_amount);
     return;
   }
 

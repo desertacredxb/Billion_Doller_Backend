@@ -108,7 +108,6 @@ exports.handleCregisCallback = async (req, res) => {
       order_amount,
       pay_amount,
       pay_currency,
-      receive_amount,
       receive_currency,
       tx_id,
     } = data;
@@ -157,26 +156,33 @@ exports.handleCregisCallback = async (req, res) => {
           return res.status(200).send("success");
         }
 
-        // Cregis reports the order's cumulative settled total on every callback
-        // (receive_amount), not a per-transaction delta - so we credit only the
-        // difference vs what we've already put into MT5 for this order
-        // (order.creditedAmount), which makes paid_partial -> paid_remain safe to
-        // credit twice without double-paying the customer. receive_currency should
-        // be a USD-equivalent since orders are created with order_currency "USD"
-        // and stablecoin_realtime_rate locked to 1:1; if it's anything else (or
-        // missing), fall back to the fixed order amount rather than crediting a
-        // number denominated in the wrong currency.
-        const settlementCurrency = String(receive_currency || "").toUpperCase();
+        // Cregis reports the order's cumulative total on every callback, not a
+        // per-transaction delta - so we credit only the difference vs what
+        // we've already put into MT5 for this order (order.creditedAmount),
+        // which makes paid_partial -> paid_remain safe to credit twice
+        // without double-paying the customer.
+        //
+        // Use pay_amount (what the payer actually sent), NOT receive_amount:
+        // on a paid_over event receive_amount is capped at order_amount (e.g.
+        // order_amount=10, pay_amount=11, receive_amount=10 for a genuine
+        // overpayment), which would under-credit the customer for money they
+        // actually sent - contradicts the policy of crediting the full amount
+        // paid on partial/over payments. pay_currency should be a
+        // USD-equivalent since orders are created with order_currency "USD"
+        // and stablecoin_realtime_rate locked to 1:1; if it's anything else
+        // (or missing), fall back to the fixed order amount rather than
+        // crediting a number denominated in the wrong currency.
+        const settlementCurrency = String(pay_currency || receive_currency || "").toUpperCase();
         const isUsdEquivalent =
           !settlementCurrency || ["USD", "USDT", "USDC"].includes(settlementCurrency);
 
         const reportedTotal =
-          isUsdEquivalent && receive_amount
-            ? Number(receive_amount)
+          isUsdEquivalent && pay_amount
+            ? Number(pay_amount)
             : Number(order.amount || order_amount);
 
         if (!Number.isFinite(reportedTotal) || reportedTotal <= 0) {
-          console.error("Invalid settlement amount reported by Cregis:", receive_amount, order_amount);
+          console.error("Invalid settlement amount reported by Cregis:", pay_amount, order_amount);
           return res.status(200).send("success");
         }
 
