@@ -179,16 +179,23 @@ async function checkRameeOrderStatus(orderid, provider) {
       ? encryptDataCrypto({ orderid: orderid })
       : encryptData({ order_id: orderid });
 
+    // v2 crypto API expects only { data } in the body plus an "agentcode"
+    // header (agent code in the body is no longer accepted there); the fiat
+    // status endpoint is a separate, older API that still uses reqData/agentCode.
     const payload = isCrypto
-      ? { data: encryptedData, agentCode: process.env.CRYPTO_AGENT_CODE }
+      ? { data: encryptedData }
       : { reqData: encryptedData, agentCode: process.env.RAMEE_AGENT_CODE };
 
     const statusUrl = isCrypto
-      ? "https://crypto-apis.rameepay.io/v1/order/status"
+      ? "https://crypto-apis.rameepay.io/v2/order/status"
       : "https://apis.rameepay.io/order/status";
 
+    const headers = isCrypto
+      ? { "Content-Type": "application/json", agentcode: process.env.CRYPTO_AGENT_CODE }
+      : { "Content-Type": "application/json" };
+
     const { data } = await axios.post(statusUrl, payload, {
-      headers: { "Content-Type": "application/json" },
+      headers,
       timeout: 10000,
     });
 

@@ -23,7 +23,10 @@ const {
 // "Withdrawal Account (India Only) API"). Reusing the deposit endpoint here
 // was the reason RameePay INR payouts never actually paid out.
 const RAMEEPAY_WITHDRAWAL_API = "https://apis.rameepay.io/withdrawal/account";
-const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
+// v2 crypto API has separate endpoints for creating a pay-in order vs a
+// withdrawal - payouts must hit /v2/withdrawal, not /v2/order (the deposit
+// endpoint), otherwise RameePay has no idea it's a payout request.
+const RAMEEPAY_CRYPTO_WITHDRAWAL_API = "https://crypto-apis.rameepay.io/v2/withdrawal";
 
 const fetchRate = async () => {
     try {
@@ -664,9 +667,15 @@ exports.approvePayoutReq = async (req, res) => {
                 let payload;
 
                 if (currency === "CRYPTO") {
+                    // Per RameePay's v2 Create Withdrawal API: method 2 = crypto payout,
+                    // and orderDetails.address is required - it was missing entirely
+                    // before, so crypto payouts had no destination wallet to send to.
                     payload = {
-                        amount: Number(parseFloat(amount).toFixed(2)),
+                        method: 2,
                         orderid: String(orderid),
+                        amount: Number(parseFloat(amount).toFixed(2)),
+                        currency: `${(cryptoSymbol || "USDT").toUpperCase()}_${(network || "TRC20").toUpperCase()}`,
+                        orderDetails: { address: walletAddress },
                     };
                 } else {
                     // Exact field set per RameePay's "Withdrawal Account (India Only)
@@ -688,20 +697,26 @@ exports.approvePayoutReq = async (req, res) => {
                     };
                 }
 
-                const endpoint = currency === "CRYPTO" ? RAMEEPAY_Crypto_API : RAMEEPAY_WITHDRAWAL_API;
-                const encryptedReqData = currency === "CRYPTO" ? encryptDataCrypto(payload) : encryptData(payload);
+                const isCrypto = currency === "CRYPTO";
+                const endpoint = isCrypto ? RAMEEPAY_CRYPTO_WITHDRAWAL_API : RAMEEPAY_WITHDRAWAL_API;
+                const encryptedReqData = isCrypto ? encryptDataCrypto(payload) : encryptData(payload);
 
-                const { data } = await axios.post(
-                    endpoint,
-                    {
-                        reqData: encryptedReqData,
-                        agentCode: currency === "CRYPTO"? process.env.CRYPTO_AGENT_CODE :process.env.RAMEEPAY_AGENT_CODE,
-                    },
-                    {
-                        headers: { "Content-Type": "application/json" },
-                        timeout: 15000,
-                    }
-                );
+                // The v2 crypto API takes the agent code as an "agentcode" header and
+                // only { data: <encrypted> } in the body (sending it in the body is
+                // no longer accepted there). The fiat Withdrawal Account API is a
+                // separate, older endpoint that still expects reqData/agentCode in
+                // the body, so only the crypto branch changes shape here.
+                const requestBody = isCrypto
+                    ? { data: encryptedReqData }
+                    : { reqData: encryptedReqData, agentCode: process.env.RAMEEPAY_AGENT_CODE };
+                const requestHeaders = isCrypto
+                    ? { "Content-Type": "application/json", agentcode: process.env.CRYPTO_AGENT_CODE }
+                    : { "Content-Type": "application/json" };
+
+                const { data } = await axios.post(endpoint, requestBody, {
+                    headers: requestHeaders,
+                    timeout: 15000,
+                });
 
                 const rawResponseData =
                     typeof data === "string"

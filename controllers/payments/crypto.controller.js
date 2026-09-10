@@ -9,7 +9,7 @@ const { sendSuccessEmail } = require("../payout.controller");
 const fetchRate = require("./fetchRate");
 
 const CRYPTO_AGENT_CODE = process.env.CRYPTO_AGENT_CODE;
-const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v1/order";
+const RAMEEPAY_Crypto_API = "https://crypto-apis.rameepay.io/v2/order";
 
 exports.handleCryptoDeposit = async (req, res) => {
   try {
@@ -49,15 +49,16 @@ exports.handleCryptoDeposit = async (req, res) => {
     const encryptedData = encryptDataCrypto(orderData);
     console.log("Encrypted Data:", encryptedData);
 
-    const body = {
-      data: encryptedData,
-      agentCode: CRYPTO_AGENT_CODE,
-    };
+    // RameePay's v2 crypto API takes only the encrypted payload in the body -
+    // the agent code goes in the "agentcode" header, not the body (sending it
+    // in the body is no longer accepted and the request would get rejected
+    // as Unauthorized).
+    const body = { data: encryptedData };
     console.log(body);
 
     // 5. Send to RameePay
     const { data } = await axios.post(RAMEEPAY_Crypto_API, body, {
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", agentcode: CRYPTO_AGENT_CODE },
     });
     console.log(data);
 
