@@ -293,14 +293,16 @@ exports.createPayoutRequest = async (req, res) => {
         // mobile (and rejects the request otherwise: '"Customer Mobile" is
         // not allowed to be empty'), but the withdrawal form doesn't collect
         // one. Fall back to the phone number already on file for this
-        // account's user instead of forcing a new required field.
-        let resolvedMobile = mobile;
-        let resolvedName = accountHolderName || name;
-        if (!resolvedMobile || !resolvedName) {
-            const ownerAccount = await Account.findOne({ accountNo }, null, { session }).populate("user");
-            resolvedMobile = resolvedMobile || ownerAccount?.user?.phone || "";
-            resolvedName = resolvedName || ownerAccount?.user?.fullName || "";
-        }
+        // account's user instead of forcing a new required field. Also the
+        // one reliable place to grab the account's actual userId - relying
+        // solely on accountNo (a bare string) meant the only way to find the
+        // requester's name was this same lookup done ad hoc wherever needed,
+        // so a proper relation is stored on the Withdrawal record itself
+        // below instead (see userId on the schema).
+        const ownerAccount = await Account.findOne({ accountNo }, null, { session }).populate("user");
+
+        let resolvedMobile = mobile || ownerAccount?.user?.phone || "";
+        let resolvedName = accountHolderName || name || ownerAccount?.user?.fullName || "";
         resolvedMobile = toRameeMobile(resolvedMobile);
 
         // Fail fast, before any MT5 balance is held, if RameePay would reject
@@ -342,6 +344,7 @@ exports.createPayoutRequest = async (req, res) => {
         const withdrawalRecord = new Withdrawal({
             orderid,
             accountNo,
+            userId: ownerAccount?.user?._id || undefined,
             currency,
             amount: numericAmount,
             amountUSD,

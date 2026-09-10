@@ -38,16 +38,32 @@ function parsePagination(req, defaultLimit) {
   return { page, limit, skip: (page - 1) * limit };
 }
 
+// Falls back to the withdrawal's linked user's registered name when its own
+// `name` snapshot is empty (older records predating the userId relation, or
+// a request the client submitted without one) - requires userId to have been
+// populated on the query first.
+function withResolvedName(withdrawal) {
+  const obj = withdrawal.toObject ? withdrawal.toObject() : withdrawal;
+  if (!obj.name && obj.userId?.fullName) {
+    obj.name = obj.userId.fullName;
+  }
+  return obj;
+}
+
 exports.listWithdrawals = async (req, res) => {
   try {
     const { page, limit, skip } = parsePagination(req, 15);
 
     const [withdrawals, total] = await Promise.all([
-      Withdrawal.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Withdrawal.find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("userId", "fullName email"),
       Withdrawal.countDocuments(),
     ]);
 
-    res.json({ success: true, data: withdrawals, total, page, limit });
+    res.json({ success: true, data: withdrawals.map(withResolvedName), total, page, limit });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -172,7 +188,11 @@ exports.listAllWithdrawals = async (req, res) => {
     const { page, limit, skip } = parsePagination(req, 10);
 
     const [withdrawals, total] = await Promise.all([
-      Withdrawal.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Withdrawal.find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("userId", "fullName email"),
       Withdrawal.countDocuments(),
     ]);
 
@@ -185,13 +205,15 @@ exports.listAllWithdrawals = async (req, res) => {
       });
     }
 
+    const resolvedWithdrawals = withdrawals.map(withResolvedName);
+
     res.status(200).json({
       success: true,
-      count: withdrawals.length,
+      count: resolvedWithdrawals.length,
       total,
       page,
       limit,
-      withdrawals,
+      withdrawals: resolvedWithdrawals,
     });
   } catch (err) {
     console.error("❌ Error fetching withdrawals:", err.message);

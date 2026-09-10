@@ -107,7 +107,7 @@ exports.registerUserWithMT5 = async (req, res) => {
       country: user.nationality || "",
       phone: req.mobile || user.phone,
       email: user.email,
-      leverage: 100,
+      leverage: process.env.MT5_LEVERAGE,
       pass_main: Password,
       pass_investor: investorPassword,
     };

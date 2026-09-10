@@ -1,5 +1,6 @@
 const { default: mongoose } = require("mongoose");
 const Withdrawal = require("../../models/withdrawal");
+const Account = require("../../models/account.model");
 const sendEmail = require("../../utils/sendEmail");
 const fetchRate = require("./fetchRate");
 const {
@@ -114,9 +115,15 @@ exports.handleManualPaymentRequest = async (req, res) => {
     const usdRate = await fetchRate();
     const amountUSD = (parseFloat(amount) * usdRate).toFixed(2);
 
+    // Proper relation to the account's actual user, not just the bare
+    // accountNo string - lets admin listings reliably show/join on the real
+    // requester instead of only the name typed into this form.
+    const ownerAccount = await Account.findOne({ accountNo }, null, { session }).populate("user");
+
     // 🔹 Save withdrawal record in Pending state
     const withdrawalRecord = new Withdrawal({
       orderid,
+      userId: ownerAccount?.user?._id || undefined,
       name,
       mobile,
       amount,
