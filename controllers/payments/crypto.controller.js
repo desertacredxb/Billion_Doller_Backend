@@ -86,11 +86,22 @@ exports.handleCryptoDeposit = async (req, res) => {
       decrypted: decryptedResponse,
     });
   } catch (err) {
-    console.error("❌ Deposit Error:", err.response?.data || err.message);
+    const rawApiError = err.response?.data || {};
+    let apiError = rawApiError;
+
+    // RameePay encrypts error bodies the same way as success ones - without
+    // decrypting, this would only log an opaque base64 blob instead of the
+    // real reason the gateway rejected the order.
+    if (rawApiError?.data) {
+      const decryptedError = decryptDataCrypto(rawApiError.data);
+      if (decryptedError) apiError = decryptedError;
+    }
+
+    console.error("❌ Deposit Error:", apiError || err.message);
     res.status(500).json({
       success: false,
       error: "ServerError",
-      message: err.message,
+      message: apiError.message || apiError.msg || err.message,
     });
   }
 };
