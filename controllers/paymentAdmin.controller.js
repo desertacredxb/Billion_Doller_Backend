@@ -29,12 +29,25 @@ exports.reconcileOrders = async (req, res) => {
   }
 };
 
+// Shared page/limit parsing for the admin list* endpoints below - clamps to
+// sane bounds so a bad/huge ?limit= can't force one query to pull the whole
+// collection.
+function parsePagination(req, defaultLimit) {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || defaultLimit));
+  return { page, limit, skip: (page - 1) * limit };
+}
+
 exports.listWithdrawals = async (req, res) => {
   try {
-    const withdrawals = await Withdrawal.find().sort({
-      createdAt: -1,
-    });
-    res.json({ success: true, data: withdrawals });
+    const { page, limit, skip } = parsePagination(req, 15);
+
+    const [withdrawals, total] = await Promise.all([
+      Withdrawal.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Withdrawal.countDocuments(),
+    ]);
+
+    res.json({ success: true, data: withdrawals, total, page, limit });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -99,18 +112,27 @@ exports.getWithdrawalsByAccount = async (req, res) => {
 
 exports.listAllDeposits = async (req, res) => {
   try {
-    const deposits = await Order.find()
-      .sort({ createdAt: -1 })
-      .populate({
-        path: "account",
-        select: "accountNo balance user", // pick only what you need
-        populate: {
-          path: "user",
-          select: "fullName email", // adjust based on your User schema
-        },
-      });
+    const { page, limit, skip } = parsePagination(req, 10);
 
-    if (!deposits || deposits.length === 0) {
+    const [deposits, total] = await Promise.all([
+      Order.find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate({
+          path: "account",
+          select: "accountNo balance user", // pick only what you need
+          populate: {
+            path: "user",
+            select: "fullName email", // adjust based on your User schema
+          },
+        }),
+      Order.countDocuments(),
+    ]);
+
+    // 404 only when the collection itself is empty - a page past the end of
+    // an otherwise non-empty result set is a normal empty page, not an error.
+    if (total === 0) {
       return res.status(404).json({
         success: false,
         message: "No deposits found",
@@ -134,6 +156,9 @@ exports.listAllDeposits = async (req, res) => {
     res.status(200).json({
       success: true,
       count: formatted.length,
+      total,
+      page,
+      limit,
       deposits: formatted,
     });
   } catch (err) {
@@ -144,12 +169,16 @@ exports.listAllDeposits = async (req, res) => {
 
 exports.listAllWithdrawals = async (req, res) => {
   try {
-    // Find all withdrawals, latest first
-    const withdrawals = await Withdrawal.find().sort({
-      createdAt: -1,
-    });
+    const { page, limit, skip } = parsePagination(req, 10);
 
-    if (!withdrawals || withdrawals.length === 0) {
+    const [withdrawals, total] = await Promise.all([
+      Withdrawal.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
+      Withdrawal.countDocuments(),
+    ]);
+
+    // 404 only when the collection itself is empty - a page past the end of
+    // an otherwise non-empty result set is a normal empty page, not an error.
+    if (total === 0) {
       return res.status(404).json({
         success: false,
         message: "No withdrawals found ",
@@ -159,6 +188,9 @@ exports.listAllWithdrawals = async (req, res) => {
     res.status(200).json({
       success: true,
       count: withdrawals.length,
+      total,
+      page,
+      limit,
       withdrawals,
     });
   } catch (err) {
