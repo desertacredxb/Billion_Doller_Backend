@@ -249,17 +249,25 @@ MT5Request.prototype.PostJSON = function (path, jsonBody, callback) {
 MT5Request.prototype.UserAdd = function (params, callback) {
   var self = this;
 
-  var queryParams = {
-    group: params.group,
-    name: params.name,
-    leverage: params.leverage,
-  };
-  if (params.login) queryParams.login = params.login;
-  if (params.country) queryParams.country = params.country;
-  if (params.phone) queryParams.phone = params.phone;
-  if (params.email) queryParams.email = params.email;
+  // Percent-encode manually (same approach as TradeBalance below) instead of
+  // URLSearchParams, which encodes spaces as "+" per the
+  // application/x-www-form-urlencoded convention - that's only correctly
+  // decoded back to a space by parsers that treat it as a form BODY. MT5's
+  // query-string parser doesn't: "Prince Gopal" was arriving as the literal
+  // string "Prince+Gopal", and since MT5 splits Name into
+  // FirstName/LastName/MiddleName on whitespace, finding no actual space it
+  // dumped the whole string into FirstName and left LastName/MiddleName empty.
+  var queryParams = [
+    "group=" + encodeURIComponent(params.group),
+    "name=" + encodeURIComponent(params.name),
+    "leverage=" + encodeURIComponent(params.leverage),
+  ];
+  if (params.login) queryParams.push("login=" + encodeURIComponent(params.login));
+  if (params.country) queryParams.push("country=" + encodeURIComponent(params.country));
+  if (params.phone) queryParams.push("phone=" + encodeURIComponent(params.phone));
+  if (params.email) queryParams.push("email=" + encodeURIComponent(params.email));
 
-  var qs = new URLSearchParams(queryParams).toString();
+  var qs = queryParams.join("&");
 
   var jsonBody = {
     PassMain: params.pass_main,
@@ -359,9 +367,9 @@ MT5Request.prototype.UserGet = function (login, callback) {
     return callback && callback("login is required");
   }
 
-  var qs = new URLSearchParams({
-    login: String(login),
-  }).toString();
+  // Kept consistent with UserAdd's manual percent-encoding above, even though
+  // a numeric login never actually needs it.
+  var qs = "login=" + encodeURIComponent(String(login));
 
   self.Get("/api/user/get?" + qs, function (error, res, body) {
     var answer = self.ParseBodyJSON(error, res, body, callback);
