@@ -380,6 +380,81 @@ MT5Request.prototype.UserGet = function (login, callback) {
   });
 };
 
+// --- Referral-system MT5 services (deal history + live account state) ---
+// Added to support the IB commission calculation, but NOT wired into
+// commissionService.js / ibController.js yet - path names here follow the
+// same convention as the calls above (UserGet -> /api/user/get, TradeBalance
+// -> /api/trade/balance) but are NOT yet confirmed against the live facade.
+// Verify with scripts/testMT5DealServices.js against a known login before
+// relying on these for real commission numbers.
+
+MT5Request.prototype.AccountGet = function (login, callback) {
+  var self = this;
+
+  if (!login) {
+    return callback && callback("login is required");
+  }
+
+  var qs = "login=" + encodeURIComponent(String(login));
+
+  self.Get("/api/user/account/get?" + qs, function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+MT5Request.prototype.DealGetTotal = function (params, callback) {
+  var self = this;
+
+  if (!params || !params.login || params.from === undefined || params.to === undefined) {
+    return callback && callback("Missing required parameters: 'login', 'from' and 'to' are required.");
+  }
+
+  var queryParams = [
+    "login=" + encodeURIComponent(String(params.login)),
+    "from=" + encodeURIComponent(params.from),
+    "to=" + encodeURIComponent(params.to),
+  ];
+
+  self.Get("/api/deal/get_total?" + queryParams.join("&"), function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+MT5Request.prototype.DealGetPage = function (params, callback) {
+  var self = this;
+
+  if (!params || !params.login || params.from === undefined || params.to === undefined) {
+    return callback && callback("Missing required parameters: 'login', 'from' and 'to' are required.");
+  }
+
+  var login = params.login;
+  var from = params.from;
+  var to = params.to;
+  var offset = params.offset !== undefined ? params.offset : 0;
+  var total = params.total !== undefined ? params.total : 1000;
+
+  var queryParams = [
+    "login=" + encodeURIComponent(String(login)),
+    "from=" + encodeURIComponent(from),
+    "to=" + encodeURIComponent(to),
+    "offset=" + encodeURIComponent(offset),
+    "total=" + encodeURIComponent(total),
+  ];
+
+  self.Get("/api/deal/get_page?" + queryParams.join("&"), function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
 MT5Request.prototype.UserPasswordChange = function (params, callback) {
   var self = this;
 

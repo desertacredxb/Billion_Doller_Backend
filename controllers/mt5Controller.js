@@ -7,6 +7,11 @@ const User = require("../models/User");
 // const { withSession } = require("../utils/mt5Session");
 const MT5Request = require("../utils/mt5Request");
 const { sendMT5AccountCreatedEmail } = require("../utils/Email");
+const {
+  getMT5Deals,
+  getMT5DealsTotal,
+  getMT5Account,
+} = require("../utils/MT5/mt5Deals");
 
 // const mt5 = new MT5Request(process.env.MT5_SERVER, 443); // e.g. 86.104.251.229
 
@@ -439,5 +444,139 @@ exports.updateUserMT5balance = async (req, res) => {
   } catch (error) {
     console.error("Error updating MT5 balance:", error);
     return handleMT5Error(error, res, "MT5_BALANCE_UPDATE_FAILED");
+  }
+};
+
+/**
+ * Referral-system MT5 services (deal history + live account state).
+ * NOT called by commissionService.js / ibController.js yet - these are
+ * standalone endpoints so the underlying calls can be verified and used
+ * for manual/admin lookups before anything depends on them for real
+ * commission numbers.
+ */
+
+/**
+ * Accept a normal date/time input from API callers (ISO string, "YYYY-MM-DD",
+ * a JS Date-parseable string, or a raw unix timestamp) and convert it to
+ * unix seconds - the format MT5's DEAL_GET_PAGE/DEAL_GET_TOTAL commands
+ * actually expect. Callers of these endpoints never need to think about
+ * MT5's wire format; this is the one place that conversion happens.
+ *
+ * @param {string} value
+ * @param {string} paramName - for error messages
+ * @returns {number} unix seconds
+ */
+function parseToUnixSeconds(value, paramName) {
+  // Try as a normal date/time string first (ISO, "YYYY-MM-DD", etc.)
+  const asDate = new Date(value);
+  if (!isNaN(asDate.getTime())) {
+    return Math.floor(asDate.getTime() / 1000);
+  }
+
+  // Fall back to a raw numeric timestamp, auto-detecting ms vs seconds.
+  const asNumber = Number(value);
+  if (!isNaN(asNumber) && value !== "") {
+    return asNumber > 1e12 ? Math.floor(asNumber / 1000) : Math.floor(asNumber);
+  }
+
+  throw new Error(
+    `Invalid ${paramName}: "${value}" - pass a normal date (e.g. "2025-01-01" or an ISO datetime) or a unix timestamp.`
+  );
+}
+
+/**
+ * Get a login's deal history, paginated, over a date range. from/to accept
+ * any normal date/time format (e.g. "2025-01-01", "2025-01-31T23:59:59Z").
+ */
+exports.getMT5DealsController = async (req, res) => {
+  const { login, from, to, offset, total } = req.query;
+
+  if (!login || !from || !to) {
+    return res.status(400).json({
+      success: false,
+      message: "login, from and to query params are required.",
+    });
+  }
+
+  let fromUnix, toUnix;
+  try {
+    fromUnix = parseToUnixSeconds(from, "from");
+    toUnix = parseToUnixSeconds(to, "to");
+  } catch (parseError) {
+    return res.status(400).json({ success: false, message: parseError.message });
+  }
+
+  try {
+    const deals = await getMT5Deals({
+      login,
+      from: fromUnix,
+      to: toUnix,
+      offset: offset !== undefined ? Number(offset) : 0,
+      total: total !== undefined ? Number(total) : 1000,
+    });
+
+    return res.status(200).json({ success: true, data: deals });
+  } catch (error) {
+    console.error("Error fetching MT5 deals:", error);
+    return handleMT5Error(error, res, "MT5_DEAL_GET_PAGE_FAILED");
+  }
+};
+
+/**
+ * Get the count of deals for a login in a date range - useful for paging
+ * getMT5DealsController when the number of trades isn't known upfront.
+ * from/to accept any normal date/time format, same as getMT5DealsController.
+ */
+exports.getMT5DealsTotalController = async (req, res) => {
+  const { login, from, to } = req.query;
+
+  if (!login || !from || !to) {
+    return res.status(400).json({
+      success: false,
+      message: "login, from and to query params are required.",
+    });
+  }
+
+  let fromUnix, toUnix;
+  try {
+    fromUnix = parseToUnixSeconds(from, "from");
+    toUnix = parseToUnixSeconds(to, "to");
+  } catch (parseError) {
+    return res.status(400).json({ success: false, message: parseError.message });
+  }
+
+  try {
+    const total = await getMT5DealsTotal({
+      login,
+      from: fromUnix,
+      to: toUnix,
+    });
+
+    return res.status(200).json({ success: true, data: total });
+  } catch (error) {
+    console.error("Error fetching MT5 deals total:", error);
+    return handleMT5Error(error, res, "MT5_DEAL_GET_TOTAL_FAILED");
+  }
+};
+
+/**
+ * Get a login's live account state (balance/margin/equity/...).
+ */
+exports.getMT5AccountController = async (req, res) => {
+  const { login } = req.query;
+
+  if (!login) {
+    return res.status(400).json({
+      success: false,
+      message: "login query param is required.",
+    });
+  }
+
+  try {
+    const account = await getMT5Account({ login });
+    return res.status(200).json({ success: true, data: account });
+  } catch (error) {
+    console.error("Error fetching MT5 account:", error);
+    return handleMT5Error(error, res, "MT5_ACCOUNT_GET_FAILED");
   }
 };

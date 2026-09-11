@@ -21,6 +21,15 @@ const userSchema = new mongoose.Schema(
 
     password: { type: String, required: true },
     referralCode: { type: String },
+    // Stable link to the referring IB, captured at signup time. Kept
+    // alongside referralCode (the raw string used) because referralCode
+    // alone can't survive the referring IB's code being rotated/revoked -
+    // this ObjectId keeps the relationship intact regardless.
+    referredByIB: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "IB",
+      default: null,
+    },
     isApprovedIB: { type: Boolean, default: false },
     commission: { type: Number, default: 0 }, // Total commission earned by IB
     lastWithdrawalDate: { type: Date, default: null },

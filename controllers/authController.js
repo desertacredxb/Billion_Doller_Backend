@@ -39,6 +39,27 @@ exports.register = async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
+    // Only attribute the signup to a referral code that actually belongs to a
+    // currently-approved IB. An invalid/typo'd/revoked code is dropped rather
+    // than blocking registration, so a bad referral link never locks a real
+    // customer out of signing up.
+    let validatedReferralCode = undefined;
+    let referredByIB = null;
+    if (referralCode) {
+      const referringIB = await IB.findOne({
+        referralCode,
+        status: "approved",
+      });
+      if (referringIB) {
+        validatedReferralCode = referralCode;
+        referredByIB = referringIB._id;
+      } else {
+        console.warn(
+          `⚠️ Registration with invalid/unapproved referral code "${referralCode}" for ${email} — proceeding without attribution`
+        );
+      }
+    }
+
     const user = new User({
       fullName,
       email,
@@ -47,7 +68,8 @@ exports.register = async (req, res) => {
       state,
       city,
       password: hashedPassword,
-      referralCode,
+      referralCode: validatedReferralCode,
+      referredByIB,
       otp,
       otpExpires,
     });

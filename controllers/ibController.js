@@ -123,6 +123,13 @@ const approveIBByEmail = async (req, res) => {
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
 
+    if (ib.status === "approved") {
+      return res.status(400).json({
+        message: "IB is already approved",
+        referralCode: ib.referralCode,
+      });
+    }
+
     // generate referral code
     const referralCode =
       "IB" + Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -178,14 +185,31 @@ const rejectIBByEmail = async (req, res) => {
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
 
+    if (ib.status === "rejected") {
+      return res.status(400).json({ message: "IB is already rejected" });
+    }
+
+    // If this IB was previously approved, rejection is a revocation: stop
+    // the referral code from matching new signups. Existing clients keep
+    // their historical User.referralCode for record-keeping - only the IB's
+    // outbound code and dashboard access are revoked.
+    const wasApproved = ib.status === "approved";
+
     ib.status = "rejected";
+    if (wasApproved) {
+      ib.referralCode = undefined;
+    }
     await ib.save();
+
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (wasApproved) {
+      user.isApprovedIB = false;
+    }
+    await user.save();
+
     // 🔹 Send rejection email
-    user.referralCode = "";
-    await User.save();
-    console.log(user.email);
     await sendEmail({
       to: user.email,
       subject: "Your Introducing Broker Application Rejected",
