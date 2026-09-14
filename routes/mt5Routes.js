@@ -9,7 +9,9 @@ const {
   getMT5DealsController,
   getMT5DealsTotalController,
   getMT5AccountController,
+  getMT5SymbolListController,
 } = require("../controllers/mt5Controller.js");
+const { receiveIbCommissionWebhook } = require("../controllers/mt5WebhookController.js");
 
 router.post("/register", registerUserWithMT5);
 router.get("/user", getMT5User);
@@ -21,5 +23,8 @@ router.post("/update_balance", updateUserMT5balance); // <--- Added endpoint
 router.get("/deals", getMT5DealsController); // ?login=&from=2025-01-01&to=2025-01-31&offset=&total= (from/to: any normal date/datetime, or a unix timestamp)
 router.get("/deals/total", getMT5DealsTotalController); // ?login=&from=2025-01-01&to=2025-01-31
 router.get("/account", getMT5AccountController); // ?login=
+router.get("/symbols", getMT5SymbolListController);
+
+router.post("/IbCommisionWebhook", receiveIbCommissionWebhook);
 
 module.exports = router;

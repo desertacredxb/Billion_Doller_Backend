@@ -382,11 +382,24 @@ MT5Request.prototype.UserGet = function (login, callback) {
 
 // --- Referral-system MT5 services (deal history + live account state) ---
 // Added to support the IB commission calculation, but NOT wired into
-// commissionService.js / ibController.js yet - path names here follow the
-// same convention as the calls above (UserGet -> /api/user/get, TradeBalance
-// -> /api/trade/balance) but are NOT yet confirmed against the live facade.
-// Verify with scripts/testMT5DealServices.js against a known login before
-// relying on these for real commission numbers.
+// commissionService.js / ibController.js yet. Paths confirmed working live:
+// AccountGet -> /api/user/account/get, DealGetTotal -> /api/deal/get_total,
+// DealGetPage -> /api/deal/get_page, SymbolList -> /api/symbol/list.
+
+// Returns the list of symbols available on the trading server - used to
+// resolve exactly how broker-side symbol names are formatted (e.g. the
+// "XAUUSD.lp" suffix seen on real deals), for the commission rate-table
+// lookup in commissionService.js.
+MT5Request.prototype.SymbolList = function (callback) {
+  var self = this;
+
+  self.Get("/api/symbol/list", function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
 
 MT5Request.prototype.AccountGet = function (login, callback) {
   var self = this;

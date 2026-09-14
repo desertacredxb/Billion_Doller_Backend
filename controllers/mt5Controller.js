@@ -12,6 +12,7 @@ const {
   getMT5DealsTotal,
   getMT5Account,
 } = require("../utils/MT5/mt5Deals");
+const { getMT5SymbolList } = require("../utils/MT5/mt5Symbols");
 
 // const mt5 = new MT5Request(process.env.MT5_SERVER, 443); // e.g. 86.104.251.229
 
@@ -578,5 +579,20 @@ exports.getMT5AccountController = async (req, res) => {
   } catch (error) {
     console.error("Error fetching MT5 account:", error);
     return handleMT5Error(error, res, "MT5_ACCOUNT_GET_FAILED");
+  }
+};
+
+/**
+ * Get the full list of symbols configured on the trading server - used to
+ * resolve real broker-side symbol naming (e.g. suffixes like ".lp") for the
+ * commission rate-table lookup.
+ */
+exports.getMT5SymbolListController = async (req, res) => {
+  try {
+    const symbols = await getMT5SymbolList();
+    return res.status(200).json({ success: true, data: symbols });
+  } catch (error) {
+    console.error("Error fetching MT5 symbol list:", error);
+    return handleMT5Error(error, res, "MT5_SYMBOL_LIST_FAILED");
   }
 };
