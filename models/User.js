@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const idProofSchema = require("./schemas/idProof.schema");
 
 const userSchema = new mongoose.Schema(
   {
@@ -60,10 +61,8 @@ const userSchema = new mongoose.Schema(
       default: "approved",
     },
 
-    identityFront: { type: String },
-    identityBack: { type: String },
-    addressProof: { type: String },
-    selfieProof: { type: String },
+    idProof1: { type: idProofSchema, default: () => ({}) },
+    idProof2: { type: idProofSchema, default: () => ({}) },
     hasSubmittedDocuments: { type: Boolean, default: false },
     isKycVerified: { type: Boolean, default: false },
 

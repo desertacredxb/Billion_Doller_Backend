@@ -65,6 +65,7 @@ exports.register = async (req, res) => {
       email,
       phone,
       nationality,
+      country: nationality || "",
       state,
       city,
       password: hashedPassword,
@@ -488,13 +489,7 @@ exports.getUserByEmail = async (req, res) => {
   const { email } = req.params;
 
   try {
-    const user = await User.findOneAndUpdate(
-      { email },
-      { $set: { isKycVerified: true } },
-      {
-        new: true,
-      }
-    )
+    const user = await User.findOne({ email })
       .select("-password -otp -otpExpires -resetOtp -resetOtpExpires")
       .populate("accounts"); // uses virtual populate
 
@@ -562,6 +557,12 @@ exports.updateUserProfile = async (req, res) => {
 exports.updateDocuments = async (req, res) => {
   try {
     const { email } = req.params;
+    const {
+      idProof1DocType,
+      idProof1DocNumber,
+      idProof2DocType,
+      idProof2DocNumber,
+    } = req.body;
 
     const user = await User.findOne({ email });
 
@@ -578,24 +579,52 @@ exports.updateDocuments = async (req, res) => {
       });
     }
 
-    const identityFront = req.files?.identityFront?.[0]?.path;
-    const identityBack = req.files?.identityBack?.[0]?.path;
-    const addressProof = req.files?.addressProof?.[0]?.path;
-    const selfieProof = req.files?.selfieProof?.[0]?.path;
+    const idProof1Image = req.files?.idProof1Image?.[0]?.path;
+    const idProof2Image = req.files?.idProof2Image?.[0]?.path;
 
-    const updateFields = {};
-    if (identityFront) updateFields.identityFront = identityFront;
-    if (identityBack) updateFields.identityBack = identityBack;
-    if (addressProof) updateFields.addressProof = addressProof;
-    if (selfieProof) updateFields.selfieProof = selfieProof;
-
-    if (Object.keys(updateFields).length === 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "No files uploaded" });
+    // ID proof 1 is mandatory — all three fields required together.
+    if (!idProof1DocType || !idProof1DocNumber || !idProof1Image) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ID Proof 1 is required: document type, document number, and image.",
+      });
     }
 
-    updateFields.hasSubmittedDocuments = true;
+    // ID proof 2 is optional, but if any field is supplied all three must be.
+    const idProof2Fields = [idProof2DocType, idProof2DocNumber, idProof2Image];
+    const idProof2Provided = idProof2Fields.some(Boolean);
+    if (idProof2Provided && !idProof2Fields.every(Boolean)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ID Proof 2 is optional, but if provided it needs a document type, document number, and image.",
+      });
+    }
+
+    const updateFields = {
+      idProof1: {
+        docType: idProof1DocType,
+        docNumber: idProof1DocNumber,
+        image: idProof1Image,
+      },
+      hasSubmittedDocuments: true,
+      // A now-removed bug used to force isKycVerified true on a plain GET,
+      // so some accounts already carry a stale true from before they ever
+      // submitted anything. Explicitly reset it to false on every fresh
+      // submission so a new upload always lands in "pending review" rather
+      // than inheriting that stale value - admin approval (verifyKyc) is
+      // what should flip this back to true.
+      isKycVerified: false,
+    };
+
+    if (idProof2Provided) {
+      updateFields.idProof2 = {
+        docType: idProof2DocType,
+        docNumber: idProof2DocNumber,
+        image: idProof2Image,
+      };
+    }
 
     const updatedUser = await User.findOneAndUpdate(
       { email },
