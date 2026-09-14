@@ -13,6 +13,7 @@ const {
   getMT5Account,
 } = require("../utils/MT5/mt5Deals");
 const { getMT5SymbolList } = require("../utils/MT5/mt5Symbols");
+const { parseToUnixSeconds } = require("../utils/parseToUnixSeconds");
 
 // const mt5 = new MT5Request(process.env.MT5_SERVER, 443); // e.g. 86.104.251.229
 
@@ -467,24 +468,6 @@ exports.updateUserMT5balance = async (req, res) => {
  * @param {string} paramName - for error messages
  * @returns {number} unix seconds
  */
-function parseToUnixSeconds(value, paramName) {
-  // Try as a normal date/time string first (ISO, "YYYY-MM-DD", etc.)
-  const asDate = new Date(value);
-  if (!isNaN(asDate.getTime())) {
-    return Math.floor(asDate.getTime() / 1000);
-  }
-
-  // Fall back to a raw numeric timestamp, auto-detecting ms vs seconds.
-  const asNumber = Number(value);
-  if (!isNaN(asNumber) && value !== "") {
-    return asNumber > 1e12 ? Math.floor(asNumber / 1000) : Math.floor(asNumber);
-  }
-
-  throw new Error(
-    `Invalid ${paramName}: "${value}" - pass a normal date (e.g. "2025-01-01" or an ISO datetime) or a unix timestamp.`
-  );
-}
-
 /**
  * Get a login's deal history, paginated, over a date range. from/to accept
  * any normal date/time format (e.g. "2025-01-01", "2025-01-31T23:59:59Z").

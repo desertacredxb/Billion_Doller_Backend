@@ -4,15 +4,27 @@
 // this is an inbound endpoint MT5's server calls.
 const Deal = require("../models/Deal.model");
 
+const normalizePayloadKeys = (obj = {}) => {
+  const normalized = {};
+  for (const key of Object.keys(obj)) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      normalized[key.toLowerCase()] = obj[key];
+    }
+  }
+  return normalized;
+};
+
 exports.receiveIbCommissionWebhook = async (req, res) => {
   try {
-    const body = req.body || {};
-    const { Login, Order } = body;
+    const rawBody = req.body || {};
+    // 1. Case normalization (handles Login, login, LOGIN, Order, order, etc.)
+    const body = normalizePayloadKeys(rawBody);
+    const { login, order } = body;
 
     // Login + Order (the deal ticket) are the minimum needed to store and
     // later dedup a row - reject anything missing them rather than storing
     // a record we can't attribute or safely re-ingest.
-    if (!Login || !Order) {
+    if (!login || !order) {
       console.error("MT5 webhook: missing Login or Order", body);
       return res.status(400).json({ success: false, message: "Login and Order are required" });
     }
@@ -21,22 +33,22 @@ exports.receiveIbCommissionWebhook = async (req, res) => {
     // webhook delivery (timeout on their end, etc.), this overwrites the
     // same row instead of creating a duplicate.
     await Deal.findOneAndUpdate(
-      { order: String(Order) },
+      { order: String(order) },
       {
-        login: String(Login),
-        order: String(Order),
-        action: body.Action !== undefined ? String(body.Action) : undefined,
-        entry: body.Entry !== undefined ? String(body.Entry) : undefined,
-        time: body.Time !== undefined ? String(body.Time) : undefined,
+        login: String(loginogin),
+        order: String(order),
+        action: body.action !== undefined ? String(body.action) : undefined,
+        entry: body.entry !== undefined ? String(body.entry) : undefined,
+        time: body.time !== undefined ? String(body.time) : undefined,
         expertPositionId:
-          body.ExpertPositionID !== undefined ? String(body.ExpertPositionID) : undefined,
-        symbol: body.Symbol !== undefined ? String(body.Symbol) : undefined,
-        price: body.Price !== undefined ? String(body.Price) : undefined,
-        volume: body.Volume !== undefined ? String(body.Volume) : undefined,
-        profit: body.Profit !== undefined ? String(body.Profit) : undefined,
+          body.expertpositionid !== undefined ? String(body.expertpositionid) : undefined,
+        symbol: body.symbol !== undefined ? String(body.symbol) : undefined,
+        price: body.price !== undefined ? String(body.price) : undefined,
+        volume: body.volume !== undefined ? String(body.volume) : undefined,
+        profit: body.profit !== undefined ? String(body.profit) : undefined,
         pricePosition:
-          body.PricePosition !== undefined ? String(body.PricePosition) : undefined,
-        group: body.Group !== undefined ? String(body.Group) : undefined,
+          body.priceposition !== undefined ? String(body.priceposition) : undefined,
+        group: body.group !== undefined ? String(body.group) : undefined,
         raw: body,
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
