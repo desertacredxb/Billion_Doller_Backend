@@ -53,7 +53,6 @@ const ticketRoutes = require("./routes/ticketRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const IBRoutes = require("./routes/IBRoutes");
 const mt5Routes = require("./routes/mt5Routes");
-const mt5WebhookRoutes = require("./routes/mt5WebhookRoutes");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
