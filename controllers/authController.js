@@ -769,6 +769,21 @@ exports.verifyKyc = async (req, res) => {
     const { email } = req.params;
     const { status } = req.body; // true = approve, false = reject
 
+    if (status) {
+      // Guard against re-creating the isKycVerified-without-documents state
+      // a past bug used to produce (see the comment in updateDocuments) -
+      // only allow approval once the user has actually submitted documents.
+      const existing = await User.findOne({ email });
+      if (!existing) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      if (!existing.hasSubmittedDocuments) {
+        return res.status(400).json({
+          message: "Cannot verify KYC: user has not submitted documents yet",
+        });
+      }
+    }
+
     const user = await User.findOneAndUpdate(
       { email },
       { isKycVerified: status },

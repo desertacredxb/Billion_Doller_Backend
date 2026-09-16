@@ -40,7 +40,7 @@ router.put("/update-profile/:email", updateUserProfile);
 
 router.put(
   "/documents/:email",
-  upload.fields([
+  upload.uploadKycDocuments([
     { name: "idProof1Image", maxCount: 1 },
     { name: "idProof2Image", maxCount: 1 },
   ]),
