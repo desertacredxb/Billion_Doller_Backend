@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const idProofSchema = require("./schemas/idProof.schema");
 
 const userSchema = new mongoose.Schema(
   {
@@ -21,6 +22,15 @@ const userSchema = new mongoose.Schema(
 
     password: { type: String, required: true },
     referralCode: { type: String },
+    // Stable link to the referring IB, captured at signup time. Kept
+    // alongside referralCode (the raw string used) because referralCode
+    // alone can't survive the referring IB's code being rotated/revoked -
+    // this ObjectId keeps the relationship intact regardless.
+    referredByIB: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "IB",
+      default: null,
+    },
     isApprovedIB: { type: Boolean, default: false },
     commission: { type: Number, default: 0 }, // Total commission earned by IB
     lastWithdrawalDate: { type: Date, default: null },
@@ -51,10 +61,8 @@ const userSchema = new mongoose.Schema(
       default: "approved",
     },
 
-    identityFront: { type: String },
-    identityBack: { type: String },
-    addressProof: { type: String },
-    selfieProof: { type: String },
+    idProof1: { type: idProofSchema, default: () => ({}) },
+    idProof2: { type: idProofSchema, default: () => ({}) },
     hasSubmittedDocuments: { type: Boolean, default: false },
     isKycVerified: { type: Boolean, default: false },
 

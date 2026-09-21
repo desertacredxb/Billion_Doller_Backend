@@ -7,6 +7,13 @@ const User = require("../models/User");
 // const { withSession } = require("../utils/mt5Session");
 const MT5Request = require("../utils/mt5Request");
 const { sendMT5AccountCreatedEmail } = require("../utils/Email");
+const {
+  getMT5Deals,
+  getMT5DealsTotal,
+  getMT5Account,
+} = require("../utils/MT5/mt5Deals");
+const { getMT5SymbolList } = require("../utils/MT5/mt5Symbols");
+const { parseToUnixSeconds } = require("../utils/parseToUnixSeconds");
 
 // const mt5 = new MT5Request(process.env.MT5_SERVER, 443); // e.g. 86.104.251.229
 
@@ -89,7 +96,7 @@ function runExclusive(fn) {
 
 exports.registerUserWithMT5 = async (req, res) => {
   const { email, curr, actype, Utype, Ref, Password } = req.body;
-  console.log(req.body)
+  // console.log(req.body)
   console.log("REGISTER HIT", new Date().toISOString(), email);
 
   try {
@@ -107,7 +114,7 @@ exports.registerUserWithMT5 = async (req, res) => {
       country: user.nationality || "",
       phone: req.mobile || user.phone,
       email: user.email,
-      leverage: 100,
+      leverage: process.env.MT5_LEVERAGE,
       pass_main: Password,
       pass_investor: investorPassword,
     };
@@ -161,6 +168,7 @@ exports.registerUserWithMT5 = async (req, res) => {
         userType: Utype,
         mt5Password: Password,
         mt5InvestorPassword: investorPassword,
+        leverage: process.env.MT5_LEVERAGE,
       });
     } catch (emailError) {
       // Don't fail account creation because email failed
@@ -287,7 +295,7 @@ exports.getMT5User = async (req, res) => {
     // Handle return format (answer container vs direct object)
     const userDetails = userData.answer || userData;
 
-    console.log("userDetails", userDetails)
+    // console.log("userDetails", userDetails)
 
     return res.status(200).json({
       success: true,
@@ -438,5 +446,136 @@ exports.updateUserMT5balance = async (req, res) => {
   } catch (error) {
     console.error("Error updating MT5 balance:", error);
     return handleMT5Error(error, res, "MT5_BALANCE_UPDATE_FAILED");
+  }
+};
+
+/**
+ * Referral-system MT5 services (deal history + live account state).
+ * NOT called by commissionService.js / ibController.js yet - these are
+ * standalone endpoints so the underlying calls can be verified and used
+ * for manual/admin lookups before anything depends on them for real
+ * commission numbers.
+ */
+
+/**
+ * Accept a normal date/time input from API callers (ISO string, "YYYY-MM-DD",
+ * a JS Date-parseable string, or a raw unix timestamp) and convert it to
+ * unix seconds - the format MT5's DEAL_GET_PAGE/DEAL_GET_TOTAL commands
+ * actually expect. Callers of these endpoints never need to think about
+ * MT5's wire format; this is the one place that conversion happens.
+ *
+ * @param {string} value
+ * @param {string} paramName - for error messages
+ * @returns {number} unix seconds
+ */
+/**
+ * Get a login's deal history, paginated, over a date range. from/to accept
+ * any normal date/time format (e.g. "2025-01-01", "2025-01-31T23:59:59Z").
+ */
+exports.getMT5DealsController = async (req, res) => {
+  const { login, from, to, offset, total } = req.query;
+
+  if (!login || !from || !to) {
+    return res.status(400).json({
+      success: false,
+      message: "login, from and to query params are required.",
+    });
+  }
+
+  let fromUnix, toUnix;
+  try {
+    fromUnix = parseToUnixSeconds(from, "from");
+    toUnix = parseToUnixSeconds(to, "to");
+  } catch (parseError) {
+    return res.status(400).json({ success: false, message: parseError.message });
+  }
+
+  try {
+    const deals = await getMT5Deals({
+      login,
+      from: fromUnix,
+      to: toUnix,
+      offset: offset !== undefined ? Number(offset) : 0,
+      total: total !== undefined ? Number(total) : 1000,
+    });
+
+    return res.status(200).json({ success: true, data: deals });
+  } catch (error) {
+    console.error("Error fetching MT5 deals:", error);
+    return handleMT5Error(error, res, "MT5_DEAL_GET_PAGE_FAILED");
+  }
+};
+
+/**
+ * Get the count of deals for a login in a date range - useful for paging
+ * getMT5DealsController when the number of trades isn't known upfront.
+ * from/to accept any normal date/time format, same as getMT5DealsController.
+ */
+exports.getMT5DealsTotalController = async (req, res) => {
+  const { login, from, to } = req.query;
+
+  if (!login || !from || !to) {
+    return res.status(400).json({
+      success: false,
+      message: "login, from and to query params are required.",
+    });
+  }
+
+  let fromUnix, toUnix;
+  try {
+    fromUnix = parseToUnixSeconds(from, "from");
+    toUnix = parseToUnixSeconds(to, "to");
+  } catch (parseError) {
+    return res.status(400).json({ success: false, message: parseError.message });
+  }
+
+  try {
+    const total = await getMT5DealsTotal({
+      login,
+      from: fromUnix,
+      to: toUnix,
+    });
+
+    return res.status(200).json({ success: true, data: total });
+  } catch (error) {
+    console.error("Error fetching MT5 deals total:", error);
+    return handleMT5Error(error, res, "MT5_DEAL_GET_TOTAL_FAILED");
+  }
+};
+
+/**
+ * Get a login's live account state (balance/margin/equity/...).
+ */
+exports.getMT5AccountController = async (req, res) => {
+  const { login } = req.query;
+
+  if (!login) {
+    return res.status(400).json({
+      success: false,
+      message: "login query param is required.",
+    });
+  }
+
+  try {
+    const account = await getMT5Account({ login });
+    return res.status(200).json({ success: true, data: account });
+  } catch (error) {
+    console.error("Error fetching MT5 account:", error);
+    return handleMT5Error(error, res, "MT5_ACCOUNT_GET_FAILED");
+  }
+};
+
+/**
+ * Get the full list of symbols configured on the trading server - used to
+ * resolve real broker-side symbol naming (e.g. suffixes like ".lp") for the
+ * commission rate-table lookup.
+ */
+exports.getMT5SymbolListController = async (req, res) => {
+  try {
+    const symbols = await getMT5SymbolList();
+    return res.status(200).json({ success: true, data: symbols });
+  } catch (error) {
+    console.error("Error fetching MT5 symbol list:", error);
+    return handleMT5Error(error, res, "MT5_SYMBOL_LIST_FAILED");
   }
 };

@@ -37,25 +37,51 @@ function decryptData(encryptedText) {
 // Crypto methods using AES-256-CBC with CRYPTO keys
 function encryptDataCrypto(data) {
   try {
-    const text = typeof data === "string" ? data : JSON.stringify(data);
-    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(CRYPTO_KEY), Buffer.from(CRYPTO_IV));
-    let encrypted = cipher.update(text, "utf8", "base64");
+    const iv = crypto.randomBytes(12); // ✔ must be 12 bytes
+    console.log(iv);
+    const jsonString = JSON.stringify(data);
+    console.log(jsonString);
+    const cipher = crypto.createCipheriv("aes-256-gcm", CRYPTO_KEY, iv);
+
+    let encrypted = cipher.update(jsonString, "utf8", "base64");
     encrypted += cipher.final("base64");
-    return encrypted;
+
+    const authTag = cipher.getAuthTag(); // 16 bytes
+
+    // 👇 RAMEE format:  IV + AuthTag + EncryptedData
+    const combined = Buffer.concat([
+      iv, // 12 bytes
+      authTag, // 16 bytes
+      Buffer.from(encrypted, "base64"), // encrypted payload
+    ]);
+
+    return combined.toString("base64");
   } catch (err) {
-    console.error("Crypto Encryption Error:", err.message);
+    console.error("Encryption error:", err);
     return false;
   }
 }
 
+// ------------------------------------------------------
+// 🔓 AES-256-GCM Decryption
+// ------------------------------------------------------
 function decryptDataCrypto(base64Data) {
   try {
-    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(CRYPTO_KEY), Buffer.from(CRYPTO_IV));
-    let decrypted = decipher.update(base64Data, "base64", "utf8");
+    const combined = Buffer.from(base64Data, "base64");
+
+    const iv = combined.slice(0, 12); // ✔ first 12 bytes
+    const authTag = combined.slice(12, 28); // ✔ next 16 bytes
+    const encryptedData = combined.slice(28);
+
+    const decipher = crypto.createDecipheriv("aes-256-gcm", CRYPTO_KEY, iv);
+    decipher.setAuthTag(authTag);
+
+    let decrypted = decipher.update(encryptedData, undefined, "utf8");
     decrypted += decipher.final("utf8");
+
     return JSON.parse(decrypted);
   } catch (err) {
-    console.error("Crypto Decryption Error:", err.message);
+    console.error("Decryption error:", err);
     return false;
   }
 }

@@ -37,12 +37,12 @@ MT5Request.prototype.Get = function (path, callback) {
     var respBody = "";
     res.on('data', function (chunk) { respBody += chunk; });
     res.on('end', function () {
-      console.log("MT5 GET RAW RESPONSE:", {
-        path: path,
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: respBody,
-      });
+      // console.log("MT5 GET RAW RESPONSE:", {
+      //   path: path,
+      //   statusCode: res.statusCode,
+      //   headers: res.headers,
+      //   body: respBody,
+      // });
       callback(null, res, respBody);
     });
   });
@@ -71,12 +71,12 @@ MT5Request.prototype.Post = function (path, body, callback) {
     var respBody = "";
     res.on('data', function (chunk) { respBody += chunk; });
     res.on('end', function () {
-      console.log("MT5 POST RAW RESPONSE:", {
-        path: path,
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: respBody,
-      });
+      // console.log("MT5 POST RAW RESPONSE:", {
+      //   path: path,
+      //   statusCode: res.statusCode,
+      //   headers: res.headers,
+      //   body: respBody,
+      // });
       callback(null, res, respBody);
     });
   });
@@ -227,14 +227,14 @@ MT5Request.prototype.PostJSON = function (path, jsonBody, callback) {
     var respBody = "";
     res.on('data', function (chunk) { respBody += chunk; });
     res.on('end', function () {
-      console.log("MT5 POST(JSON) RAW RESPONSE:", {
-        // req: req,
-        path: path,
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: respBody,
-        data: JSON.stringify(jsonBody),
-      });
+      // console.log("MT5 POST(JSON) RAW RESPONSE:", {
+      //   // req: req,
+      //   path: path,
+      //   statusCode: res.statusCode,
+      //   headers: res.headers,
+      //   body: respBody,
+      //   data: JSON.stringify(jsonBody),
+      // });
       callback(null, res, respBody);
     });
   });
@@ -249,17 +249,25 @@ MT5Request.prototype.PostJSON = function (path, jsonBody, callback) {
 MT5Request.prototype.UserAdd = function (params, callback) {
   var self = this;
 
-  var queryParams = {
-    group: params.group,
-    name: params.name,
-    leverage: params.leverage,
-  };
-  if (params.login) queryParams.login = params.login;
-  if (params.country) queryParams.country = params.country;
-  if (params.phone) queryParams.phone = params.phone;
-  if (params.email) queryParams.email = params.email;
+  // Percent-encode manually (same approach as TradeBalance below) instead of
+  // URLSearchParams, which encodes spaces as "+" per the
+  // application/x-www-form-urlencoded convention - that's only correctly
+  // decoded back to a space by parsers that treat it as a form BODY. MT5's
+  // query-string parser doesn't: "Prince Gopal" was arriving as the literal
+  // string "Prince+Gopal", and since MT5 splits Name into
+  // FirstName/LastName/MiddleName on whitespace, finding no actual space it
+  // dumped the whole string into FirstName and left LastName/MiddleName empty.
+  var queryParams = [
+    "group=" + encodeURIComponent(params.group),
+    "name=" + encodeURIComponent(params.name),
+    "leverage=" + encodeURIComponent(params.leverage),
+  ];
+  if (params.login) queryParams.push("login=" + encodeURIComponent(params.login));
+  if (params.country) queryParams.push("country=" + encodeURIComponent(params.country));
+  if (params.phone) queryParams.push("phone=" + encodeURIComponent(params.phone));
+  if (params.email) queryParams.push("email=" + encodeURIComponent(params.email));
 
-  var qs = new URLSearchParams(queryParams).toString();
+  var qs = queryParams.join("&");
 
   var jsonBody = {
     PassMain: params.pass_main,
@@ -359,13 +367,101 @@ MT5Request.prototype.UserGet = function (login, callback) {
     return callback && callback("login is required");
   }
 
-  var qs = new URLSearchParams({
-    login: String(login),
-  }).toString();
+  // Kept consistent with UserAdd's manual percent-encoding above, even though
+  // a numeric login never actually needs it.
+  var qs = "login=" + encodeURIComponent(String(login));
 
   self.Get("/api/user/get?" + qs, function (error, res, body) {
     var answer = self.ParseBodyJSON(error, res, body, callback);
 
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+// --- Referral-system MT5 services (deal history + live account state) ---
+// Added to support the IB commission calculation, but NOT wired into
+// commissionService.js / ibController.js yet. Paths confirmed working live:
+// AccountGet -> /api/user/account/get, DealGetTotal -> /api/deal/get_total,
+// DealGetPage -> /api/deal/get_page, SymbolList -> /api/symbol/list.
+
+// Returns the list of symbols available on the trading server - used to
+// resolve exactly how broker-side symbol names are formatted (e.g. the
+// "XAUUSD.lp" suffix seen on real deals), for the commission rate-table
+// lookup in commissionService.js.
+MT5Request.prototype.SymbolList = function (callback) {
+  var self = this;
+
+  self.Get("/api/symbol/list", function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+MT5Request.prototype.AccountGet = function (login, callback) {
+  var self = this;
+
+  if (!login) {
+    return callback && callback("login is required");
+  }
+
+  var qs = "login=" + encodeURIComponent(String(login));
+
+  self.Get("/api/user/account/get?" + qs, function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+MT5Request.prototype.DealGetTotal = function (params, callback) {
+  var self = this;
+
+  if (!params || !params.login || params.from === undefined || params.to === undefined) {
+    return callback && callback("Missing required parameters: 'login', 'from' and 'to' are required.");
+  }
+
+  var queryParams = [
+    "login=" + encodeURIComponent(String(params.login)),
+    "from=" + encodeURIComponent(params.from),
+    "to=" + encodeURIComponent(params.to),
+  ];
+
+  self.Get("/api/deal/get_total?" + queryParams.join("&"), function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
+    if (answer) {
+      callback && callback(null, answer);
+    }
+  });
+};
+
+MT5Request.prototype.DealGetPage = function (params, callback) {
+  var self = this;
+
+  if (!params || !params.login || params.from === undefined || params.to === undefined) {
+    return callback && callback("Missing required parameters: 'login', 'from' and 'to' are required.");
+  }
+
+  var login = params.login;
+  var from = params.from;
+  var to = params.to;
+  var offset = params.offset !== undefined ? params.offset : 0;
+  var total = params.total !== undefined ? params.total : 1000;
+
+  var queryParams = [
+    "login=" + encodeURIComponent(String(login)),
+    "from=" + encodeURIComponent(from),
+    "to=" + encodeURIComponent(to),
+    "offset=" + encodeURIComponent(offset),
+    "total=" + encodeURIComponent(total),
+  ];
+
+  self.Get("/api/deal/get_page?" + queryParams.join("&"), function (error, res, body) {
+    var answer = self.ParseBodyJSON(error, res, body, callback);
     if (answer) {
       callback && callback(null, answer);
     }

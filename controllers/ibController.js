@@ -3,6 +3,14 @@ const IB = require("../models/Broker.model");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const { calculateClientCommission } = require("../utils/commissionService");
+const {
+  calculateClientCommissionV2,
+  parseToUnixSeconds,
+} = require("../utils/commissionServiceV2");
+const {
+  calculateClientCommission: calculateClientCommissionV3,
+} = require("../utils/commissionServiceV3");
+const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const axios = require("axios");
 
 /**
@@ -123,6 +131,13 @@ const approveIBByEmail = async (req, res) => {
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
 
+    if (ib.status === "approved") {
+      return res.status(400).json({
+        message: "IB is already approved",
+        referralCode: ib.referralCode,
+      });
+    }
+
     // generate referral code
     const referralCode =
       "IB" + Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -178,14 +193,31 @@ const rejectIBByEmail = async (req, res) => {
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
 
+    if (ib.status === "rejected") {
+      return res.status(400).json({ message: "IB is already rejected" });
+    }
+
+    // If this IB was previously approved, rejection is a revocation: stop
+    // the referral code from matching new signups. Existing clients keep
+    // their historical User.referralCode for record-keeping - only the IB's
+    // outbound code and dashboard access are revoked.
+    const wasApproved = ib.status === "approved";
+
     ib.status = "rejected";
+    if (wasApproved) {
+      ib.referralCode = undefined;
+    }
     await ib.save();
+
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (wasApproved) {
+      user.isApprovedIB = false;
+    }
+    await user.save();
+
     // 🔹 Send rejection email
-    user.referralCode = "";
-    await User.save();
-    console.log(user.email);
     await sendEmail({
       to: user.email,
       subject: "Your Introducing Broker Application Rejected",
@@ -308,6 +340,159 @@ const updateIBCommission = async (req, res) => {
   }
 };
 
+/**
+ * MT5-based IB commission calculation (v2) - companion to
+ * updateIBCommission above, which is left untouched and still uses
+ * MoneyPlant. This version:
+ *  - resolves clients via the stable `referredByIB` ObjectId link instead
+ *    of a live referralCode string match, so it isn't affected by the
+ *    IB's code being rotated/revoked after clients were referred;
+ *  - pulls trade history from MT5 (utils/commissionServiceV2.js) instead
+ *    of MoneyPlant;
+ *  - is read-only: it reports a computed total but does NOT write to
+ *    User.commission, so it can be run side by side with the v1 flow for
+ *    comparison without risking the real commission ledger.
+ */
+const updateIBCommissionV2 = async (req, res) => {
+  const { email, sdate, edate } = req.body;
+
+  if (!email || !sdate || !edate) {
+    return res
+      .status(400)
+      .json({ success: false, message: "email, sdate, edate required" });
+  }
+
+  try {
+    const ibRecord = await IB.findOne({ email });
+    if (!ibRecord) {
+      return res
+        .status(404)
+        .json({ success: false, message: "IB record not found" });
+    }
+
+    let fromUnix, toUnix;
+    try {
+      fromUnix = parseToUnixSeconds(sdate, "sdate");
+      toUnix = parseToUnixSeconds(edate, "edate");
+    } catch (parseError) {
+      return res
+        .status(400)
+        .json({ success: false, message: parseError.message });
+    }
+
+    const clients = await User.find({ referredByIB: ibRecord._id }).populate(
+      "accounts"
+    );
+    console.log(`[v2] Found ${clients.length} clients for IB ${email}`);
+
+    let totalCommissionEarned = 0;
+    const breakdown = [];
+
+    for (const client of clients) {
+      if (!client.accounts || client.accounts.length === 0) continue;
+
+      for (const acc of client.accounts) {
+        const clientCommission = await calculateClientCommissionV2(
+          acc.accountNo,
+          fromUnix,
+          toUnix
+        );
+
+        if (clientCommission > 0) {
+          totalCommissionEarned += clientCommission;
+          breakdown.push({
+            clientEmail: client.email,
+            accountNo: acc.accountNo,
+            commission: clientCommission,
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message:
+        "IB commission calculated (v2, MT5-based) - not saved to User.commission",
+      totalCommission: totalCommissionEarned,
+      clientsChecked: clients.length,
+      breakdown,
+    });
+  } catch (err) {
+    console.error("Error calculating IB commission (v2):", err.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * MT5-webhook-based IB commission calculation (v3) - companion to
+ * updateIBCommission (v1, MoneyPlant) and updateIBCommissionV2 (v2, live
+ * MT5 DealGetPage calls) above, both left untouched. This version reads
+ * from the local `Deal` collection (utils/commissionServiceV3.js), which
+ * is populated by MT5's own server-side trade webhook
+ * (controllers/mt5WebhookController.js) instead of calling MT5 live for
+ * every request. Same as v2, this is read-only: it reports a computed
+ * total but does NOT write to User.commission.
+ */
+const updateIBCommissionV3 = async (req, res) => {
+  const { email, sdate, edate } = req.body;
+
+  if (!email || !sdate || !edate) {
+    return res
+      .status(400)
+      .json({ success: false, message: "email, sdate, edate required" });
+  }
+
+  try {
+    const ibRecord = await IB.findOne({ email });
+    if (!ibRecord) {
+      return res
+        .status(404)
+        .json({ success: false, message: "IB record not found" });
+    }
+
+    const clients = await User.find({ referredByIB: ibRecord._id }).populate(
+      "accounts"
+    );
+    console.log(`[v3] Found ${clients.length} clients for IB ${email}`);
+
+    let totalCommissionEarned = 0;
+    const breakdown = [];
+
+    for (const client of clients) {
+      if (!client.accounts || client.accounts.length === 0) continue;
+
+      for (const acc of client.accounts) {
+        const clientCommission = await calculateClientCommissionV3(
+          acc.accountNo,
+          sdate,
+          edate
+        );
+
+        if (clientCommission > 0) {
+          totalCommissionEarned += clientCommission;
+          breakdown.push({
+            clientEmail: client.email,
+            accountNo: acc.accountNo,
+            commission: clientCommission,
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message:
+        "IB commission calculated (v3, from locally stored MT5 deal webhooks) - not saved to User.commission",
+      totalCommission: Number(totalCommissionEarned.toFixed(2)),
+      clientsChecked: clients.length,
+      breakdown,
+    });
+  } catch (err) {
+    console.error("Error calculating IB commission (v3):", err.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 const withdrawCommission = async (req, res) => {
   try {
     const { email, accountno, amount } = req.body;
@@ -377,6 +562,130 @@ const withdrawCommission = async (req, res) => {
   }
 };
 
+/**
+ * MT5-based commission withdrawal (v2) - companion to withdrawCommission
+ * above, which is left completely untouched and still calls MoneyPlant.
+ * This version:
+ *  - credits the MT5 account via updateMT5Balance (utils/MT5/mt5Balance.js,
+ *    already used elsewhere for deposits) instead of calling MoneyPlant
+ *    directly;
+ *  - validates amount > 0 (v1 only checks amount > commission, so a
+ *    negative amount could pass and, if the payment API doesn't reject it
+ *    either, would increase the ledger via `commission -= amount`);
+ *  - reserves the withdrawal amount with an atomic, balance-guarded
+ *    decrement BEFORE calling MT5, instead of v1's read-then-subtract-
+ *    after. This is what actually closes the TOCTOU double-spend window:
+ *    two concurrent requests can no longer both read the same balance,
+ *    both pass validation, and both get paid out - only one can win the
+ *    atomic reservation. If the MT5 call then fails, the reservation is
+ *    rolled back so the ledger isn't left short for a payout that never
+ *    happened.
+ */
+const withdrawCommissionV2 = async (req, res) => {
+  try {
+    const { email, accountno, amount } = req.body;
+
+    if (!email || !accountno || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: "email, accountno and amount are required",
+      });
+    }
+
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "amount must be a positive number",
+      });
+    }
+
+    const orderid = "ORD" + Date.now();
+
+    // Eligibility check against the current balance - not itself the
+    // concurrency guard (the atomic reservation below is), just an early,
+    // friendly rejection for the common "not enough commission yet" case.
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    if (user.commission < 75) {
+      return res.status(400).json({
+        success: false,
+        message: "Minimum $75 commission required to withdraw",
+      });
+    }
+
+    if (numericAmount > user.commission) {
+      return res.status(400).json({
+        success: false,
+        message: "Withdrawal amount exceeds available commission",
+      });
+    }
+
+    // Atomically reserve the amount - only one concurrent request can
+    // succeed here even if both passed the check above against the same
+    // stale read.
+    const reservedUser = await User.findOneAndUpdate(
+      { email, commission: { $gte: numericAmount } },
+      { $inc: { commission: -numericAmount } },
+      { new: true }
+    );
+
+    if (!reservedUser) {
+      return res.status(400).json({
+        success: false,
+        message: "Withdrawal amount exceeds available commission",
+      });
+    }
+
+    let mt5Answer;
+    try {
+      mt5Answer = await updateMT5Balance({
+        login: accountno,
+        type: 2,
+        balance: numericAmount,
+        comment: `IB commission withdrawal ${orderid}`.substring(0, 31),
+      });
+    } catch (mt5Error) {
+      // Payout never happened - roll back the reservation.
+      await User.updateOne(
+        { email },
+        { $inc: { commission: numericAmount } }
+      );
+      console.error(
+        `MT5 balance update failed (v2 withdrawal), reservation rolled back for ${email} (orderid ${orderid}):`,
+        mt5Error
+      );
+      return res.status(502).json({
+        success: false,
+        message: "MT5 balance update failed, withdrawal was not processed",
+        error: typeof mt5Error === "string" ? mt5Error : mt5Error?.message,
+      });
+    }
+
+    const lastWithdrawalDate = new Date();
+    await User.updateOne({ email }, { $set: { lastWithdrawalDate } });
+
+    return res.status(200).json({
+      success: true,
+      message: "Withdrawal successful (v2, MT5-based)",
+      newCommission: reservedUser.commission,
+      lastWithdrawalDate,
+      mt5Ticket: mt5Answer?.ticket ?? null,
+    });
+  } catch (error) {
+    console.error("Commission withdrawal error (v2):", error.message || error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
 module.exports = {
   registerIB,
   getAllIBRequests,
@@ -384,5 +693,8 @@ module.exports = {
   rejectIBByEmail,
   referralCode,
   updateIBCommission,
+  updateIBCommissionV2,
+  updateIBCommissionV3,
   withdrawCommission,
+  withdrawCommissionV2,
 };

@@ -17,8 +17,7 @@ const ticketRoutes = require("./routes/ticketRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const IBRoutes = require("./routes/IBRoutes");
 const mt5Routes = require("./routes/mt5Routes");
-const aiRoutes = require("./routes/ai.routes");
-const { errorHandler } = require("./middleware/errorHandler");
+const dealRoutes = require("./routes/dealRoutes");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
@@ -41,6 +40,7 @@ const startServer = async () => {
   app.use("/api/brokers", brokerRoutes);
   app.use("/api/moneyplant", moneyplantRoutes);
   app.use("/api/mt5", mt5Routes);
+  app.use("/api/deals", dealRoutes);
   app.use("/api/tickets", ticketRoutes);
   app.use("/api/payment", paymentRoutes);
   app.use("/api/ib", IBRoutes);

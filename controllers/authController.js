@@ -4,6 +4,7 @@ const IB = require("../models/Broker.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../utils/sendEmail");
+const { sendPasswordResetOtpEmail } = require("../utils/Email");
 // const sendWhatsAppOTP = require("../utils/sendWhatsAppOTP");
 const axios = require("axios");
 
@@ -38,15 +39,38 @@ exports.register = async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
+    // Only attribute the signup to a referral code that actually belongs to a
+    // currently-approved IB. An invalid/typo'd/revoked code is dropped rather
+    // than blocking registration, so a bad referral link never locks a real
+    // customer out of signing up.
+    let validatedReferralCode = undefined;
+    let referredByIB = null;
+    if (referralCode) {
+      const referringIB = await IB.findOne({
+        referralCode,
+        status: "approved",
+      });
+      if (referringIB) {
+        validatedReferralCode = referralCode;
+        referredByIB = referringIB._id;
+      } else {
+        console.warn(
+          `⚠️ Registration with invalid/unapproved referral code "${referralCode}" for ${email} — proceeding without attribution`
+        );
+      }
+    }
+
     const user = new User({
       fullName,
       email,
       phone,
       nationality,
+      country: nationality || "",
       state,
       city,
       password: hashedPassword,
-      referralCode,
+      referralCode: validatedReferralCode,
+      referredByIB,
       otp,
       otpExpires,
     });
@@ -392,27 +416,10 @@ exports.requestPasswordReset = async (req, res) => {
     user.resetOtpExpires = otpExpires;
     await user.save();
 
-    await sendEmail({
-      to: email,
-      subject: "Password Reset Request - OTP Code",
-      html: `
-    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-      <h2 style="color: #2c3e50;">Password Reset Verification</h2>
-      <p>Dear ${user.fullName || "User"},</p>
-      <p>We received a request to reset the password for your account. To proceed, please use the One-Time Password (OTP) provided below:</p>
-      
-      <p style="font-size: 20px; font-weight: bold; color: #2c3e50; text-align: center; margin: 20px 0;">
-        ${otp}
-      </p>
-      
-      <p>This OTP is valid for <strong>5 minutes</strong>. Do not share this code with anyone for security purposes.</p>
-      
-      <p>If you did not request a password reset, please ignore this email. Your account remains secure.</p>
-      
-      <br/>
-      <p>Best Regards,<br/>The Support Team</p>
-    </div>
-  `,
+    await sendPasswordResetOtpEmail({
+      email,
+      name: user.fullName,
+      otp,
     });
 
     // Send WhatsApp
@@ -482,13 +489,7 @@ exports.getUserByEmail = async (req, res) => {
   const { email } = req.params;
 
   try {
-    const user = await User.findOneAndUpdate(
-      { email },
-      { $set: { isKycVerified: true } },
-      {
-        new: true,
-      }
-    )
+    const user = await User.findOne({ email })
       .select("-password -otp -otpExpires -resetOtp -resetOtpExpires")
       .populate("accounts"); // uses virtual populate
 
@@ -556,6 +557,12 @@ exports.updateUserProfile = async (req, res) => {
 exports.updateDocuments = async (req, res) => {
   try {
     const { email } = req.params;
+    const {
+      idProof1DocType,
+      idProof1DocNumber,
+      idProof2DocType,
+      idProof2DocNumber,
+    } = req.body;
 
     const user = await User.findOne({ email });
 
@@ -572,24 +579,52 @@ exports.updateDocuments = async (req, res) => {
       });
     }
 
-    const identityFront = req.files?.identityFront?.[0]?.path;
-    const identityBack = req.files?.identityBack?.[0]?.path;
-    const addressProof = req.files?.addressProof?.[0]?.path;
-    const selfieProof = req.files?.selfieProof?.[0]?.path;
+    const idProof1Image = req.files?.idProof1Image?.[0]?.path;
+    const idProof2Image = req.files?.idProof2Image?.[0]?.path;
 
-    const updateFields = {};
-    if (identityFront) updateFields.identityFront = identityFront;
-    if (identityBack) updateFields.identityBack = identityBack;
-    if (addressProof) updateFields.addressProof = addressProof;
-    if (selfieProof) updateFields.selfieProof = selfieProof;
-
-    if (Object.keys(updateFields).length === 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "No files uploaded" });
+    // ID proof 1 is mandatory — all three fields required together.
+    if (!idProof1DocType || !idProof1DocNumber || !idProof1Image) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ID Proof 1 is required: document type, document number, and image.",
+      });
     }
 
-    updateFields.hasSubmittedDocuments = true;
+    // ID proof 2 is optional, but if any field is supplied all three must be.
+    const idProof2Fields = [idProof2DocType, idProof2DocNumber, idProof2Image];
+    const idProof2Provided = idProof2Fields.some(Boolean);
+    if (idProof2Provided && !idProof2Fields.every(Boolean)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ID Proof 2 is optional, but if provided it needs a document type, document number, and image.",
+      });
+    }
+
+    const updateFields = {
+      idProof1: {
+        docType: idProof1DocType,
+        docNumber: idProof1DocNumber,
+        image: idProof1Image,
+      },
+      hasSubmittedDocuments: true,
+      // A now-removed bug used to force isKycVerified true on a plain GET,
+      // so some accounts already carry a stale true from before they ever
+      // submitted anything. Explicitly reset it to false on every fresh
+      // submission so a new upload always lands in "pending review" rather
+      // than inheriting that stale value - admin approval (verifyKyc) is
+      // what should flip this back to true.
+      isKycVerified: false,
+    };
+
+    if (idProof2Provided) {
+      updateFields.idProof2 = {
+        docType: idProof2DocType,
+        docNumber: idProof2DocNumber,
+        image: idProof2Image,
+      };
+    }
 
     const updatedUser = await User.findOneAndUpdate(
       { email },
@@ -733,6 +768,21 @@ exports.verifyKyc = async (req, res) => {
   try {
     const { email } = req.params;
     const { status } = req.body; // true = approve, false = reject
+
+    if (status) {
+      // Guard against re-creating the isKycVerified-without-documents state
+      // a past bug used to produce (see the comment in updateDocuments) -
+      // only allow approval once the user has actually submitted documents.
+      const existing = await User.findOne({ email });
+      if (!existing) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      if (!existing.hasSubmittedDocuments) {
+        return res.status(400).json({
+          message: "Cannot verify KYC: user has not submitted documents yet",
+        });
+      }
+    }
 
     const user = await User.findOneAndUpdate(
       { email },
