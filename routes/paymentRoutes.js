@@ -462,118 +462,6 @@ router.post("/trustpay24/deposit", async (req, res) => {
   }
 });
 
-router.post("/ramee/deposit", async (req, res) => {
-  try {
-    const { accountNo, amount } = req.body;
-
-    if (!accountNo || !amount) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing fields" });
-    }
-
-    // 1️⃣ Generate unique orderid
-    const orderid = "ORP" + Date.now();
-
-    // 2️⃣ Find account (to save reference)
-    const account = await Account.findOne({ accountNo });
-    if (!account) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Account not found" });
-    }
-
-    // 3️⃣ Save new order
-    const newOrder = new Order({
-      orderid,
-      account: account._id, // ✅ link to Account
-      accountNo: account.accountNo, // backup string
-      amount,
-      provider: "RAMEE",
-      merchantOrderId: orderid,
-      status: "PENDING", // default
-    });
-    await newOrder.save();
-
-    // 4️⃣ Prepare payload for RameePay (only orderid & amount required)
-    const orderData = { orderid, amount };
-
-    // Encrypt payload
-    const encryptedData = encryptData(orderData);
-    console.log("encryypted data", encryptedData)
-
-    const body = {
-      reqData: encryptedData,
-      agentCode: AGENT_CODE,
-    };
-
-    // //  5️⃣ Send to RameePay
-    // const res = await axios.post(RAMEEPAY_API, body, {
-    //   headers: { "Content-Type": "application/json" },
-    // });
-    // console.log("res", res);
-
-    // // 6️⃣Decrypt response if exists
-    // let decryptedResponse = {};
-    // if (data.data) {
-    //   decryptedResponse = decryptData(data.data);
-    //   console.log("✅ Decrypted Response:", decryptedResponse);
-    // }
-
-    // // 7️⃣ Return response to frontend
-    // res.json({
-    //   success: true,
-    //   message: "Order created & sent to RameePay",
-    //   order: {
-    //     orderid: newOrder.orderid,
-    //     amount: newOrder.amount,
-    //     status: newOrder.status,
-    //     createdAt: newOrder.createdAt,
-    //     accountNo: newOrder.accountNo,
-    //     name: account.user?.fullName || "Unknown", // ✅ now included
-    //   },
-    //   raw: data,
-    //   decrypted: decryptedResponse,
-    // });
-
-    //  5️⃣ Send to RameePay
-    const apiRes = await axios.post(RAMEEPAY_API, body, {
-      headers: { "Content-Type": "application/json" },
-    });
-    console.log("res", apiRes.data);
-
-    // 6️⃣ Decrypt response if exists
-    let decryptedResponse = {};
-    if (apiRes.data?.data) {
-      decryptedResponse = decryptData(apiRes.data.data);
-      console.log("✅ Decrypted Response:", decryptedResponse);
-    }
-
-    // 7️⃣ Return response to frontend
-    res.json({
-      success: true,
-      message: "Order created & sent to RameePay",
-      order: {
-        orderid: newOrder.orderid,
-        amount: newOrder.amount,
-        status: newOrder.status,
-        createdAt: newOrder.createdAt,
-        accountNo: newOrder.accountNo,
-        name: account.user?.fullName || "Unknown",
-      },
-      raw: apiRes.data,
-      decrypted: decryptedResponse,
-    });
-  } catch (err) {
-    console.error("❌ Deposit Error:", err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      error: "ServerError",
-      message: err.message,
-    });
-  }
-});
-
 router.post("/crypto/deposit", async (req, res) => {
   try {
     const { accountNo, amount } = req.body;
@@ -601,7 +489,6 @@ router.post("/crypto/deposit", async (req, res) => {
       account: account._id, // ✅ link to Account
       accountNo: account.accountNo, // backup string
       amount,
-      provider: "CRYPTO",
       status: "PENDING", // default
     });
     await newOrder.save();
@@ -656,7 +543,6 @@ router.post("/crypto/deposit", async (req, res) => {
     });
   }
 });
-
 exports.fetchRate = async () => {
   try {
     const res = await axios.get(
