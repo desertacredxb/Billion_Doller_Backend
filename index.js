@@ -1,4 +1,4 @@
-const dns = require("dns")
+const dns = require("dns");
 // Force Node to use public DNS instead of the broken localhost resolver
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 console.log("DNS Servers:", dns.getServers());
@@ -7,7 +7,6 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 require("dotenv").config();
-
 
 const connect = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
@@ -18,6 +17,7 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const IBRoutes = require("./routes/IBRoutes");
 const mt5Routes = require("./routes/mt5Routes");
 const dealRoutes = require("./routes/dealRoutes");
+const aiRoutes = require("./routes/ai.routes");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
@@ -44,10 +44,7 @@ const startServer = async () => {
   app.use("/api/tickets", ticketRoutes);
   app.use("/api/payment", paymentRoutes);
   app.use("/api/ib", IBRoutes);
-
   app.use("/api/ai", aiRoutes);
-
-  app.use(errorHandler);
 
   app.get("/", (req, res) => {
     res.send("I ..I...AM ...IRONMAN🫰");
