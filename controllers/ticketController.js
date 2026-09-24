@@ -3,6 +3,25 @@ const User = require("../models/User");
 const Message = require("../models/Reply");
 const sendEmail = require("../utils/sendEmail");
 
+// Ticket ownership is always resolved from the stored relation, never a
+// caller-provided email, viewer role or sender type.
+function canAccessTicket(req, res, ticket) {
+  if (!req.principal) {
+    res.status(401).json({ message: "Authentication required." });
+    return false;
+  }
+  if (!ticket) {
+    res.status(404).json({ message: "Ticket not found" });
+    return false;
+  }
+  const ownerId = String(ticket.user?._id || ticket.user || "");
+  if (!req.principal.isAdmin && ownerId !== req.principal.id) {
+    res.status(403).json({ message: "Access denied." });
+    return false;
+  }
+  return true;
+}
+
 // Create a new support ticket
 exports.createTicket = async (req, res) => {
   try {
@@ -103,12 +122,8 @@ exports.getTicketWithMessages = async (req, res) => {
       "fullName email"
     );
 
-    if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-
-    // Determine viewer role: prefer authenticated user role, fallback to query param
-    const viewer =
-      req.user && req.user.role ? req.user.role : req.query.viewer || "User";
-    const isAdminViewing = String(viewer).toLowerCase() === "admin";
+    if (!canAccessTicket(req, res, ticket)) return;
+    const isAdminViewing = req.principal.isAdmin;
 
     if (isAdminViewing) {
       // Admin is viewing -> mark user-sent messages as readByAdmin
@@ -160,10 +175,14 @@ exports.updateTicketStatus = async (req, res) => {
     const { ticketId } = req.params;
     const { status } = req.body;
 
+    if (!["Open", "Pending", "Closed"].includes(status)) {
+      return res.status(400).json({ message: "Invalid ticket status." });
+    }
+
     const updated = await Ticket.findByIdAndUpdate(
       ticketId,
       { status },
-      { new: true }
+      { new: true, runValidators: true }
     );
     if (!updated) return res.status(404).json({ message: "Ticket not found" });
 
@@ -196,10 +215,11 @@ exports.deleteTicket = async (req, res) => {
 exports.addMessageToTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    const { senderType, message, attachments } = req.body;
+    const { message, attachments } = req.body;
 
     const ticket = await Ticket.findById(ticketId);
-    if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+    if (!canAccessTicket(req, res, ticket)) return;
+    const senderType = req.principal.isAdmin ? "Admin" : "User";
 
     // New message with proper read flags
     const newMessageData = {
@@ -234,6 +254,8 @@ exports.addMessageToTicket = async (req, res) => {
 exports.getMessagesForTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
+    const ticket = await Ticket.findById(ticketId);
+    if (!canAccessTicket(req, res, ticket)) return;
 
     const messages = await Message.find({ ticket: ticketId }).sort({
       createdAt: 1,

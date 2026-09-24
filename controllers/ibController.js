@@ -13,13 +13,47 @@ const {
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const axios = require("axios");
 
+const getMyClients = async (req, res) => {
+  try {
+    if (!req.principal) return res.status(401).json({ message: 'Sign in to continue.' });
+    const ib = await IB.findOne({ email: req.principal.email, status: 'approved' });
+    if (!ib) return res.status(403).json({ message: 'An approved IB account is required.' });
+    const users = await User.find({ referredByIB: ib._id })
+      .select('_id fullName email country createdAt isKycVerified')
+      .populate({ path: 'accounts', select: 'accountNo user' })
+      .sort({ createdAt: -1 });
+    const clients = users.map(user => ({
+      _id: String(user._id), fullName: user.fullName, email: user.email,
+      country: user.country || null, createdAt: user.createdAt, isKycVerified: user.isKycVerified === true,
+      accounts: (user.accounts || []).map(account => ({ accountNo: account.accountNo })),
+      // These figures require a reconciled ledger. Absence is not a zero balance.
+      totalDeposit: null, totalWithdrawal: null, totalLots: null, totalCommission: null, symbolLots: null,
+    }));
+    return res.json({ clients });
+  } catch { return res.status(500).json({ message: 'Unable to load referred clients.' }); }
+};
+
+async function canWithdraw(req, res) {
+  if (!req.principal || !req.authorizedAccount || req.authorizedAccount.userId !== req.principal.id) {
+    res.status(403).json({ success: false, message: 'Withdrawals require your own trading account.' });
+    return false;
+  }
+  const ib = await IB.findOne({ email: req.principal.email, status: 'approved' });
+  if (!ib) {
+    res.status(403).json({ success: false, message: 'An approved IB account is required.' });
+    return false;
+  }
+  return true;
+}
+
 /**
  * 📌 Register IB Request (User Side)
  */
 const registerIB = async (req, res) => {
   try {
+    if (!req.user?.id) return res.status(401).json({ message: 'Sign in to apply as an IB.' });
     const {
-      email,
+      email: requestedEmail,
       existingClientBase,
       offerEducation,
       expectedClientsNext3Months,
@@ -29,11 +63,13 @@ const registerIB = async (req, res) => {
       clientShare,
     } = req.body;
 
-    // check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    // Derive the applicant from the signed session, never a submitted email.
+    const user = await User.findById(req.user.id);
+    if (!user || !user.isVerified ||
+        typeof requestedEmail !== 'string' || requestedEmail.toLowerCase() !== user.email.toLowerCase()) {
+      return res.status(403).json({ message: 'This account cannot submit this IB application.' });
     }
+    const email = user.email;
 
     // check if already requested
     const existingIB = await IB.findOne({ email });
@@ -52,7 +88,26 @@ const registerIB = async (req, res) => {
       clientShare,
     });
 
+    // Only a completed provider review can approve a new IB automatically.
+    if (process.env.BDFX_KYC_AUTOMATION_ENABLED === 'true' &&
+        process.env.BDFX_KYC_RELEASE_APPROVED === 'true' &&
+        process.env.SUMSUB_MODE === 'production' && process.env.SUMSUB_CLIENT_ID &&
+        process.env.SUMSUB_LEVEL_NAME && process.env.SUMSUB_LEVEL_NAME !== 'bdfx-kyc-sandbox' &&
+        user.isKycVerified && user.kycAutomation?.status === 'approved' &&
+        user.kycAutomation.provider === 'sumsub' && user.kycAutomation.reviewId &&
+        user.kycAutomation.processedAt) {
+      const crypto = require('node:crypto');
+      newIB.status = 'approved';
+      newIB.referralCode = `IB${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+    }
+
     await newIB.save();
+    if (newIB.status === 'approved') {
+      await User.updateOne({ _id: user._id }, { $set: { isApprovedIB: true } });
+      await sendEmail({ to: user.email, subject: 'Your BDFX IB application is approved',
+        text: `Your IB application is approved. Your referral code is ${newIB.referralCode}.` });
+      return res.status(201).json({ message: 'IB application approved', referralCode: newIB.referralCode });
+    }
 
     // ✅ Send email to admin
     await sendEmail({
@@ -497,6 +552,12 @@ const withdrawCommission = async (req, res) => {
   try {
     const { email, accountno, amount } = req.body;
 
+    if (!await canWithdraw(req, res)) return;
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+    }
+
     if (!email || !accountno || !amount) {
       return res.status(400).json({
         success: false,
@@ -504,7 +565,7 @@ const withdrawCommission = async (req, res) => {
       });
     }
 
-    orderid = "ORD" + Date.now();
+    const orderid = "ORD" + Date.now();
 
     // 🔹 Get the user
     const user = await User.findOne({ email });
@@ -522,7 +583,7 @@ const withdrawCommission = async (req, res) => {
       });
     }
 
-    if (amount > user.commission) {
+    if (numericAmount > user.commission) {
       return res.status(400).json({
         success: false,
         message: "Withdrawal amount exceeds available commission",
@@ -532,7 +593,7 @@ const withdrawCommission = async (req, res) => {
     // 🔹 Call MoneyPlant FX API to add balance
     const response = await axios.post(
       "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-      { accountno, amount, orderid },
+      { accountno, amount: numericAmount, orderid },
       { headers: { "Content-Type": "application/json" } }
     );
 
@@ -540,7 +601,7 @@ const withdrawCommission = async (req, res) => {
 
     if (status === "success") {
       // 🔹 Deduct commission and save withdrawal date
-      user.commission -= amount;
+      user.commission -= numericAmount;
       user.lastWithdrawalDate = new Date();
       await user.save();
 
@@ -584,6 +645,8 @@ const withdrawCommission = async (req, res) => {
 const withdrawCommissionV2 = async (req, res) => {
   try {
     const { email, accountno, amount } = req.body;
+
+    if (!await canWithdraw(req, res)) return;
 
     if (!email || !accountno || !amount) {
       return res.status(400).json({
@@ -687,6 +750,7 @@ const withdrawCommissionV2 = async (req, res) => {
 };
 
 module.exports = {
+  getMyClients,
   registerIB,
   getAllIBRequests,
   approveIBByEmail,

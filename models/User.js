@@ -20,7 +20,7 @@ const userSchema = new mongoose.Schema(
     postalCode: { type: String },
     profileImage: { type: String }, // Path or URL
 
-    password: { type: String, required: true },
+    password: { type: String, required: true, select: false },
     referralCode: { type: String },
     // Stable link to the referring IB, captured at signup time. Kept
     // alongside referralCode (the raw string used) because referralCode
@@ -34,11 +34,11 @@ const userSchema = new mongoose.Schema(
     isApprovedIB: { type: Boolean, default: false },
     commission: { type: Number, default: 0 }, // Total commission earned by IB
     lastWithdrawalDate: { type: Date, default: null },
-    otp: { type: String, default: null },
-    otpExpires: { type: Date, default: null },
+    otp: { type: String, default: null, select: false },
+    otpExpires: { type: Date, default: null, select: false },
     isVerified: { type: Boolean, default: false },
-    resetOtp: { type: String, default: null },
-    resetOtpExpires: { type: Date, default: null },
+    resetOtp: { type: String, default: null, select: false },
+    resetOtpExpires: { type: Date, default: null, select: false },
 
     accountHolderName: { type: String },
     accountNumber: { type: String },
@@ -65,6 +65,18 @@ const userSchema = new mongoose.Schema(
     idProof2: { type: idProofSchema, default: () => ({}) },
     hasSubmittedDocuments: { type: Boolean, default: false },
     isKycVerified: { type: Boolean, default: false },
+    kycAutomation: {
+      status: { type: String, enum: ["not_started", "pending", "action_required", "approved", "rejected"], default: "not_started" },
+      reason: String,
+      provider: String,
+      applicantId: String,
+      intakeKey: String,
+      submittedAt: Date,
+      reviewId: String,
+      reviewKey: String,
+      reviewedAt: Date,
+      processedAt: Date,
+    },
 
     createdAt: { type: Date, default: Date.now },
   },
@@ -78,9 +90,19 @@ userSchema.virtual("accounts", {
   foreignField: "user",
 });
 
-// Ensure virtuals are included
-userSchema.set("toObject", { virtuals: true });
-userSchema.set("toJSON", { virtuals: true });
+const SECRET_FIELDS = new Set(['password', 'otp', 'otpExpires', 'resetOtp', 'resetOtpExpires',
+  'moneyPlantPassword', 'mt5Password', 'mt5InvestorPassword']);
+function redact(value) {
+  if (Array.isArray(value)) return value.map(redact);
+  if (!value || typeof value !== 'object' || value instanceof Date || value._bsontype || Buffer.isBuffer(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !SECRET_FIELDS.has(key))
+    .map(([key, item]) => [key, redact(item)]));
+}
+const transform = (document, returned) => redact(returned);
+userSchema.set('toObject', { virtuals: true, transform });
+userSchema.set('toJSON', { virtuals: true, transform });
+// Also use this at response boundaries for projected/plain/lean records.
+userSchema.statics.toSafeObject = value => redact(typeof value?.toObject === 'function' ? value.toObject() : value);
 
 // Auto-expire unverified accounts after 5 minutes (for example)
 userSchema.index(

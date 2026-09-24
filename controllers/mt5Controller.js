@@ -122,10 +122,6 @@ exports.registerUserWithMT5 = async (req, res) => {
     const mt5Data = await runExclusive(async () => {
       const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
 
-      console.log(process.env.MT5_MANAGER_LOGIN,
-        process.env.MT5_MANAGER_PASSWORD,
-        process.env.MT5_BUILD,);
-
       await new Promise((resolve, reject) => {
         mt5.Auth(
           process.env.MT5_MANAGER_LOGIN,

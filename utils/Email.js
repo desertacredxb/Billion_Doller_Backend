@@ -140,7 +140,7 @@ const sendMT5AccountCreatedEmail = async ({
                   If you require any assistance with your account or platform setup,
                   please contact our support team at
                   <a href="mailto:info@billiondollarfx.com" style="color: #927948; text-decoration: none;">info@billiondollarfx.com</a>
-                  or WhatsApp us at +971 509818742 / +447593611999.
+                  or WhatsApp us at +44 115 791 1131.
                 </p>
                 <p style="margin: 20px 0 0;">
                   We wish you a successful trading journey with Billion Dollar FX.
@@ -158,7 +158,7 @@ const sendMT5AccountCreatedEmail = async ({
                   &nbsp;|&nbsp;
                   <a href="mailto:info@billiondollarfx.com" style="color: #927948; text-decoration: none;">info@billiondollarfx.com</a>
                   &nbsp;|&nbsp;
-                  +447593611999
+                  +44 115 791 1131
                 </p>
               </td>
             </tr>
@@ -243,7 +243,7 @@ const sendPasswordResetOtpEmail = async ({ email, name, otp }) => {
                   &nbsp;|&nbsp;
                   <a href="mailto:info@billiondollarfx.com" style="color: #927948; text-decoration: none;">info@billiondollarfx.com</a>
                   &nbsp;|&nbsp;
-                  +971 509818742 / +447593611999
+                  +44 115 791 1131
                 </p>
               </td>
             </tr>

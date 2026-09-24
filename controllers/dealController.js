@@ -3,7 +3,20 @@
 // live MT5_Controller "/deals" endpoints, which call the MT5 server
 // directly on every request - these just query what's already stored.
 const Deal = require("../models/Deal.model");
+const Account = require("../models/account.model");
 const { parseToUnixSeconds } = require("../utils/parseToUnixSeconds");
+
+function validLogin(login) {
+  return typeof login === "string" && /^[1-9]\d*$/.test(login) &&
+    Number.isSafeInteger(Number(login));
+}
+
+async function ownsLogin(principal, login) {
+  if (!validLogin(login)) return false;
+  return Boolean(await Account.findOne({
+    accountNo: Number(login), user: principal.id,
+  }).select("_id"));
+}
 
 /**
  * List stored deals, optionally filtered by login and a [from, to] time
@@ -12,7 +25,20 @@ const { parseToUnixSeconds } = require("../utils/parseToUnixSeconds");
  * same as the live MT5 deal endpoints.
  */
 exports.getDealsController = async (req, res) => {
+  if (!req.principal) {
+    return res.status(401).json({ success: false, message: "Authentication required." });
+  }
   const { login, from, to, page, limit } = req.query;
+
+  if (login !== undefined && !validLogin(login)) {
+    return res.status(400).json({ success: false, message: "login must be a valid account number." });
+  }
+  if (!req.principal.isAdmin && login === undefined) {
+    return res.status(400).json({ success: false, message: "login is required." });
+  }
+  if ([page, limit, from, to].some(value => value !== undefined && typeof value !== "string")) {
+    return res.status(400).json({ success: false, message: "Query parameters must be single values." });
+  }
 
   const pageNum = page !== undefined ? Number(page) : 1;
   const limitNum = limit !== undefined ? Number(limit) : 50;
@@ -34,6 +60,9 @@ exports.getDealsController = async (req, res) => {
       const timeMatch = {};
       if (from !== undefined) timeMatch.$gte = parseToUnixSeconds(from, "from");
       if (to !== undefined) timeMatch.$lte = parseToUnixSeconds(to, "to");
+      if (from !== undefined && to !== undefined && timeMatch.$gte > timeMatch.$lte) {
+        return res.status(400).json({ success: false, message: "from must not be later than to." });
+      }
       match.timeNum = timeMatch;
     } catch (parseError) {
       return res.status(400).json({ success: false, message: parseError.message });
@@ -41,6 +70,9 @@ exports.getDealsController = async (req, res) => {
   }
 
   try {
+    if (!req.principal.isAdmin && !(await ownsLogin(req.principal, login))) {
+      return res.status(403).json({ success: false, message: "Access denied." });
+    }
     const pipeline = [
       { $addFields: { timeNum: { $convert: { input: "$time", to: "long", onError: null, onNull: null } } } },
       { $match: match },
@@ -72,16 +104,22 @@ exports.getDealsController = async (req, res) => {
  * Get a single stored deal by its MT5 deal ticket (#DEAL_TICKET# / Order).
  */
 exports.getDealByOrderController = async (req, res) => {
+  if (!req.principal) {
+    return res.status(401).json({ success: false, message: "Authentication required." });
+  }
   const { order } = req.params;
 
-  if (!order) {
-    return res.status(400).json({ success: false, message: "order is required." });
+  if (typeof order !== "string" || !/^[1-9]\d{0,19}$/.test(order)) {
+    return res.status(400).json({ success: false, message: "order must be a valid deal ticket." });
   }
 
   try {
     const deal = await Deal.findOne({ order: String(order) });
 
     if (!deal) {
+      return res.status(404).json({ success: false, message: "Deal not found." });
+    }
+    if (!req.principal.isAdmin && !(await ownsLogin(req.principal, deal.login))) {
       return res.status(404).json({ success: false, message: "Deal not found." });
     }
 
