@@ -1,13 +1,13 @@
 const mongoose = require("mongoose");
 
-// Reusable KYC document sub-schema — one ID proof is { docType, docNumber, image }.
-// Embedded twice on User (idProof1 required, idProof2 optional) instead of being
-// inlined field-by-field on the main schema.
+// One government ID, with an optional back photo of that same document.
 const idProofSchema = new mongoose.Schema(
   {
     docType: { type: String, default: null },
     docNumber: { type: String, default: null },
+    issuingCountry: { type: String, default: null },
     image: { type: String, default: null },
+    backImage: { type: String, default: null },
   },
   { _id: false }
 );

@@ -65,6 +65,18 @@ const userSchema = new mongoose.Schema(
     idProof2: { type: idProofSchema, default: () => ({}) },
     hasSubmittedDocuments: { type: Boolean, default: false },
     isKycVerified: { type: Boolean, default: false },
+    kycAutomation: {
+      status: { type: String, enum: ["not_started", "pending", "action_required", "approved", "rejected"], default: "not_started" },
+      reason: String,
+      provider: String,
+      applicantId: String,
+      intakeKey: String,
+      submittedAt: Date,
+      reviewId: String,
+      reviewKey: String,
+      reviewedAt: Date,
+      processedAt: Date,
+    },
 
     createdAt: { type: Date, default: Date.now },
   },

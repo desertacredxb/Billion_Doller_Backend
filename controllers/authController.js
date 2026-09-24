@@ -3,10 +3,14 @@ const Account = require("../models/account.model");
 const IB = require("../models/Broker.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const mongoose = require('mongoose');
 const sendEmail = require("../utils/sendEmail");
 const { sendPasswordResetOtpEmail } = require("../utils/Email");
 // const sendWhatsAppOTP = require("../utils/sendWhatsAppOTP");
 const axios = require("axios");
+const { normalizePhone } = require('../utils/phone');
+const { normalizeCountry } = require('../utils/kycCountries');
+const { notify: notifyKyc } = require('./sumsubController');
 
 exports.register = async (req, res) => {
   const {
@@ -21,6 +25,11 @@ exports.register = async (req, res) => {
   } = req.body;
 
   try {
+    if (normalizeCountry(nationality) === 'ARE') {
+      return res.status(403).json({ message: "We don't accept clients from the UAE." });
+    }
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone) return res.status(400).json({ message: 'Enter a valid international phone number.' });
     // 🔍 Check email
     const existingEmail = await User.findOne({ email });
     if (existingEmail) {
@@ -28,7 +37,7 @@ exports.register = async (req, res) => {
     }
 
     // 🔍 Check phone
-    const existingPhone = await User.findOne({ phone });
+    const existingPhone = await User.findOne({ phone: normalizedPhone });
     if (existingPhone) {
       return res
         .status(400)
@@ -36,8 +45,8 @@ exports.register = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
+    const otp = require('node:crypto').randomInt(100000, 1000000).toString();
+    const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
 
     // Only attribute the signup to a referral code that actually belongs to a
     // currently-approved IB. An invalid/typo'd/revoked code is dropped rather
@@ -63,7 +72,7 @@ exports.register = async (req, res) => {
     const user = new User({
       fullName,
       email,
-      phone,
+      phone: normalizedPhone,
       nationality,
       country: nationality || "",
       state,
@@ -84,23 +93,17 @@ exports.register = async (req, res) => {
     <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
       <h2 style="color: #2c3e50;">Email Verification Required</h2>
       <p>Dear ${fullName || "User"},</p>
-      <p>Thank you for registering with us. To complete your sign-up, please use the One-Time Password (OTP) below to verify your email address:</p>
+      <p>Use this one-time code to verify your email address and complete registration:</p>
+      <p style="font-size: 20px; font-weight: bold; text-align: center;">${otp}</p>
+      <p>This code is valid for <strong>5 minutes</strong>. Please do not share it.</p>
       
-      <p style="font-size: 20px; font-weight: bold; color: #2c3e50; text-align: center; margin: 20px 0;">
-        ${otp}
-      </p>
-      
-      <p>This OTP is valid for <strong>5 minutes</strong>. Please do not share this code with anyone for security reasons.</p>
-      
-      <p>If you did not initiate this request, you can safely ignore this email.</p>
+      <p>If you did not create this account, please contact support.</p>
       
       <br/>
       <p>Best Regards,<br/>The Support Team</p>
     </div>
   `,
     });
-
-    // await sendWhatsAppOTP(phone, otp);
 
     res.status(200).json({ message: "OTP sent to email" });
   } catch (err) {
@@ -131,7 +134,7 @@ exports.verifyOTP = async (req, res) => {
 
     await user.save();
 
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
     await sendEmail({
@@ -534,13 +537,29 @@ exports.uploadProfileImage = async (req, res) => {
 
 exports.updateUserProfile = async (req, res) => {
   try {
-    const { email } = req.params;
-    const updateFields = req.body;
+    if (!req.user?.id) return res.status(401).json({ message: 'Sign in to update your profile.' });
+    const account = await User.findById(req.user.id);
+    if (!account || account.email.toLowerCase() !== String(req.params.email || '').toLowerCase()) {
+      return res.status(403).json({ message: 'This account cannot update another user profile.' });
+    }
+
+    // Identity, approval, credentials, banking and referral fields have separate workflows.
+    const allowedFields = new Set(['fullName', 'phone', 'gender', 'accountType', 'address', 'state', 'city', 'postalCode']);
+    if (!req.body || Array.isArray(req.body) || typeof req.body !== 'object' ||
+        Object.keys(req.body).length === 0 ||
+        Object.keys(req.body).some(key => !allowedFields.has(key) || typeof req.body[key] !== 'string')) {
+      return res.status(400).json({ message: 'Only editable profile fields may be updated.' });
+    }
+    const updateFields = Object.fromEntries(Object.entries(req.body).map(([key, value]) => [key, value.trim()]));
+    if (Object.hasOwn(updateFields, 'phone')) {
+      updateFields.phone = normalizePhone(updateFields.phone);
+      if (!updateFields.phone) return res.status(400).json({ message: 'Enter a valid international phone number.' });
+    }
 
     const user = await User.findOneAndUpdate(
-      { email },
+      { _id: account._id },
       { $set: updateFields },
-      { new: true },
+      { new: true, runValidators: true },
     );
 
     if (!user) {
@@ -560,6 +579,7 @@ exports.updateDocuments = async (req, res) => {
     const {
       idProof1DocType,
       idProof1DocNumber,
+      idProof1IssuingCountry,
       idProof2DocType,
       idProof2DocNumber,
     } = req.body;
@@ -572,15 +592,75 @@ exports.updateDocuments = async (req, res) => {
         .json({ success: false, message: "User not found." });
     }
 
+    const automationEnabled = process.env.BDFX_KYC_AUTOMATION_ENABLED === 'true';
+    const queueAcceptedDocuments = async (acceptedUser) => {
+      try {
+        await require('../services/kycIntake').queueKycIntake(acceptedUser);
+        return res.status(202).json({ success: true, message: 'Documents saved. Verification queued.',
+          verificationStatus: 'pending', user: acceptedUser });
+      } catch (error) {
+        console.error('Could not queue saved KYC documents:', error.message);
+        return res.status(503).json({ success: false,
+          message: 'Your documents were saved, but verification could not be queued. Please retry.',
+          retryable: true });
+      }
+    };
+
+    if (automationEnabled && ['pending', 'approved', 'rejected'].includes(user.kycAutomation?.status)) {
+      return res.status(409).json({ success: false, message: 'Documents cannot be replaced during or after a completed review.' });
+    }
     if (user.hasSubmittedDocuments) {
-      return res.status(400).json({
-        success: false,
-        message: "Documents already submitted. Resubmission is not allowed.",
-      });
+      // A failed durable enqueue may be retried using the already accepted document.
+      if (automationEnabled && user.kycAutomation?.status === 'not_started') return queueAcceptedDocuments(user);
+      if (!(automationEnabled && user.kycAutomation?.status === 'action_required')) {
+        return res.status(400).json({ success: false, message: 'Documents already submitted. Resubmission is not allowed.' });
+      }
+    }
+
+    const country = String(idProof1IssuingCountry || '').trim();
+    if ([country, user.nationality, user.country].some(value => normalizeCountry(value) === 'ARE')) {
+      if (process.env.BDFX_KYC_AUTOMATION_ENABLED === 'true' &&
+          user.kycAutomation?.status !== 'rejected') {
+        const reason = "We don't accept clients from the UAE.";
+        const eventKey = `intake-uae:${user._id}:${reason}`;
+        const reviewedAt = new Date();
+        try {
+          const rejectedUser = await mongoose.connection.transaction(async session => {
+            const updated = await User.findOneAndUpdate({ _id: user._id,
+              'kycAutomation.status': { $nin: ['pending', 'approved', 'rejected'] } }, { $set: {
+              isKycVerified: false, isApprovedIB: false, 'kycAutomation.status': 'rejected',
+              'kycAutomation.reason': reason, 'kycAutomation.reviewKey': eventKey,
+              'kycAutomation.reviewedAt': reviewedAt,
+              'kycAutomation.submittedAt': user.kycAutomation?.submittedAt || reviewedAt,
+            } }, { new: true, session });
+            if (!updated) return null;
+            await IB.updateMany({ email: updated.email, status: 'pending' },
+              { $set: { status: 'rejected' } }, { session });
+            await notifyKyc(updated, 'rejected', reason, { session, eventKey });
+            return updated;
+          });
+          if (!rejectedUser) return res.status(409).json({ success: false,
+            message: 'Verification state changed. Refresh your account before trying again.' });
+        } catch (error) {
+          console.error('Could not persist UAE verification refusal:', error.message);
+          return res.status(503).json({ success: false, retryable: true,
+            message: 'We could not save your verification result. Please retry.' });
+        }
+      }
+      return res.status(403).json({ success: false, message: "We don't accept clients from the UAE." });
+    }
+    if (!country) {
+      return res.status(400).json({ success: false, message: 'Document issuing country is required.' });
+    }
+    if (!['Passport', 'National ID Card', 'PAN Card', 'Aadhaar Card'].includes(idProof1DocType)) {
+      return res.status(400).json({ success: false, message: 'Please select a supported government ID.' });
+    }
+    if (idProof2DocType || idProof2DocNumber || req.files?.idProof2Image?.length) {
+      return res.status(400).json({ success: false, message: 'Upload one government ID only.' });
     }
 
     const idProof1Image = req.files?.idProof1Image?.[0]?.path;
-    const idProof2Image = req.files?.idProof2Image?.[0]?.path;
+    const idProof1BackImage = req.files?.idProof1BackImage?.[0]?.path || null;
 
     // ID proof 1 is mandatory — all three fields required together.
     if (!idProof1DocType || !idProof1DocNumber || !idProof1Image) {
@@ -591,22 +671,14 @@ exports.updateDocuments = async (req, res) => {
       });
     }
 
-    // ID proof 2 is optional, but if any field is supplied all three must be.
-    const idProof2Fields = [idProof2DocType, idProof2DocNumber, idProof2Image];
-    const idProof2Provided = idProof2Fields.some(Boolean);
-    if (idProof2Provided && !idProof2Fields.every(Boolean)) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "ID Proof 2 is optional, but if provided it needs a document type, document number, and image.",
-      });
-    }
-
     const updateFields = {
       idProof1: {
         docType: idProof1DocType,
         docNumber: idProof1DocNumber,
+        issuingCountry: country,
         image: idProof1Image,
+        // Replacements must never inherit the back photo of the previous ID.
+        backImage: idProof1BackImage,
       },
       hasSubmittedDocuments: true,
       // A now-removed bug used to force isKycVerified true on a plain GET,
@@ -616,21 +688,27 @@ exports.updateDocuments = async (req, res) => {
       // than inheriting that stale value - admin approval (verifyKyc) is
       // what should flip this back to true.
       isKycVerified: false,
+      'kycAutomation.status': 'not_started',
+      'kycAutomation.reason': '',
+      'kycAutomation.reviewId': '',
     };
 
-    if (idProof2Provided) {
-      updateFields.idProof2 = {
-        docType: idProof2DocType,
-        docNumber: idProof2DocNumber,
-        image: idProof2Image,
-      };
+    const documentFilter = { _id: user._id, hasSubmittedDocuments: user.hasSubmittedDocuments ? true : { $ne: true } };
+    if (automationEnabled) {
+      if (user.hasSubmittedDocuments) documentFilter['kycAutomation.status'] = 'action_required';
+      else documentFilter.$or = [
+        { 'kycAutomation.status': 'not_started' }, { 'kycAutomation.status': { $exists: false } },
+      ];
     }
-
     const updatedUser = await User.findOneAndUpdate(
-      { email },
-      { $set: updateFields },
+      documentFilter,
+      { $set: updateFields, $unset: { 'kycAutomation.provider': '', 'kycAutomation.eventAt': '',
+        'kycAutomation.reviewedAt': '', 'kycAutomation.processedAt': '' } },
       { new: true },
     );
+    if (!updatedUser) return res.status(409).json({ success: false, message: 'Verification state changed. Refresh your account before trying again.' });
+
+    if (automationEnabled) return queueAcceptedDocuments(updatedUser);
 
     res.status(200).json({
       success: true,

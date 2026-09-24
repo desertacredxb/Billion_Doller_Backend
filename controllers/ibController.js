@@ -18,8 +18,9 @@ const axios = require("axios");
  */
 const registerIB = async (req, res) => {
   try {
+    if (!req.user?.id) return res.status(401).json({ message: 'Sign in to apply as an IB.' });
     const {
-      email,
+      email: requestedEmail,
       existingClientBase,
       offerEducation,
       expectedClientsNext3Months,
@@ -29,11 +30,13 @@ const registerIB = async (req, res) => {
       clientShare,
     } = req.body;
 
-    // check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    // Derive the applicant from the signed session, never a submitted email.
+    const user = await User.findById(req.user.id);
+    if (!user || !user.isVerified ||
+        typeof requestedEmail !== 'string' || requestedEmail.toLowerCase() !== user.email.toLowerCase()) {
+      return res.status(403).json({ message: 'This account cannot submit this IB application.' });
     }
+    const email = user.email;
 
     // check if already requested
     const existingIB = await IB.findOne({ email });
@@ -52,7 +55,26 @@ const registerIB = async (req, res) => {
       clientShare,
     });
 
+    // Only a completed provider review can approve a new IB automatically.
+    if (process.env.BDFX_KYC_AUTOMATION_ENABLED === 'true' &&
+        process.env.BDFX_KYC_RELEASE_APPROVED === 'true' &&
+        process.env.SUMSUB_MODE === 'production' && process.env.SUMSUB_CLIENT_ID &&
+        process.env.SUMSUB_LEVEL_NAME && process.env.SUMSUB_LEVEL_NAME !== 'bdfx-kyc-sandbox' &&
+        user.isKycVerified && user.kycAutomation?.status === 'approved' &&
+        user.kycAutomation.provider === 'sumsub' && user.kycAutomation.reviewId &&
+        user.kycAutomation.processedAt) {
+      const crypto = require('node:crypto');
+      newIB.status = 'approved';
+      newIB.referralCode = `IB${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+    }
+
     await newIB.save();
+    if (newIB.status === 'approved') {
+      await User.updateOne({ _id: user._id }, { $set: { isApprovedIB: true } });
+      await sendEmail({ to: user.email, subject: 'Your BDFX IB application is approved',
+        text: `Your IB application is approved. Your referral code is ${newIB.referralCode}.` });
+      return res.status(201).json({ message: 'IB application approved', referralCode: newIB.referralCode });
+    }
 
     // ✅ Send email to admin
     await sendEmail({

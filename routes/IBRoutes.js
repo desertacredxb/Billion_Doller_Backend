@@ -13,14 +13,17 @@ const {
   withdrawCommission,
   withdrawCommissionV2,
 } = require("../controllers/ibController");
+const authMiddleware = require('../middleware/authMiddleware');
 
 // User side
-router.post("/register", registerIB);
+router.post("/register", authMiddleware, registerIB);
 
 // Admin side
 router.get("/", getAllIBRequests);
-router.put("/:email/approve", approveIBByEmail);
-router.put("/:email/reject", rejectIBByEmail);
+const manualIbDisabled = (req, res, next) => process.env.BDFX_KYC_AUTOMATION_ENABLED === 'true'
+  ? res.status(409).json({ message: 'IB decisions are handled by the verification workflow.' }) : next();
+router.put("/:email/approve", manualIbDisabled, approveIBByEmail);
+router.put("/:email/reject", manualIbDisabled, rejectIBByEmail);
 router.get("/:email", referralCode);
 
 
