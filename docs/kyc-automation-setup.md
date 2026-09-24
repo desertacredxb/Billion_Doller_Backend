@@ -16,11 +16,11 @@ BDFX_WATI_CHANNEL_NUMBER=441157911131
 
 Both KYC flags must remain false while the release blockers below are unresolved. The environment update automatically redeployed the existing commit `e543b22` as Render deploy `dep-daqlderktnus73ba63e0`; none of the new KYC code was deployed.
 
-The latest Sumsub dashboard check was logged out. Production credentials, account access and the exact production level remain unverified; the previously observed level was `bdfx-kyc-sandbox`. That level cannot enable production processing.
+The latest Sumsub sign-in reached the BDFX dashboard, which explicitly showed company review pending and Sandbox mode (simulated checks, no real verification). Opening Integrations then returned "You have been logged out for security reasons. Please log in again." Production access, credentials and the exact production level remain unavailable or unverified; the previously observed level was `bdfx-kyc-sandbox`. That level cannot enable production processing. Do not keep retrying a rejected browser session or promise that company review will finish the next day.
 
 The independent WATI welcome rule was enabled earlier for `+441157911131`. This does not connect the backend's KYC notifications: their approved template names and API secret still need to be configured and verified. WhatsApp/phone OTP is deferred; the existing email OTP registration flow remains in place.
 
-Validation snapshot: the backend suite passed **77/77 tests**. Frontend type checking passed; the frontend production build was blocked by the existing Montserrat Google Fonts TLS fetch failure. No font/source workaround was introduced, and that build remains unverified.
+Validation snapshot: the expanded backend suite passed **109/109 tests**, including verified-admin, cross-owner, account registration, support and payment-route access checks. Tests use mocked databases and provider handlers; they do not execute real payouts or send customer messages. The updated frontend passed full TypeScript checking and focused session-helper runtime checks. The frontend production build was previously blocked by the existing Montserrat Google Fonts TLS fetch failure. No font/source workaround was introduced, and that build remains unverified.
 
 ## Implemented workflow
 
@@ -78,8 +78,21 @@ Keep these values server-side; never expose them as `NEXT_PUBLIC_*`. No secret v
 | `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Existing server-side Cloudinary upload credentials. |
 | `MONGO_URI` / `DB` | Existing database connection settings; the database must support transactions. |
 | `JWT_SECRET` | Existing signing secret for authenticated owner routes. |
+| `BDFX_ADMIN_USER_IDS` | Comma-separated Mongo User IDs for explicitly authorized, email-verified administrators. An empty list grants no administrator access. Configure only after the account owner confirms the intended admin identity. |
 
 Missing production configuration prevents worker processing. Notice records can still be persisted during a configuration outage so that the outcome is not lost.
+
+### Administrator and account access
+
+The additional access-control patch uses the existing password-checked login to issue a JWT. `GET /api/auth/admin/session` validates the signed-in User against the current database and server-side administrator allowlist; browser-supplied role flags and the former fixed admin marker do not establish administrator access. The frontend and backend patches must be deployed together. Do not activate an empty or unverified administrator allowlist on the live service, because that would lock staff out.
+
+User/IB lists, bank approvals, manual KYC/IB decisions, deletion, broker management, ticket administration, payment administration and direct balance utilities are administrator-only. Profile images, bank requests, passwords and account lookups are scoped to the signed-in owner as appropriate. Trading-account, deposit, withdrawal and deal requests verify the account owner before reaching their controllers. Ticket viewer/sender roles come from the verified server principal. Provider callbacks retain their separate authentication paths; these route guards do not validate an inbound provider callback.
+
+The IB client list is derived on the server from the saved referring-IB relationship. It exposes minimal client/account summaries, excluding identity documents, banking and login secrets. Per-client financial aggregates not supplied by that endpoint appear as unavailable in the frontend instead of making cross-client requests from the IB's browser.
+
+The customer IB page reads the persisted commission balance and no longer triggers the legacy commission recalculation; that operation now requires administrator access. IB withdrawal requests require an approved IB and their own destination account, and reject nonpositive amounts. These checks do not solve the pre-existing payout-v1 concurrent-request race or ambiguous provider payout outcomes; do not interpret route authorization tests as financial reconciliation or payout-idempotency certification.
+
+Before deployment, identify a verified existing User for each actual administrator, confirm their IDs, set `BDFX_ADMIN_USER_IDS`, and test both their customer login and `/api/auth/admin/session`. Do not derive the allowlist from the former hardcoded frontend credentials or from an unverified email address.
 
 ### WhatsApp
 
@@ -128,8 +141,8 @@ Delivery is at least once: a process can fail after provider acceptance but befo
 
 ## Remaining release blockers and controlled validation
 
-1. **Secure the remaining pre-existing routes.** This draft adds owner authentication/field allowlists for profile editing, ID uploads and IB registration, plus protected KYC status/start endpoints. Public admin/user-list and lookup routes, banking updates/approvals, delete routes and other existing account/commission operations still require an authentication and authorization review. Manual KYC/IB decisions are blocked while automation is enabled, but that guard is not general admin security. Do not set the release flag true while these routes can undermine trusted account state or expose customer documents.
-2. **Verify the actual Sumsub production account and level.** Restore authorized dashboard access and verify production credentials, client/level binding, UAE exclusions, supported ID types/sides, identity and residence evidence, and the required hosted fallback steps. The last logged-out check and former sandbox level do not establish readiness.
+1. **Validate the additional access-control patch and configure real administrators.** Check the paired frontend/backend changes and the actual `BDFX_ADMIN_USER_IDS` accounts in a controlled environment. Confirm no anonymous, ordinary-user or cross-owner request can reach administrative decisions, sensitive account data or balance utilities. Existing provider/payment callbacks remain a separate release concern: the MT5 commission callback lacks a verified sender check and contains a pre-existing `loginogin` typo; this patch does not change that callback or certify the payment-provider integrations. Resolve relevant callback trust before enabling workflows that consume their data. Keep both KYC activation flags false until the complete deployment is validated.
+2. **Verify the actual Sumsub production account and level.** Resolve the observed security logout and pending company review, then verify production credentials, client/level binding, UAE exclusions, supported ID types/sides, identity and residence evidence, and the required hosted fallback steps. The observed sandbox dashboard does not establish production readiness.
 3. **Verify transaction support and recovery on an isolated database.** Run `npm test`; current focused tests cover authorization, multipart uploads, country/document decisions, provider request signing, deduplication, leases, channel retries, stale-notice suppression and injected transaction rollback. These mocks do not establish the deployed Mongo topology or live provider behavior. On an isolated transaction-capable database, verify rollback after IB/notice/acknowledgement failure, restart recovery, duplicate callbacks and expired leases before production activation.
 4. **Complete controlled end-to-end cases.** Use an isolated backend/database and approved provider test facilities or specifically authorized controlled accounts. Cover non-UAE GREEN with valid residence, UAE identity/residence, final RED, RETRY correction, missing residence, unsupported IDs, changed review results, replaced documents, stale callbacks and incomplete additional steps. Confirm every expected IB/referral outcome and that forged, unsigned and sandbox events never approve real accounts. Do not switch the production flags merely to run a test.
 5. **Connect and test both notification channels.** Verify all four approved WATI template names, parameter shapes and the exact sender using controlled recipients. Verify SMTP authentication/TLS, provider acceptance and observed delivery. Test one failed channel while the other succeeds, recovery after restart and suppression of older pending/rejection messages after a newer approval. The independent welcome rule is not evidence that these KYC paths work.

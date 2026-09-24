@@ -1,6 +1,11 @@
 // routes/moneyplant.routes.js
 const express = require("express");
 const router = express.Router();
+const authMiddleware = require('../middleware/authMiddleware');
+const accountRegistration = require('../middleware/accountRegistration');
+const { loadPrincipal, requireAdmin, requireOwnerEmail, requireAccountOwner } = require('../middleware/accessControl');
+const signedIn = [authMiddleware, loadPrincipal];
+const accountOwner = source => [...signedIn, requireAccountOwner(source, 'login')];
 const {
   registerUserWithMT5,
   getMT5User,
@@ -13,17 +18,17 @@ const {
 } = require("../controllers/mt5Controller.js");
 const { receiveIbCommissionWebhook } = require("../controllers/mt5WebhookController.js");
 
-router.post("/register", registerUserWithMT5);
-router.get("/user", getMT5User);
-router.post("/change_password", changeMT5Password);
-router.post("/update_balance", updateUserMT5balance); // <--- Added endpoint
+router.post("/register", ...signedIn, requireOwnerEmail('body', 'email'), accountRegistration, registerUserWithMT5);
+router.get("/user", ...accountOwner('query'), getMT5User);
+router.post("/change_password", ...accountOwner('body'), changeMT5Password);
+router.post("/update_balance", ...signedIn, requireAdmin, updateUserMT5balance);
 
 // Referral-system services - not yet used by IB commission calculation,
 // exposed standalone for verification/manual lookups.
-router.get("/deals", getMT5DealsController); // ?login=&from=2025-01-01&to=2025-01-31&offset=&total= (from/to: any normal date/datetime, or a unix timestamp)
-router.get("/deals/total", getMT5DealsTotalController); // ?login=&from=2025-01-01&to=2025-01-31
-router.get("/account", getMT5AccountController); // ?login=
-router.get("/symbols", getMT5SymbolListController);
+router.get("/deals", ...accountOwner('query'), getMT5DealsController);
+router.get("/deals/total", ...accountOwner('query'), getMT5DealsTotalController);
+router.get("/account", ...accountOwner('query'), getMT5AccountController);
+router.get("/symbols", ...signedIn, getMT5SymbolListController);
 
 router.post("/IbCommisionWebhook", receiveIbCommissionWebhook);
 

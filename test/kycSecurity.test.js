@@ -73,6 +73,7 @@ beforeEach(() => {
   process.env.SUMSUB_MODE = 'production';
   process.env.SUMSUB_CLIENT_ID = 'test-client';
   process.env.SUMSUB_LEVEL_NAME = 'test-production-level';
+  delete process.env.BDFX_ADMIN_USER_IDS;
 });
 
 after(async () => {
@@ -95,7 +96,8 @@ test('profile and IB routes reject unauthenticated callers before accessing user
   assert.equal(lookup.mock.callCount(), 0);
 });
 
-test('KYC status route requires an authenticated session', async () => {
+test('KYC status route requires an authenticated session', async t => {
+  t.mock.method(User, 'findById', async () => account);
   assert.equal((await fetch(`${baseUrl}/api/auth/kyc/status`)).status, 401);
   const response = await fetch(`${baseUrl}/api/auth/kyc/status`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(response.status, 200);
@@ -194,11 +196,16 @@ test('IB auto-approval remains blocked until release approval is explicitly enab
 test('manual KYC and IB decisions stay blocked when automation configuration is incomplete', async t => {
   delete process.env.SUMSUB_MODE;
   delete process.env.SUMSUB_CLIENT_ID;
+  process.env.BDFX_ADMIN_USER_IDS = userId;
+  t.mock.method(User, 'findById', async () => account);
   const lookup = t.mock.method(User, 'findOne', async () => { throw new Error('manual route must be blocked'); });
   for (const [path, method] of [
     [`/api/auth/${account.email}/verify-kyc`, 'PUT'], [`/api/auth/reject/${account.email}`, 'POST'],
     [`/api/ib/${account.email}/approve`, 'PUT'], [`/api/ib/${account.email}/reject`, 'PUT'],
-  ]) assert.equal((await request(path, { status: true }, { method, authenticated: false })).status, 409);
+  ]) {
+    assert.equal((await request(path, { status: true }, { method, authenticated: false })).status, 401);
+    assert.equal((await request(path, { status: true }, { method })).status, 409);
+  }
   assert.equal(lookup.mock.callCount(), 0);
 });
 
@@ -331,7 +338,7 @@ test('a concurrent review transition prevents replacing documents or starting in
 test('authenticated document route accepts one front and optional back, rejects a second ID or missing front', async t => {
   t.mock.method(User, 'findById', id => {
     assert.equal(id, userId);
-    return { select: async () => ({ email: account.email }) };
+    return Promise.resolve(account);
   });
   t.mock.method(User, 'findOne', async () => ({ ...account, hasSubmittedDocuments: false }));
   let acceptedProof;

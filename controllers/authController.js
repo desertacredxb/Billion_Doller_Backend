@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const safeUser = value => User.toSafeObject(value);
 const Account = require("../models/account.model");
 const IB = require("../models/Broker.model");
 const bcrypt = require("bcryptjs");
@@ -115,7 +116,7 @@ exports.verifyOTP = async (req, res) => {
   const { email, otp } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }, "+otp +otpExpires");
 
     if (!user) return res.status(400).json({ message: "User not found" });
 
@@ -374,7 +375,7 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }, "+password +otp");
     if (!user)
       return res.status(400).json({ message: "Invalid email or password" });
 
@@ -399,7 +400,7 @@ exports.login = async (req, res) => {
       expiresIn: "7d",
     });
 
-    res.json({ token, user });
+    res.json({ token, user: safeUser(user) });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
@@ -440,7 +441,7 @@ exports.verifyAndResetPassword = async (req, res) => {
   const { email, otp, newPassword } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }, "+resetOtp +resetOtpExpires");
     if (!user || !user.resetOtp || !user.resetOtpExpires) {
       return res.status(400).json({ message: "Invalid request or OTP" });
     }
@@ -480,7 +481,7 @@ exports.getAllUsers = async (req, res) => {
       .select("-password -otp -otpExpires -resetOtp -resetOtpExpires")
       .sort({ createdAt: -1 }); // ✅ newest first
 
-    res.json(users);
+    res.json(users.map(safeUser));
   } catch (err) {
     res
       .status(500)
@@ -494,13 +495,13 @@ exports.getUserByEmail = async (req, res) => {
   try {
     const user = await User.findOne({ email })
       .select("-password -otp -otpExpires -resetOtp -resetOtpExpires")
-      .populate("accounts"); // uses virtual populate
+      .populate({ path: "accounts", select: "-moneyPlantPassword -mt5Password -mt5InvestorPassword" });
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json(user);
+    res.json(safeUser(user));
   } catch (err) {
     res
       .status(500)
@@ -528,7 +529,7 @@ exports.uploadProfileImage = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.status(200).json({ success: true, user });
+    res.status(200).json({ success: true, user: safeUser(user) });
   } catch (err) {
     console.error("Backend error:", err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -566,7 +567,7 @@ exports.updateUserProfile = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.status(200).json({ success: true, user });
+    res.status(200).json({ success: true, user: safeUser(user) });
   } catch (err) {
     console.error("Update profile error:", err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -597,7 +598,7 @@ exports.updateDocuments = async (req, res) => {
       try {
         await require('../services/kycIntake').queueKycIntake(acceptedUser);
         return res.status(202).json({ success: true, message: 'Documents saved. Verification queued.',
-          verificationStatus: 'pending', user: acceptedUser });
+          verificationStatus: 'pending', user: safeUser(acceptedUser) });
       } catch (error) {
         console.error('Could not queue saved KYC documents:', error.message);
         return res.status(503).json({ success: false,
@@ -713,7 +714,7 @@ exports.updateDocuments = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Documents submitted successfully",
-      user: updatedUser,
+      user: safeUser(updatedUser),
     });
   } catch (err) {
     console.error("Update failed:", err);
@@ -791,7 +792,7 @@ exports.updateBankDetails = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Bank details submitted for approval & admin notified",
-      user,
+      user: safeUser(user),
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -815,7 +816,7 @@ exports.changePassword = async (req, res) => {
         .json({ success: false, message: "Passwords do not match." });
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }, "+password");
     if (!user) {
       return res
         .status(404)
@@ -890,7 +891,7 @@ exports.verifyKyc = async (req, res) => {
 
     res.json({
       message: `User KYC ${status ? "approved ✅" : "rejected ❌"}`,
-      user,
+      user: safeUser(user),
     });
   } catch (error) {
     console.error("Error verifying KYC:", error);
@@ -901,7 +902,7 @@ exports.verifyKyc = async (req, res) => {
 exports.getUnverifiedUsers = async (req, res) => {
   try {
     const users = await User.find({ isKycVerified: false });
-    res.json(users);
+    res.json(users.map(safeUser));
   } catch (error) {
     console.error("Error fetching unverified users:", error);
     res.status(500).json({ message: "Internal Server Error" });
@@ -943,7 +944,7 @@ exports.deleteUser = async (req, res) => {
 
     res.json({
       message: `User with email ${email} deleted due to incomplete KYC within 3-day deadline 🚮`,
-      user,
+      user: safeUser(user),
     });
   } catch (error) {
     console.error("Error deleting user:", error);
@@ -987,7 +988,7 @@ exports.approveBankDetails = async (req, res) => {
     res.status(200).json({
       success: true,
       message: `Bank details ${approve ? "approved" : "rejected"}`,
-      user,
+      user: safeUser(user),
     });
   } catch (err) {
     console.error("Error approving bank details:", err);
@@ -1073,11 +1074,15 @@ exports.userByReferralCode = async (req, res) => {
       return res.status(404).json({ message: "User not found for this IB." });
     }
 
+    if (!req.principal || (req.principal.isAdmin !== true && String(user._id) !== req.principal.id)) {
+      return res.status(403).json({ message: 'This referral profile is not available to you.' });
+    }
+
     // Step 3️⃣: Return both IB and User data
     return res.status(200).json({
       success: true,
       ib,
-      user,
+      user: safeUser(user),
     });
   } catch (error) {
     console.error("Error fetching user by referral code:", error);

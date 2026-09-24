@@ -13,6 +13,39 @@ const {
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const axios = require("axios");
 
+const getMyClients = async (req, res) => {
+  try {
+    if (!req.principal) return res.status(401).json({ message: 'Sign in to continue.' });
+    const ib = await IB.findOne({ email: req.principal.email, status: 'approved' });
+    if (!ib) return res.status(403).json({ message: 'An approved IB account is required.' });
+    const users = await User.find({ referredByIB: ib._id })
+      .select('_id fullName email country createdAt isKycVerified')
+      .populate({ path: 'accounts', select: 'accountNo user' })
+      .sort({ createdAt: -1 });
+    const clients = users.map(user => ({
+      _id: String(user._id), fullName: user.fullName, email: user.email,
+      country: user.country || null, createdAt: user.createdAt, isKycVerified: user.isKycVerified === true,
+      accounts: (user.accounts || []).map(account => ({ accountNo: account.accountNo })),
+      // These figures require a reconciled ledger. Absence is not a zero balance.
+      totalDeposit: null, totalWithdrawal: null, totalLots: null, totalCommission: null, symbolLots: null,
+    }));
+    return res.json({ clients });
+  } catch { return res.status(500).json({ message: 'Unable to load referred clients.' }); }
+};
+
+async function canWithdraw(req, res) {
+  if (!req.principal || !req.authorizedAccount || req.authorizedAccount.userId !== req.principal.id) {
+    res.status(403).json({ success: false, message: 'Withdrawals require your own trading account.' });
+    return false;
+  }
+  const ib = await IB.findOne({ email: req.principal.email, status: 'approved' });
+  if (!ib) {
+    res.status(403).json({ success: false, message: 'An approved IB account is required.' });
+    return false;
+  }
+  return true;
+}
+
 /**
  * 📌 Register IB Request (User Side)
  */
@@ -519,6 +552,12 @@ const withdrawCommission = async (req, res) => {
   try {
     const { email, accountno, amount } = req.body;
 
+    if (!await canWithdraw(req, res)) return;
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+    }
+
     if (!email || !accountno || !amount) {
       return res.status(400).json({
         success: false,
@@ -526,7 +565,7 @@ const withdrawCommission = async (req, res) => {
       });
     }
 
-    orderid = "ORD" + Date.now();
+    const orderid = "ORD" + Date.now();
 
     // 🔹 Get the user
     const user = await User.findOne({ email });
@@ -544,7 +583,7 @@ const withdrawCommission = async (req, res) => {
       });
     }
 
-    if (amount > user.commission) {
+    if (numericAmount > user.commission) {
       return res.status(400).json({
         success: false,
         message: "Withdrawal amount exceeds available commission",
@@ -554,7 +593,7 @@ const withdrawCommission = async (req, res) => {
     // 🔹 Call MoneyPlant FX API to add balance
     const response = await axios.post(
       "https://api.moneyplantfx.com/WSMoneyplant.aspx?type=SNDPAddBalance",
-      { accountno, amount, orderid },
+      { accountno, amount: numericAmount, orderid },
       { headers: { "Content-Type": "application/json" } }
     );
 
@@ -562,7 +601,7 @@ const withdrawCommission = async (req, res) => {
 
     if (status === "success") {
       // 🔹 Deduct commission and save withdrawal date
-      user.commission -= amount;
+      user.commission -= numericAmount;
       user.lastWithdrawalDate = new Date();
       await user.save();
 
@@ -606,6 +645,8 @@ const withdrawCommission = async (req, res) => {
 const withdrawCommissionV2 = async (req, res) => {
   try {
     const { email, accountno, amount } = req.body;
+
+    if (!await canWithdraw(req, res)) return;
 
     if (!email || !accountno || !amount) {
       return res.status(400).json({
@@ -709,6 +750,7 @@ const withdrawCommissionV2 = async (req, res) => {
 };
 
 module.exports = {
+  getMyClients,
   registerIB,
   getAllIBRequests,
   approveIBByEmail,

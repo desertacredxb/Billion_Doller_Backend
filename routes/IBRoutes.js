@@ -12,27 +12,34 @@ const {
   updateIBCommissionV3,
   withdrawCommission,
   withdrawCommissionV2,
+  getMyClients,
 } = require("../controllers/ibController");
 const authMiddleware = require('../middleware/authMiddleware');
+const { loadPrincipal, requireAdmin, requireOwnerEmail, requireOwnerOrAdminEmail, requireAccountOwner } = require('../middleware/accessControl');
+
+router.use(authMiddleware, loadPrincipal);
 
 // User side
-router.post("/register", authMiddleware, registerIB);
+router.post('/register', requireOwnerEmail('body', 'email'), registerIB);
 
 // Admin side
-router.get("/", getAllIBRequests);
+router.get('/', requireAdmin, getAllIBRequests);
+router.get('/clients', getMyClients);
 const manualIbDisabled = (req, res, next) => process.env.BDFX_KYC_AUTOMATION_ENABLED === 'true'
   ? res.status(409).json({ message: 'IB decisions are handled by the verification workflow.' }) : next();
-router.put("/:email/approve", manualIbDisabled, approveIBByEmail);
-router.put("/:email/reject", manualIbDisabled, rejectIBByEmail);
-router.get("/:email", referralCode);
+router.put('/:email/approve', requireAdmin, manualIbDisabled, approveIBByEmail);
+router.put('/:email/reject', requireAdmin, manualIbDisabled, rejectIBByEmail);
+router.get('/:email', requireOwnerOrAdminEmail('params', 'email'), referralCode);
 
 
-router.post("/update-commission", updateIBCommission); // v1: MoneyPlant-based, writes User.commission - unchanged
-router.post("/update-commission-v2", updateIBCommissionV2); // v2: MT5-based (live DealGetPage calls), read-only
-router.post("/update-commission-v3", updateIBCommissionV3); // v3: reads from local Deal collection (populated by MT5's webhook), read-only
+// Historical recalculation overwrites the ledger, so it requires an operator.
+router.post('/update-commission', requireAdmin, updateIBCommission);
+router.post('/update-commission-v1', requireAdmin, updateIBCommission);
+router.post('/update-commission-v2', requireOwnerOrAdminEmail('body', 'email'), updateIBCommissionV2);
+router.post('/update-commission-v3', requireOwnerOrAdminEmail('body', 'email'), updateIBCommissionV3);
 
 
-router.post("/withdrawalIBamount", withdrawCommission); // v1: MoneyPlant-based - unchanged
-router.post("/withdrawalIBamountV2", withdrawCommissionV2); // v2: MT5-based, atomic reservation + rollback on failure
+router.post('/withdrawalIBamount', requireOwnerEmail('body', 'email'), requireAccountOwner('body', ['accountno', 'accountNo', 'login']), withdrawCommission);
+router.post('/withdrawalIBamountV2', requireOwnerEmail('body', 'email'), requireAccountOwner('body', ['accountno', 'accountNo', 'login']), withdrawCommissionV2);
 
 module.exports = router;
