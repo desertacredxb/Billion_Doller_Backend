@@ -19,9 +19,11 @@ const mt5Routes = require("./routes/mt5Routes");
 const dealRoutes = require("./routes/dealRoutes");
 const aiRoutes = require("./routes/ai.routes");
 const veriffRoutes = require("./routes/veriffRoutes");
+const { checkOnStartup } = require("./services/veriffReadiness.service");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
+  await checkOnStartup();
 
   const app = express();
 
