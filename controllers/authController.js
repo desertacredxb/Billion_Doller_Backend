@@ -3,6 +3,7 @@ const Account = require("../models/account.model");
 const IB = require("../models/Broker.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { randomInt } = require("node:crypto");
 const sendEmail = require("../utils/sendEmail");
 const { sendPasswordResetOtpEmail } = require("../utils/Email");
 // const sendWhatsAppOTP = require("../utils/sendWhatsAppOTP");
@@ -50,7 +51,7 @@ exports.register = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = randomInt(100000, 1000000).toString();
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
     // Only attribute the signup to a referral code that actually belongs to a
@@ -428,7 +429,7 @@ exports.requestPasswordReset = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = randomInt(100000, 1000000).toString();
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 min
 
     user.resetOtp = otp;

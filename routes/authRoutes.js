@@ -23,24 +23,41 @@ const {
 } = require("../controllers/authController");
 const upload = require("../middleware/cloudinaryUploader");
 const auth = require("../middleware/authMiddleware");
+const access = require("../middleware/accessControl");
+const adminAuth = require("../controllers/adminAuthController");
+const { rateLimit } = require("express-rate-limit");
+const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false,
+  message: { message: "Too many administrator sign-in attempts. Please try again later." } });
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, skipSuccessfulRequests: true,
+  standardHeaders: "draft-7", legacyHeaders: false, message: { message: "Too many sign-in attempts. Please try again later." } });
 
 router.post("/register", register);
-router.post("/verify-otp", verifyOTP); // Verifies OTP and finalizes registration
-router.post("/login", login);
-router.post("/request-reset", requestPasswordReset);
-router.post("/verify-reset-otp", verifyAndResetPassword);
-router.get("/users", getAllUsers); // ⛔ secure with authMiddleware in production
-router.get("/user/:email", getUserByEmail);
+router.post("/verify-otp", loginLimiter, verifyOTP);
+router.post("/login", loginLimiter, login);
+router.post("/request-reset", loginLimiter, requestPasswordReset);
+router.post("/verify-reset-otp", loginLimiter, verifyAndResetPassword);
+router.post("/admin/request-code", adminLimiter, adminAuth.requestCode);
+router.post("/admin/verify-code", adminLimiter, adminAuth.verifyCode);
+
+router.use(auth, access.principal);
+router.get("/admin/session", access.admin, (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ email: req.principal.email, role: "admin" });
+});
+router.get("/users", access.admin, getAllUsers);
+router.get("/user/:email", access.emailOwner(), getUserByEmail);
 router.put(
   "/profile-image/:email",
+  access.emailOwner(),
   upload.single("profileImage"),
   uploadProfileImage,
 );
 
-router.put("/update-profile/:email", auth, updateUserProfile);
+router.put("/update-profile/:email", access.emailOwner(), updateUserProfile);
 
 router.put(
   "/documents/:email",
+  access.emailOwner(),
   upload.uploadKycDocuments([
     { name: "idProof1Image", maxCount: 1 },
     { name: "idProof2Image", maxCount: 1 },
@@ -48,14 +65,14 @@ router.put(
   updateDocuments,
 );
 
-router.put("/bank/:email", updateBankDetails);
-router.patch("/bank-approve/:email", approveBankDetails);
+router.put("/bank/:email", access.emailOwner(), updateBankDetails);
+router.patch("/bank-approve/:email", access.admin, approveBankDetails);
 
-router.put("/change-password/:email", changePassword);
-router.put("/:email/verify-kyc", verifyKyc);
-router.get("/unverified", getUnverifiedUsers);
-router.delete("/delete/:email", deleteUser);
-router.post("/reject/:email", rejectUserKyc);
-router.get("/userByRef/:referralCode", userByReferralCode);
+router.put("/change-password/:email", access.emailOwner(), changePassword);
+router.put("/:email/verify-kyc", access.admin, verifyKyc);
+router.get("/unverified", access.admin, getUnverifiedUsers);
+router.delete("/delete/:email", access.admin, deleteUser);
+router.post("/reject/:email", access.admin, rejectUserKyc);
+router.get("/userByRef/:referralCode", access.admin, userByReferralCode);
 
 module.exports = router;

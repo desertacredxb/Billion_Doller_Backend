@@ -1,6 +1,8 @@
 // routes/paymentRoutes.js
 const express = require("express");
 const router = express.Router();
+const auth = require("../middleware/authMiddleware");
+const access = require("../middleware/accessControl");
 
 const withdrawalLimiter = require("../middleware/withdrawalLimiter");
 const checkMargin = require("../middleware/checkMargin");
@@ -28,7 +30,7 @@ const {
 // Admin utilities
 // ---------------------------------------------------------------------------
 
-router.post("/reconcile-orders", reconcileOrders);
+router.post("/reconcile-orders", auth, access.principal, access.admin, reconcileOrders);
 
 // ---------------------------------------------------------------------------
 // Provider webhook callbacks
@@ -45,29 +47,30 @@ router.post("/cregis/callback", handleCregisCallback);
 // Deposit routes
 // ---------------------------------------------------------------------------
 
-router.post("/deposit", handleDigipayDeposit);
-router.post("/cregis/deposit", createCregisCheckout);
-router.post("/trustpay24/deposit", handleTrustpay24Deposit);
-router.post("/ramee/deposit", handleRameeDeposit);
-router.post("/crypto/deposit", handleCryptoDeposit);
+router.use(auth, access.principal);
+router.post("/deposit", access.accountOwner("body", "merchant_user_id"), handleDigipayDeposit);
+router.post("/cregis/deposit", access.accountOwner(), createCregisCheckout);
+router.post("/trustpay24/deposit", access.accountOwner(), handleTrustpay24Deposit);
+router.post("/ramee/deposit", access.accountOwner(), handleRameeDeposit);
+router.post("/crypto/deposit", access.accountOwner(), handleCryptoDeposit);
 
 // ---------------------------------------------------------------------------
 // Withdrawal routes
 // ---------------------------------------------------------------------------
 
-router.post("/request", withdrawalLimiter, createPayoutRequest);
-router.post("/request_v2", withdrawalLimiter, checkMargin, handleManualPaymentRequest);
-router.post("/approve/:id", approvePayoutReq);
-router.post("/reject/:id", rejectPayoutRequest);
+router.post("/request", access.accountOwner(), withdrawalLimiter, createPayoutRequest);
+router.post("/request_v2", access.accountOwner(), withdrawalLimiter, checkMargin, handleManualPaymentRequest);
+router.post("/approve/:id", access.admin, approvePayoutReq);
+router.post("/reject/:id", access.admin, rejectPayoutRequest);
 
 // ---------------------------------------------------------------------------
 // Listing / query routes
 // ---------------------------------------------------------------------------
 
-router.get("/withdrawals", listWithdrawals);
-router.get("/deposit/:accountNo", getDepositsByAccount);
-router.get("/withdrawal/:accountNo", getWithdrawalsByAccount);
-router.get("/deposit", listAllDeposits);
-router.get("/withdrawal", listAllWithdrawals);
+router.get("/withdrawals", access.admin, listWithdrawals);
+router.get("/deposit/:accountNo", access.accountOwner("params"), getDepositsByAccount);
+router.get("/withdrawal/:accountNo", access.accountOwner("params"), getWithdrawalsByAccount);
+router.get("/deposit", access.admin, listAllDeposits);
+router.get("/withdrawal", access.admin, listAllWithdrawals);
 
 module.exports = router;

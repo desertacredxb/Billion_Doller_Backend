@@ -84,7 +84,10 @@ userSchema.virtual("accounts", {
 
 // Ensure virtuals are included
 userSchema.set("toObject", { virtuals: true });
-userSchema.set("toJSON", { virtuals: true });
+userSchema.set("toJSON", { virtuals: true, transform: (_doc, result) => {
+  for (const key of ["password", "otp", "otpExpires", "resetOtp", "resetOtpExpires"]) delete result[key];
+  return result;
+} });
 
 // Auto-expire unverified accounts after 5 minutes (for example)
 userSchema.index(

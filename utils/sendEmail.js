@@ -1,7 +1,7 @@
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 
-const sendEmail = async ({ to, subject, text, html, attachments }) => {
+const sendEmail = async ({ to, subject, text, html, attachments, throwOnError = false }) => {
   try {
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -28,6 +28,7 @@ const sendEmail = async ({ to, subject, text, html, attachments }) => {
     console.log(`📧 Email sent to ${to}`);
   } catch (err) {
     console.error("❌ Failed to send email:", err);
+    if (throwOnError) throw new Error("Email delivery failed. Please try again shortly.");
   }
 };
 

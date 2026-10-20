@@ -106,9 +106,7 @@ exports.getTicketWithMessages = async (req, res) => {
     if (!ticket) return res.status(404).json({ message: "Ticket not found" });
 
     // Determine viewer role: prefer authenticated user role, fallback to query param
-    const viewer =
-      req.user && req.user.role ? req.user.role : req.query.viewer || "User";
-    const isAdminViewing = String(viewer).toLowerCase() === "admin";
+    const isAdminViewing = req.principal.isAdmin;
 
     if (isAdminViewing) {
       // Admin is viewing -> mark user-sent messages as readByAdmin
@@ -196,7 +194,8 @@ exports.deleteTicket = async (req, res) => {
 exports.addMessageToTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    const { senderType, message, attachments } = req.body;
+    const { message, attachments } = req.body;
+    const senderType = req.principal.isAdmin ? "Admin" : "User";
 
     const ticket = await Ticket.findById(ticketId);
     if (!ticket) return res.status(404).json({ message: "Ticket not found" });

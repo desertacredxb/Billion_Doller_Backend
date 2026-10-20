@@ -1,6 +1,8 @@
 // routes/moneyplant.routes.js
 const express = require("express");
 const router = express.Router();
+const auth = require("../middleware/authMiddleware");
+const access = require("../middleware/accessControl");
 const {
   registerUserWithMoneyPlant,
   getAccountSummary,
@@ -10,11 +12,12 @@ const {
   getDeals,
 } = require("../controllers/moneyplant.controller");
 
-router.post("/register", registerUserWithMoneyPlant);
-router.post("/checkBalance", getAccountSummary);
-router.post("/updatePassword", updatePassword);
-router.post("/add-balance", addBalance);
-router.post("/getTransactions", getTransactions);
-router.post("/getDeals", getDeals);
+router.use(auth, access.principal);
+router.post("/register", access.emailOwner("body"), registerUserWithMoneyPlant);
+router.post("/checkBalance", access.accountOwner("body", "accountno"), getAccountSummary);
+router.post("/updatePassword", access.accountOwner("body", "accountno"), updatePassword);
+router.post("/add-balance", access.admin, addBalance);
+router.post("/getTransactions", access.accountOwner("body", "accountno"), getTransactions);
+router.post("/getDeals", access.accountOwner("body", "accountno"), getDeals);
 
 module.exports = router;

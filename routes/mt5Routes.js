@@ -1,6 +1,8 @@
 // routes/moneyplant.routes.js
 const express = require("express");
 const router = express.Router();
+const auth = require("../middleware/authMiddleware");
+const access = require("../middleware/accessControl");
 const {
   registerUserWithMT5,
   getMT5User,
@@ -13,18 +15,19 @@ const {
 } = require("../controllers/mt5Controller.js");
 const { receiveIbCommissionWebhook } = require("../controllers/mt5WebhookController.js");
 
-router.post("/register", registerUserWithMT5);
-router.get("/user", getMT5User);
-router.post("/change_password", changeMT5Password);
-router.post("/update_balance", updateUserMT5balance); // <--- Added endpoint
+// Provider callbacks do not use a browser session.
+router.post("/IbCommisionWebhook", receiveIbCommissionWebhook);
+router.use(auth, access.principal);
+router.post("/register", access.emailOwner("body"), registerUserWithMT5);
+router.get("/user", access.accountOwner("query", "login"), getMT5User);
+router.post("/change_password", access.accountOwner("body", "login"), changeMT5Password);
+router.post("/update_balance", access.admin, updateUserMT5balance);
 
 // Referral-system services - not yet used by IB commission calculation,
 // exposed standalone for verification/manual lookups.
-router.get("/deals", getMT5DealsController); // ?login=&from=2025-01-01&to=2025-01-31&offset=&total= (from/to: any normal date/datetime, or a unix timestamp)
-router.get("/deals/total", getMT5DealsTotalController); // ?login=&from=2025-01-01&to=2025-01-31
-router.get("/account", getMT5AccountController); // ?login=
+router.get("/deals", access.accountOwner("query", "login"), getMT5DealsController);
+router.get("/deals/total", access.accountOwner("query", "login"), getMT5DealsTotalController);
+router.get("/account", access.accountOwner("query", "login"), getMT5AccountController);
 router.get("/symbols", getMT5SymbolListController);
-
-router.post("/IbCommisionWebhook", receiveIbCommissionWebhook);
 
 module.exports = router;

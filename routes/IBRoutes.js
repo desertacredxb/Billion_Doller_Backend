@@ -2,6 +2,8 @@
 const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/authMiddleware");
+const access = require("../middleware/accessControl");
+const { getConnections } = require("../controllers/ibConnectionsController");
 const {
   registerIB,
   getAllIBRequests,
@@ -16,21 +18,25 @@ const {
 } = require("../controllers/ibController");
 
 // User side
-router.post("/register", auth, registerIB);
+router.use(auth, access.principal);
+router.post("/register", registerIB);
+router.get("/connections", getConnections);
 
 // Admin side
-router.get("/", getAllIBRequests);
-router.put("/:email/approve", approveIBByEmail);
-router.put("/:email/reject", rejectIBByEmail);
-router.get("/:email", referralCode);
+router.get("/", access.admin, getAllIBRequests);
+router.put("/:email/approve", access.admin, approveIBByEmail);
+router.put("/:email/reject", access.admin, rejectIBByEmail);
+router.get("/:email", access.emailOwner(), referralCode);
 
 
-router.post("/update-commission", updateIBCommission); // v1: MoneyPlant-based, writes User.commission - unchanged
-router.post("/update-commission-v2", updateIBCommissionV2); // v2: MT5-based (live DealGetPage calls), read-only
-router.post("/update-commission-v3", updateIBCommissionV3); // v3: reads from local Deal collection (populated by MT5's webhook), read-only
+router.post("/update-commission", access.admin, updateIBCommission);
+router.post("/update-commission-v2", access.emailOwner("body"), updateIBCommissionV2);
+router.post("/update-commission-v3", access.emailOwner("body"), updateIBCommissionV3);
 
 
-router.post("/withdrawalIBamount", withdrawCommission); // v1: MoneyPlant-based - unchanged
-router.post("/withdrawalIBamountV2", withdrawCommissionV2); // v2: MT5-based, atomic reservation + rollback on failure
+// Client transfers use the atomic MT5 implementation. Keep the legacy
+// MoneyPlant mutation off the client surface.
+router.post("/withdrawalIBamount", access.admin, withdrawCommission);
+router.post("/withdrawalIBamountV2", access.emailOwner("body"), access.accountOwner("body", "accountno"), withdrawCommissionV2);
 
 module.exports = router;

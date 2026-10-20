@@ -26,6 +26,7 @@ const startServer = async () => {
   await checkOnStartup();
 
   const app = express();
+  app.set("trust proxy", 1);
 
   app.use(cors());
   app.use("/api/veriff", veriffRoutes);
@@ -49,6 +50,12 @@ const startServer = async () => {
   app.use("/api/payment", paymentRoutes);
   app.use("/api/ib", IBRoutes);
   app.use("/api/ai", aiRoutes);
+
+  app.use((error, req, res, next) => {
+    if (res.headersSent) return next(error);
+    console.error("Request failed:", error.name || "Error");
+    res.status(500).json({ message: "Unable to complete this request. Please try again shortly." });
+  });
 
   app.get("/", (req, res) => {
     res.send("I ..I...AM ...IRONMAN🫰");

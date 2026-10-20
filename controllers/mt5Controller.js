@@ -104,6 +104,12 @@ exports.registerUserWithMT5 = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+    if (!user.isVerified || !user.isKycVerified) {
+      return res.status(403).json({ message: "Complete email and identity verification before creating a trading account." });
+    }
+    if (!req.principal.isAdmin && Utype !== "CLIENT") {
+      return res.status(403).json({ message: "Only a client trading account can be created from this account." });
+    }
 
     const investorPassword = `${Password}#Inv`;
     const mt5Params = {
@@ -121,10 +127,6 @@ exports.registerUserWithMT5 = async (req, res) => {
 
     const mt5Data = await runExclusive(async () => {
       const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
-
-      console.log(process.env.MT5_MANAGER_LOGIN,
-        process.env.MT5_MANAGER_PASSWORD,
-        process.env.MT5_BUILD,);
 
       await new Promise((resolve, reject) => {
         mt5.Auth(
