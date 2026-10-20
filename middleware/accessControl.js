@@ -4,8 +4,7 @@ const Ticket = require("../models/Ticket");
 const Deal = require("../models/Deal.model");
 const AdminAccount = require("../models/AdminAccount");
 
-const normalizeEmail = value => typeof value === "string" ? value.trim().toLowerCase() : "";
-const adminEmails = () => String(process.env.ADMIN_EMAILS || "").split(",").map(normalizeEmail).filter(Boolean);
+const { normalizeEmail, ownerEmails: adminEmails, roleFor, permissionForRequest, PERMISSIONS } = require("../services/adminPolicy");
 
 function createAccessControl({ users = User, accounts = Account, tickets = Ticket, deals = Deal, admins = AdminAccount } = {}) {
   const deny = (res, code = 403) => res.status(code).json({ message: code === 401 ? "Please sign in again." : "You do not have permission to access this resource." });
@@ -16,10 +15,14 @@ function createAccessControl({ users = User, accounts = Account, tickets = Ticke
       const token = req.user;
       if (!token) return deny(res, 401);
       if (token.kind === "admin") {
-        if (token.iss !== "bdfx-auth" || token.aud !== "bdfx-admin" || !adminEmails().includes(normalizeEmail(token.email))) return deny(res, 401);
+        if (token.iss !== "bdfx-auth" || token.aud !== "bdfx-admin") return deny(res, 401);
         const admin = await admins.findOne({ _id: token.sub, email: normalizeEmail(token.email), authVersion: token.version });
-        if (!admin) return deny(res, 401);
-        req.principal = { id: String(admin._id), email: admin.email, isAdmin: true };
+        const role = roleFor(admin);
+        if (!role) return deny(res, 401);
+        const permissions = role === "owner" ? PERMISSIONS : (admin.permissions || []).filter(value => PERMISSIONS.includes(value));
+        req.principal = { id: String(admin._id), email: admin.email, fullName: admin.fullName || (role === "owner" ? "BDFX Owner" : "BDFX Manager"), isAdmin: true, adminRole: role, permissions };
+        const required = permissionForRequest(req);
+        if (role !== "owner" && required !== "session" && !permissions.includes(required)) return deny(res);
       } else {
         const id = token.id || token.userId;
         if (typeof id !== "string" || !id) return deny(res, 401);
@@ -35,6 +38,7 @@ function createAccessControl({ users = User, accounts = Account, tickets = Ticke
   }
 
   const admin = (req, res, next) => req.principal?.isAdmin ? next() : deny(res);
+  const owner = (req, res, next) => req.principal?.isAdmin && req.principal.adminRole === "owner" ? next() : deny(res);
   const emailOwner = (source = "params", key = "email") => (req, res, next) => {
     if (req.principal?.isAdmin) return next();
     const email = req[source]?.[key];
@@ -76,7 +80,7 @@ function createAccessControl({ users = User, accounts = Account, tickets = Ticke
       next();
     } catch (error) { next(error); }
   };
-  return { principal, admin, emailOwner, accountOwner, ticketOwner, dealOwner };
+  return { principal, admin, owner, emailOwner, accountOwner, ticketOwner, dealOwner };
 }
 
 module.exports = { ...createAccessControl(), createAccessControl, adminEmails, normalizeEmail };

@@ -8,6 +8,7 @@ const now = new Date("2026-10-21T12:00:00Z");
 const response = () => ({ code: 200, data: null, status(value) { this.code = value; return this; }, json(value) { this.data = value; return this; }, set() { return this; } });
 function fixture() {
   process.env.JWT_SECRET = "test-admin-signing-key-not-a-production-secret";
+  delete process.env.ADMIN_OWNER_EMAILS;
   process.env.ADMIN_EMAILS = "admin@example.invalid";
   process.env.ADMIN_OTP_TO_SMTP_USER = "false";
   const state = { admin: null, sent: [] };
@@ -15,6 +16,7 @@ function fixture() {
   function matches(filter) {
     return state.admin && Object.entries(filter).every(([key, wanted]) => {
       const actual = state.admin[key];
+      if (wanted && typeof wanted === "object" && "$ne" in wanted) return actual !== wanted.$ne;
       if (wanted && typeof wanted === "object" && "$gt" in wanted) return actual > wanted.$gt;
       if (wanted && typeof wanted === "object" && "$lt" in wanted) return actual < wanted.$lt;
       return actual === wanted;
@@ -25,7 +27,7 @@ function fixture() {
     findOneAndUpdate: (filter, update, options = {}) => {
       if (!matches(filter)) {
         if (!options.upsert) return q(null);
-        state.admin = { _id: "111111111111111111111111", email: filter.email, authVersion: 0 };
+        state.admin = { _id: "111111111111111111111111", email: filter.email, authVersion: 0, ...update.$setOnInsert };
       }
       Object.assign(state.admin, update.$set);
       for (const [key, value] of Object.entries(update.$inc || {})) state.admin[key] = (state.admin[key] || 0) + value;
@@ -94,4 +96,29 @@ test("recovery changes the password and invalidates existing administrator sessi
   const result = await f.call("verifyCode", { challengeId: request.data.challengeId, code: "123456", newPassword: "replacement-test-password-123" });
   assert.equal(result.code, 200); assert.equal(f.state.admin.authVersion, 3);
   assert.ok(await bcrypt.compare("replacement-test-password-123", f.state.admin.passwordHash));
+});
+
+test("managers receive their own sign-in code and cannot sign in after access is disabled", async () => {
+  const f = fixture();
+  process.env.ADMIN_OTP_TO_SMTP_USER = "true";
+  process.env.EMAIL_USER = "sender@example.invalid";
+  f.state.admin = { _id: "111111111111111111111111", email: "manager@example.invalid", role: "manager", invitedBy: "222222222222222222222222", enabled: true, permissions: ["support"], authVersion: 0 };
+  const request = await f.call("requestCode", { email: "manager@example.invalid" });
+  assert.equal(f.state.sent[0].to, "manager@example.invalid");
+  assert.equal(request.data.requiresPasswordSetup, true);
+  f.state.admin.enabled = false;
+  assert.equal((await f.call("verifyCode", { challengeId: request.data.challengeId, code: "123456", newPassword: "a-test-password-123" })).code, 400);
+  const count = f.state.sent.length;
+  await f.call("requestCode", { email: "manager@example.invalid" });
+  assert.equal(f.state.sent.length, count);
+});
+
+test("a new owner email revokes the legacy arbitrary address without allowing the legacy account to enroll as a manager", async () => {
+  const f = fixture();
+  f.state.admin = { _id: "111111111111111111111111", email: "admin@example.invalid", authVersion: 0 };
+  process.env.ADMIN_OWNER_EMAILS = "new-owner@example.invalid";
+  const legacy = await f.call("requestCode", { email: "admin@example.invalid" });
+  assert.equal(f.state.sent.length, 0);
+  assert.equal((await f.call("verifyCode", { challengeId: legacy.data.challengeId, code: "123456" })).code, 400);
+  delete process.env.ADMIN_OWNER_EMAILS;
 });

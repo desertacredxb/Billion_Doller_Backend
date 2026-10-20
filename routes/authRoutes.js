@@ -42,7 +42,7 @@ router.post("/admin/verify-code", adminLimiter, adminAuth.verifyCode);
 router.use(auth, access.principal);
 router.get("/admin/session", access.admin, (req, res) => {
   res.set("Cache-Control", "no-store");
-  res.json({ email: req.principal.email, role: "admin" });
+  res.json({ email: req.principal.email, fullName: req.principal.fullName, role: req.principal.adminRole, permissions: req.principal.permissions });
 });
 router.get("/users", access.admin, getAllUsers);
 router.get("/user/:email", access.emailOwner(), getUserByEmail);

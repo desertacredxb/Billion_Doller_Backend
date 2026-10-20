@@ -1,0 +1,12 @@
+const express = require("express");
+const auth = require("../middleware/authMiddleware");
+const access = require("../middleware/accessControl");
+const controller = require("../controllers/operationsController").createController();
+const router = express.Router();
+router.use(auth, access.principal);
+router.get("/onboarding", controller.onboarding);
+router.use(access.admin);
+router.get("/overview", controller.overview);
+router.get("/report", controller.report);
+router.get("/audit", controller.audit);
+module.exports = router;

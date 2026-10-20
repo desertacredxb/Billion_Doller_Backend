@@ -21,18 +21,24 @@ const aiRoutes = require("./routes/ai.routes");
 const veriffRoutes = require("./routes/veriffRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes");
 const blogRoutes = require("./routes/blogRoutes");
+const operationsRoutes = require("./routes/operationsRoutes");
+const staffRoutes = require("./routes/staffRoutes");
+const { createAudit } = require("./middleware/adminAudit");
 const enquiryNotifications = require("./services/enquiryNotifications.service");
 const { checkOnStartup } = require("./services/veriffReadiness.service");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
   await checkOnStartup();
+  await require("./services/adminBootstrap.service").run();
   enquiryNotifications.start();
 
   const app = express();
   app.set("trust proxy", 1);
 
   app.use(cors());
+  app.get("/health", require("./controllers/healthController").createHealth({ connection: require("mongoose").connection }));
+  app.use("/api", createAudit());
   app.use("/api/veriff", veriffRoutes);
   app.use("/api/blogs", blogRoutes);
   app.use(express.json());
@@ -56,6 +62,8 @@ const startServer = async () => {
   app.use("/api/ib", IBRoutes);
   app.use("/api/ai", aiRoutes);
   app.use("/api/enquiries", enquiryRoutes);
+  app.use("/api/operations", operationsRoutes);
+  app.use("/api/staff", staffRoutes);
 
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
