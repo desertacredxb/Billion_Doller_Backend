@@ -20,6 +20,7 @@ const dealRoutes = require("./routes/dealRoutes");
 const aiRoutes = require("./routes/ai.routes");
 const veriffRoutes = require("./routes/veriffRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes");
+const blogRoutes = require("./routes/blogRoutes");
 const enquiryNotifications = require("./services/enquiryNotifications.service");
 const { checkOnStartup } = require("./services/veriffReadiness.service");
 
@@ -33,6 +34,7 @@ const startServer = async () => {
 
   app.use(cors());
   app.use("/api/veriff", veriffRoutes);
+  app.use("/api/blogs", blogRoutes);
   app.use(express.json());
 
   app.get("/check-ip", async (req, res) => {
@@ -58,7 +60,8 @@ const startServer = async () => {
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
     console.error("Request failed:", error.name || "Error");
-    res.status(500).json({ message: "Unable to complete this request. Please try again shortly." });
+    const status = error.type === "entity.too.large" ? 413 : error.type === "entity.parse.failed" ? 400 : 500;
+    res.status(status).json({ message: status === 413 ? "This request is too large." : status === 400 ? "Enter valid request details." : "Unable to complete this request. Please try again shortly." });
   });
 
   app.get("/", (req, res) => {
