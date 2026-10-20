@@ -16,8 +16,13 @@ const ticketSchema = new mongoose.Schema(
       ],
       default: "Others",
     },
-    subject: { type: String, required: true },
-    description: { type: String, required: true },
+    subject: { type: String, required: true, trim: true, minlength: 3, maxlength: 160 },
+    description: { type: String, required: true, trim: true, minlength: 10, maxlength: 5000 },
+    requestId: { type: String, maxlength: 80 },
+    notificationStatus: { type: String, enum: ["pending", "sending", "sent", "failed"], default: "pending" },
+    notificationAttempts: { type: Number, default: 0 },
+    notificationNextAttemptAt: { type: Date, default: Date.now },
+    notificationAttemptedAt: Date,
     status: {
       type: String,
       enum: ["Open", "Pending", "Closed"],
@@ -31,4 +36,5 @@ const ticketSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+ticketSchema.index({ user: 1, requestId: 1 }, { unique: true, partialFilterExpression: { requestId: { $type: "string" } } });
 module.exports = mongoose.model("Ticket", ticketSchema);

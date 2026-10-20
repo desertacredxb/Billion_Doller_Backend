@@ -1,246 +1,129 @@
 const Ticket = require("../models/Ticket");
 const User = require("../models/User");
 const Message = require("../models/Reply");
-const sendEmail = require("../utils/sendEmail");
 
-// Create a new support ticket
-exports.createTicket = async (req, res) => {
-  try {
-    const { email } = req.params;
-    const { category, subject, description } = req.body;
-
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    // ✅ Count open + pending tickets for this user
-    const activeTickets = await Ticket.countDocuments({
-      user: user._id,
-      status: { $in: ["Open", "Pending"] },
-    });
-
-    if (activeTickets >= 2) {
-      return res
-        .status(400)
-        .json({ message: "You already have 2 active tickets." });
+const CATEGORIES = ["Deposit/Withdrawal", "Account-verification", "MT5 Support", "IB Commission", "Bonous&Other Promotion", "Others"];
+const text = value => typeof value === "string" ? value.trim() : "";
+const validRequestId = value => value === undefined || (typeof value === "string" && /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(value));
+function validateTicket(body = {}) {
+  const value = { category: text(body?.category), subject: text(body?.subject), description: text(body?.description) };
+  const errors = {};
+  if (!CATEGORIES.includes(value.category)) errors.category = "Choose a support category.";
+  if (value.subject.length < 3 || value.subject.length > 160) errors.subject = "Enter a subject of 3–160 characters.";
+  if (value.description.length < 10 || value.description.length > 5000) errors.description = "Describe your issue in 10–5,000 characters.";
+  if (!validRequestId(body?.requestId)) errors.requestId = "Refresh this page and try again.";
+  if (body?.requestId !== undefined) value.requestId = body.requestId;
+  return { value, errors };
+}
+function createController({ tickets = Ticket, users = User, messages = Message, notify = () => {} } = {}) {
+  const fail = (res, error, message) => {
+    console.error(message, error.name || "Error");
+    return res.status(500).json({ message: "Unable to complete this request. Please try again shortly." });
+  };
+  async function createTicket(req, res) {
+    let user, value;
+    try {
+      const result = validateTicket(req.body);
+      if (Object.keys(result.errors).length) return res.status(400).json({ message: "Check the highlighted ticket details.", errors: result.errors });
+      value = result.value;
+      user = await users.findOne({ email: req.params.email });
+      if (!user) return res.status(404).json({ message: "User not found." });
+      if (value.requestId) {
+        const existing = await tickets.findOne({ user: user._id, requestId: value.requestId });
+        if (existing) return res.status(201).json(existing);
+      }
+      if (await tickets.countDocuments({ user: user._id, status: { $in: ["Open", "Pending"] } }) >= 2) {
+        return res.status(409).json({ message: "You already have 2 active tickets. Reply to an existing ticket for updates." });
+      }
+      const ticket = await tickets.create({ user: user._id, ...value });
+      res.status(201).json(ticket);
+      Promise.resolve().then(notify).catch(() => console.error("Ticket notification delivery pending"));
+    } catch (error) {
+      if (error.code === 11000 && user && value?.requestId) {
+        const existing = await tickets.findOne({ user: user._id, requestId: value.requestId });
+        if (existing) return res.status(201).json(existing);
+      }
+      return fail(res, error, "Ticket creation failed");
     }
-
-    const ticket = await Ticket.create({
-      user: user._id,
-      category,
-      subject,
-      description,
-    });
-
-    await sendEmail({
-      to: process.env.EMAIL_USER,
-      subject: `🎫 New Ticket from ${user.name || email}`,
-      text: `A new support ticket has been created.
-
-User: ${user.name || "N/A"} (${email})
-Category: ${category}
-Subject: ${subject}
-Description: ${description}`,
-      html: `
-        <h2>New Support Ticket</h2>
-        <p><strong>User:</strong> ${user.name || "N/A"} (${email})</p>
-        <p><strong>Category:</strong> ${category}</p>
-        <p><strong>Subject:</strong> ${subject}</p>
-        <p><strong>Description:</strong> ${description}</p>
-        <br/>
-        <small>This is an automated notification.</small>
-      `,
-    });
-
-    res.status(201).json(ticket);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error creating ticket", error: err.message });
   }
-};
-
-// Get all tickets (admin)
-exports.getAllTickets = async (req, res) => {
-  try {
-    const tickets = await Ticket.find()
-      .populate("user", "fullName email")
-      .sort({ createdAt: -1 });
-    res.status(200).json(tickets);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error fetching tickets", error: err.message });
+  async function getAllTickets(_req, res) {
+    try { res.json(await tickets.find().populate("user", "fullName email").sort({ createdAt: -1 })); }
+    catch (error) { fail(res, error, "Ticket list failed"); }
   }
-};
-
-// Get tickets by user email
-exports.getUserTickets = async (req, res) => {
-  try {
-    const { email } = req.params;
-
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    const tickets = await Ticket.find({ user: user._id }).sort({
-      createdAt: -1,
-    });
-    res.status(200).json(tickets);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error fetching user tickets", error: err.message });
+  async function getUserTickets(req, res) {
+    try {
+      const user = await users.findOne({ email: req.params.email });
+      if (!user) return res.status(404).json({ message: "User not found." });
+      res.json(await tickets.find({ user: user._id }).sort({ createdAt: -1 }));
+    } catch (error) { fail(res, error, "Ticket list failed"); }
   }
-};
-
-// Get a ticket with messages
-// controller (replace getTicketWithMessages)
-exports.getTicketWithMessages = async (req, res) => {
-  try {
-    const { ticketId } = req.params;
-
-    const ticket = await Ticket.findById(ticketId).populate(
-      "user",
-      "fullName email"
-    );
-
-    if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-
-    // Determine viewer role: prefer authenticated user role, fallback to query param
-    const isAdminViewing = req.principal.isAdmin;
-
-    if (isAdminViewing) {
-      // Admin is viewing -> mark user-sent messages as readByAdmin
-      await Message.updateMany(
-        { ticket: ticketId, senderType: "User", readByAdmin: false },
-        { $set: { readByAdmin: true } }
-      );
-
-      // Recompute unreadByAdmin counter and save
-      const unreadByAdmin = await Message.countDocuments({
-        ticket: ticketId,
-        senderType: "User",
-        readByAdmin: false,
-      });
-      ticket.unreadByAdmin = unreadByAdmin;
-      await ticket.save();
-    } else {
-      // User is viewing -> mark admin-sent messages as readByUser
-      await Message.updateMany(
-        { ticket: ticketId, senderType: "Admin", readByUser: false },
-        { $set: { readByUser: true } }
-      );
-
-      // Recompute unreadByUser counter and save
-      const unreadByUser = await Message.countDocuments({
-        ticket: ticketId,
-        senderType: "Admin",
-        readByUser: false,
-      });
-      ticket.unreadByUser = unreadByUser;
-      await ticket.save();
-    }
-
-    const messages = await Message.find({ ticket: ticketId }).sort({
-      createdAt: 1,
-    });
-
-    res.status(200).json({ ticket, messages });
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error retrieving ticket", error: err.message });
+  async function getTicketWithMessages(req, res) {
+    try {
+      const { ticketId } = req.params;
+      const ticket = await tickets.findById(ticketId).populate("user", "fullName email");
+      if (!ticket) return res.status(404).json({ message: "Ticket not found." });
+      const isAdmin = req.principal.isAdmin;
+      const readField = isAdmin ? "readByAdmin" : "readByUser";
+      const senderType = isAdmin ? "User" : "Admin";
+      await messages.updateMany({ ticket: ticketId, senderType, [readField]: false }, { $set: { [readField]: true } });
+      const unread = await messages.countDocuments({ ticket: ticketId, senderType, [readField]: false });
+      const field = isAdmin ? "unreadByAdmin" : "unreadByUser";
+      await tickets.updateOne({ _id: ticketId }, { $set: { [field]: unread } });
+      ticket[field] = unread;
+      res.json({ ticket, messages: await messages.find({ ticket: ticketId }).sort({ createdAt: 1 }) });
+    } catch (error) { fail(res, error, "Ticket retrieval failed"); }
   }
-};
-
-// Update ticket status
-exports.updateTicketStatus = async (req, res) => {
-  try {
-    const { ticketId } = req.params;
-    const { status } = req.body;
-
-    const updated = await Ticket.findByIdAndUpdate(
-      ticketId,
-      { status },
-      { new: true }
-    );
-    if (!updated) return res.status(404).json({ message: "Ticket not found" });
-
-    res.status(200).json(updated);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error updating status", error: err.message });
+  async function updateTicketStatus(req, res) {
+    try {
+      const status = req.body?.status;
+      if (!["Open", "Pending", "Closed"].includes(status)) return res.status(400).json({ message: "Choose Open, Pending or Closed." });
+      if (!/^[a-f\d]{24}$/i.test(req.params.ticketId || "")) return res.status(404).json({ message: "Ticket not found." });
+      const ticket = await tickets.findByIdAndUpdate(req.params.ticketId, { $set: { status } }, { new: true, runValidators: true });
+      if (!ticket) return res.status(404).json({ message: "Ticket not found." });
+      res.json(ticket);
+    } catch (error) { fail(res, error, "Ticket update failed"); }
   }
-};
-
-// Delete a ticket
-exports.deleteTicket = async (req, res) => {
-  try {
-    const { ticketId } = req.params;
-
-    await Message.deleteMany({ ticket: ticketId });
-    await Ticket.findByIdAndDelete(ticketId);
-
-    res.status(200).json({ message: "Ticket and messages deleted" });
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error deleting ticket", error: err.message });
+  async function deleteTicket(req, res) {
+    try {
+      if (!/^[a-f\d]{24}$/i.test(req.params.ticketId || "")) return res.status(404).json({ message: "Ticket not found." });
+      await messages.deleteMany({ ticket: req.params.ticketId });
+      await tickets.findByIdAndDelete(req.params.ticketId);
+      res.json({ message: "Ticket and messages deleted." });
+    } catch (error) { fail(res, error, "Ticket removal failed"); }
   }
-};
-
-// Add a message to a ticket
-
-exports.addMessageToTicket = async (req, res) => {
-  try {
-    const { ticketId } = req.params;
-    const { message, attachments } = req.body;
+  async function addMessageToTicket(req, res) {
     const senderType = req.principal.isAdmin ? "Admin" : "User";
-
-    const ticket = await Ticket.findById(ticketId);
-    if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-
-    // New message with proper read flags
-    const newMessageData = {
-      ticket: ticketId,
-      message,
-      senderType,
-      attachments,
-      readByUser: senderType === "User" ? true : false, // User's own messages are "read" for them
-      readByAdmin: senderType === "Admin" ? true : false, // Admin's own messages are "read" for them
-    };
-
-    const newMessage = await Message.create(newMessageData);
-
-    // Update unread counters
-    if (senderType === "Admin") {
-      ticket.unreadByUser = (ticket.unreadByUser || 0) + 1;
-    } else {
-      ticket.unreadByAdmin = (ticket.unreadByAdmin || 0) + 1;
+    const key = { ticket: req.params.ticketId, senderType, requestId: req.body?.requestId };
+    try {
+      const message = text(req.body?.message);
+      if (!message || message.length > 5000 || !validRequestId(req.body?.requestId)) return res.status(400).json({ message: "Enter a message of 1–5,000 characters." });
+      const attachments = req.body?.attachments;
+      if (attachments !== undefined && (!Array.isArray(attachments) || attachments.length > 5 || attachments.some(url => typeof url !== "string" || url.length > 2048 || !/^https:\/\//i.test(url)))) {
+        return res.status(400).json({ message: "Use up to 5 secure attachment links." });
+      }
+      const ticket = await tickets.findById(req.params.ticketId);
+      if (!ticket) return res.status(404).json({ message: "Ticket not found." });
+      // Retrying a delivered message remains safe even if support has since closed the ticket.
+      if (key.requestId) {
+        const existing = await messages.findOne(key);
+        if (existing) return res.status(201).json(existing);
+      }
+      if (ticket.status === "Closed") return res.status(409).json({ message: "This ticket is closed. Open a new ticket if you still need help." });
+      const item = await messages.create({ ticket: ticket._id, message, senderType, ...(key.requestId ? { requestId: key.requestId } : {}), attachments, readByUser: senderType === "User", readByAdmin: senderType === "Admin" });
+      await tickets.updateOne({ _id: ticket._id }, { $inc: { [senderType === "Admin" ? "unreadByUser" : "unreadByAdmin"]: 1 } });
+      res.status(201).json(item);
+    } catch (error) {
+      if (error.code === 11000 && key.requestId) {
+        const existing = await messages.findOne(key);
+        if (existing) return res.status(201).json(existing);
+      }
+      fail(res, error, "Ticket reply failed");
     }
-    await ticket.save();
-
-    res.status(201).json(newMessage);
-  } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ message: "Error adding message", error: err.message });
   }
-};
-
-// Get all messages for a ticket
-exports.getMessagesForTicket = async (req, res) => {
-  try {
-    const { ticketId } = req.params;
-
-    const messages = await Message.find({ ticket: ticketId }).sort({
-      createdAt: 1,
-    });
-    res.status(200).json(messages);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error fetching messages", error: err.message });
+  async function getMessagesForTicket(req, res) {
+    try { res.json(await messages.find({ ticket: req.params.ticketId }).sort({ createdAt: 1 })); }
+    catch (error) { fail(res, error, "Ticket messages failed"); }
   }
-};
+  return { createTicket, getAllTickets, getUserTickets, getTicketWithMessages, updateTicketStatus, deleteTicket, addMessageToTicket, getMessagesForTicket };
+}
+module.exports = { ...createController(), createController, validateTicket };
