@@ -12,11 +12,23 @@ async function atStage(stage, work) {
 }
 
 async function checkIBStorage({ users = User, brokers = IB } = {}) {
-  await atStage("index_init", () => brokers.init());
-  const indexes = await atStage("index_list", () => brokers.listIndexes());
+  const listIndexes = async () => {
+    try { return await brokers.listIndexes(); }
+    catch (error) { if (error.code === 26) return []; throw error; }
+  };
+  // Model.init() may cache an earlier failure from before connection readiness.
+  // Inspect/create only the required indexes on the already connected collection.
+  let indexes = await atStage("index_list", listIndexes);
+  const hasIndex = field => indexes.some(index => index.unique === true && index.sparse === true &&
+    !index.buildUUID && Object.keys(index.key).length === 1 && index.key[field] === 1);
   for (const field of ["user", "referralCode"]) {
-    if (!indexes.some(index => index.unique === true && index.sparse === true &&
-        Object.keys(index.key).length === 1 && index.key[field] === 1)) {
+    if (!hasIndex(field)) {
+      await atStage(`index_create_${field}`, () => brokers.collection.createIndex(
+        { [field]: 1 }, { name: `veriff_${field}_unique_sparse`, unique: true, sparse: true }
+      ));
+      indexes = await atStage("index_list", listIndexes);
+    }
+    if (!hasIndex(field)) {
       const error = new Error("IB approval requires its sparse unique indexes.");
       error.readinessStage = `missing_${field}_index`;
       throw error;
@@ -43,7 +55,7 @@ async function checkOnStartup({ env = process.env, check = checkIBStorage, logge
     logger.info("Veriff IB storage preflight passed: transactions and unique indexes ready.");
   } catch (error) {
     // Driver errors can contain connection details; only log the readiness result.
-    const allowedStages = ["index_init", "index_list", "missing_user_index", "missing_referralCode_index", "transaction"];
+    const allowedStages = ["index_list", "index_create_user", "index_create_referralCode", "missing_user_index", "missing_referralCode_index", "transaction"];
     const reason = allowedStages.includes(error.readinessStage) ? error.readinessStage : "unavailable";
     const code = Number.isInteger(error.mongoCode) ? `, MongoDB code ${error.mongoCode}` : "";
     logger.error(`Veriff IB storage preflight failed: ${reason}${code}; automated IB approval cannot start.`);

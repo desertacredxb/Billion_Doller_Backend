@@ -2,8 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { checkIBStorage, checkOnStartup } = require("../services/veriffReadiness.service");
 
-function storage({ missingIndex = false, transactionError = false } = {}) {
+function storage({ missingIndex = false, createError = false, transactionError = false } = {}) {
   const calls = [];
+  const fields = missingIndex ? ["referralCode"] : ["user", "referralCode"];
   const session = {
     startTransaction() { calls.push("start"); },
     async abortTransaction() { calls.push("abort"); },
@@ -23,9 +24,15 @@ function storage({ missingIndex = false, transactionError = false } = {}) {
   const users = { async startSession() { return session; }, findOne(filter) {
     assert.deepEqual(filter, { _id: null }); return query("user-read");
   } };
-  const brokers = { async init() {}, async listIndexes() {
-    return (missingIndex ? ["referralCode"] : ["user", "referralCode"]).map(field => ({ key: { [field]: 1 }, unique: true, sparse: true }));
-  }, findOne(filter) { assert.deepEqual(filter, { _id: null }); return query("ib-read"); } };
+  const brokers = { async init() { throw new Error("Cached model initialization failure"); }, async listIndexes() {
+    return fields.map(field => ({ key: { [field]: 1 }, unique: true, sparse: true }));
+  }, collection: { async createIndex(key, options) {
+    const field = Object.keys(key)[0];
+    assert.deepEqual(options, { name: `veriff_${field}_unique_sparse`, unique: true, sparse: true });
+    calls.push(`index-${field}`);
+    if (createError) throw Object.assign(new Error("Duplicate private values"), { code: 11000 });
+    fields.push(field);
+  } }, findOne(filter) { assert.deepEqual(filter, { _id: null }); return query("ib-read"); } };
   return { users, brokers, calls };
 }
 
@@ -35,10 +42,16 @@ test("storage preflight checks both indexes and aborts its read-only transaction
   assert.deepEqual(db.calls, ["start", "user-read", "ib-read", "abort", "end"]);
 });
 
-test("a missing IB uniqueness index blocks readiness before any transaction", async () => {
+test("a missing IB uniqueness index is created without rebuilding existing indexes", async () => {
   const db = storage({ missingIndex: true });
-  await assert.rejects(checkIBStorage(db), /unique indexes/);
-  assert.deepEqual(db.calls, []);
+  await checkIBStorage(db);
+  assert.deepEqual(db.calls, ["index-user", "start", "user-read", "ib-read", "abort", "end"]);
+});
+
+test("duplicate data blocks a required unique index and prevents the transaction probe", async () => {
+  const db = storage({ missingIndex: true, createError: true });
+  await assert.rejects(checkIBStorage(db), error => error.readinessStage === "index_create_user" && error.mongoCode === 11000);
+  assert.deepEqual(db.calls, ["index-user"]);
 });
 
 test("a failed transaction check always closes its session", async () => {
