@@ -1,6 +1,7 @@
 // routes/ibRoutes.js
 const express = require("express");
 const router = express.Router();
+const auth = require("../middleware/authMiddleware");
 const {
   registerIB,
   getAllIBRequests,
@@ -15,7 +16,7 @@ const {
 } = require("../controllers/ibController");
 
 // User side
-router.post("/register", registerIB);
+router.post("/register", auth, registerIB);
 
 // Admin side
 router.get("/", getAllIBRequests);

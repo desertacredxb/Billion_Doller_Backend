@@ -12,6 +12,7 @@ const {
 } = require("../utils/commissionServiceV3");
 const { updateMT5Balance } = require("../utils/MT5/mt5Balance");
 const axios = require("axios");
+const ibAutoApproval = require("../services/ibAutoApproval.service");
 
 /**
  * 📌 Register IB Request (User Side)
@@ -30,29 +31,47 @@ const registerIB = async (req, res) => {
     } = req.body;
 
     // check if user exists
-    const user = await User.findOne({ email });
+    const user = await User.findById(req.user.id || req.user.userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+    if (!user.isVerified) return res.status(403).json({ message: "Please verify your email before applying." });
+    if (email !== user.email) return res.status(403).json({ message: "You can only submit your own IB application." });
 
     // check if already requested
     const existingIB = await IB.findOne({ email });
     if (existingIB) {
+      if (existingIB.approvalProvider === "veriff" && String(existingIB.user) === String(user._id)) {
+        const result = await ibAutoApproval.syncUser(user._id);
+        const status = result.status || existingIB.status;
+        return res.json({ message: status === "approved" ? "Your IB application is approved." : "Your IB application is awaiting identity verification.",
+          newIB: { status }, verificationRequired: result.managed ? result.verificationRequired : status === "pending" });
+      }
       return res.status(400).json({ message: "IB request already submitted" });
+    }
+
+    const automatic = ibAutoApproval.isEnabled();
+    if (automatic && (!["2", "4", "6", "8", "10"].includes(String(expectedCommissionDirect)) ||
+        !["Yes", "No"].includes(existingClientBase) || !["Yes", "No"].includes(offerEducation) ||
+        !["0-10", "10-50", "50-100", "100+"].includes(expectedClientsNext3Months))) {
+      return res.status(400).json({ message: "Please complete the IB onboarding questions using the available choices." });
     }
 
     const newIB = new IB({
       email,
+      user: user._id,
+      approvalProvider: automatic ? "veriff" : "manual",
       existingClientBase,
       offerEducation,
       expectedClientsNext3Months,
       expectedCommissionDirect,
-      expectedCommissionSubIB,
-      yourShare,
-      clientShare,
+      expectedCommissionSubIB: automatic ? "0" : expectedCommissionSubIB,
+      yourShare: automatic ? Number(expectedCommissionDirect) / 2 : yourShare,
+      clientShare: automatic ? Number(expectedCommissionDirect) / 2 : clientShare,
     });
 
     await newIB.save();
+    const approval = automatic ? await ibAutoApproval.syncUser(user._id) : { managed: false };
 
     // ✅ Send email to admin
     await sendEmail({
@@ -61,7 +80,7 @@ const registerIB = async (req, res) => {
       html: `
         <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
           <h2 style="color: #1abc9c;">New Introducing Broker Request</h2>
-          <p>A user has submitted a new IB request. Please review and approve in the admin dashboard.</p>
+          <p>${automatic ? "A new IB application is being processed using Veriff identity verification." : "A user has submitted a new IB request. Please review and approve in the admin dashboard."}</p>
           
           <p><strong>User Details:</strong></p>
           <ul>
@@ -75,12 +94,12 @@ const registerIB = async (req, res) => {
             <li><strong>Offer Education:</strong> ${offerEducation}</li>
             <li><strong>Expected Clients (Next 3 Months):</strong> ${expectedClientsNext3Months}</li>
             <li><strong>Expected Commission (Direct):</strong> ${expectedCommissionDirect}</li>
-            <li><strong>Expected Commission (Sub IB):</strong> ${expectedCommissionSubIB}</li>
-            <li><strong>Your Share:</strong> ${yourShare}</li>
-            <li><strong>Client Share:</strong> ${clientShare}</li>
+            <li><strong>Expected Commission (Sub IB):</strong> ${newIB.expectedCommissionSubIB}</li>
+            <li><strong>Your Share:</strong> ${newIB.yourShare}</li>
+            <li><strong>Client Share:</strong> ${newIB.clientShare}</li>
           </ul>
 
-          <p>✅ Next Step: Please approve this IB request in the dashboard and contact the user if necessary.</p>
+          <p>${automatic ? `Application status: ${approval.status}.` : "Please approve this IB request in the dashboard and contact the user if necessary."}</p>
 
           <br/>
           <p>Best Regards,<br/><strong>Billion Dollar FX System</strong></p>
@@ -90,10 +109,11 @@ const registerIB = async (req, res) => {
 
     res
       .status(201)
-      .json({ message: "IB request submitted successfully", newIB });
+      .json({ message: approval.status === "approved" ? "Your IB application is approved." : "IB request submitted successfully",
+        newIB: { ...newIB.toObject(), ...(approval.managed ? { status: approval.status, referralCode: approval.referralCode } : {}) },
+        verificationRequired: !!approval.verificationRequired });
   } catch (err) {
-    console.error("❌ Error submitting IB request:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(err.code === 11000 ? 409 : 503).json({ message: err.code === 11000 ? "IB request already submitted. Please refresh." : "Unable to finish your IB application. Please try again shortly." });
   }
 };
 
@@ -130,6 +150,7 @@ const approveIBByEmail = async (req, res) => {
 
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
+    if (ib.approvalProvider === "veriff") return res.status(409).json({ message: "This IB application is managed by Veriff identity verification." });
 
     if (ib.status === "approved") {
       return res.status(400).json({
@@ -192,6 +213,7 @@ const rejectIBByEmail = async (req, res) => {
 
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
+    if (ib.approvalProvider === "veriff") return res.status(409).json({ message: "This IB application is managed by Veriff identity verification." });
 
     if (ib.status === "rejected") {
       return res.status(400).json({ message: "IB is already rejected" });
