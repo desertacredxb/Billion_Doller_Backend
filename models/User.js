@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const idProofSchema = require("./schemas/idProof.schema");
+const veriffSchema = require("./schemas/veriff.schema");
 
 const userSchema = new mongoose.Schema(
   {
@@ -13,6 +14,9 @@ const userSchema = new mongoose.Schema(
       default: "Individual",
     },
     nationality: { type: String, required: true },
+    residenceCountry: { type: String },
+    kycProvider: { type: String, enum: ["manual", "veriff"], default: "manual" },
+    veriff: { type: veriffSchema, default: undefined },
     address: { type: String },
     country: { type: String },
     state: { type: String, required: true },

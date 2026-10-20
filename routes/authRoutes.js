@@ -22,6 +22,7 @@ const {
   userByReferralCode,
 } = require("../controllers/authController");
 const upload = require("../middleware/cloudinaryUploader");
+const auth = require("../middleware/authMiddleware");
 
 router.post("/register", register);
 router.post("/verify-otp", verifyOTP); // Verifies OTP and finalizes registration
@@ -36,7 +37,7 @@ router.put(
   uploadProfileImage,
 );
 
-router.put("/update-profile/:email", updateUserProfile);
+router.put("/update-profile/:email", auth, updateUserProfile);
 
 router.put(
   "/documents/:email",

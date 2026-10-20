@@ -18,6 +18,7 @@ const IBRoutes = require("./routes/IBRoutes");
 const mt5Routes = require("./routes/mt5Routes");
 const dealRoutes = require("./routes/dealRoutes");
 const aiRoutes = require("./routes/ai.routes");
+const veriffRoutes = require("./routes/veriffRoutes");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
@@ -25,6 +26,7 @@ const startServer = async () => {
   const app = express();
 
   app.use(cors());
+  app.use("/api/veriff", veriffRoutes);
   app.use(express.json());
 
   app.get("/check-ip", async (req, res) => {

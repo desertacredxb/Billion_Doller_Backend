@@ -7,6 +7,8 @@ const sendEmail = require("../utils/sendEmail");
 const { sendPasswordResetOtpEmail } = require("../utils/Email");
 // const sendWhatsAppOTP = require("../utils/sendWhatsAppOTP");
 const axios = require("axios");
+const { isEnabled: veriffEnabled } = require("../services/veriff.service");
+const { isUae, normalizePhone, phonePattern } = require("../utils/veriffPolicy");
 
 exports.register = async (req, res) => {
   const {
@@ -18,9 +20,21 @@ exports.register = async (req, res) => {
     city,
     password,
     referralCode,
+    residenceCountry,
   } = req.body;
 
   try {
+    const automaticKyc = veriffEnabled();
+    const registrationPhone = automaticKyc ? normalizePhone(phone) : phone;
+    if (automaticKyc && !registrationPhone) {
+      return res.status(400).json({ message: "Enter a valid mobile number including country code." });
+    }
+    if (automaticKyc && (typeof residenceCountry !== "string" || !residenceCountry.trim() || residenceCountry.length > 100)) {
+      return res.status(400).json({ message: "Please select your country of residence." });
+    }
+    if (automaticKyc && (isUae(nationality) || isUae(residenceCountry))) {
+      return res.status(403).json({ message: "We don't accept UAE clients." });
+    }
     // 🔍 Check email
     const existingEmail = await User.findOne({ email });
     if (existingEmail) {
@@ -28,7 +42,7 @@ exports.register = async (req, res) => {
     }
 
     // 🔍 Check phone
-    const existingPhone = await User.findOne({ phone });
+    const existingPhone = await User.findOne({ phone: automaticKyc ? phonePattern(registrationPhone) : phone });
     if (existingPhone) {
       return res
         .status(400)
@@ -63,9 +77,11 @@ exports.register = async (req, res) => {
     const user = new User({
       fullName,
       email,
-      phone,
+      phone: registrationPhone,
       nationality,
-      country: nationality || "",
+      country: automaticKyc ? residenceCountry.trim() : (nationality || ""),
+      residenceCountry: automaticKyc ? residenceCountry.trim() : undefined,
+      kycProvider: automaticKyc ? "veriff" : "manual",
       state,
       city,
       password: hashedPassword,
@@ -146,7 +162,9 @@ exports.verifyOTP = async (req, res) => {
       <p>Your account has been successfully created. You can now log in and start exploring the platform.</p>
 
       <p style="color:#d9534f; font-weight:bold;">
-        🔔 To activate your account fully, please go to <strong>Settings</strong> and upload your documents and bank details for KYC verification.
+        ${user.kycProvider === "veriff"
+          ? "Please continue identity verification to activate your account."
+          : "To activate your account fully, please go to Settings and upload your documents and bank details for KYC verification."}
       </p>
 
       <img src="https://res.cloudinary.com/dqrlkbsdq/image/upload/v1758094566/welcome_to_billiondollarfx_bn6rs2.jpg"
@@ -197,6 +215,7 @@ exports.verifyOTP = async (req, res) => {
 
     res.status(201).json({
       message: "User verified & registered",
+      kycRequired: user.kycProvider === "veriff",
       token,
       user: {
         fullName: user.fullName,
@@ -535,7 +554,24 @@ exports.uploadProfileImage = async (req, res) => {
 exports.updateUserProfile = async (req, res) => {
   try {
     const { email } = req.params;
-    const updateFields = req.body;
+    const existing = await User.findOne({ email });
+    if (!existing) return res.status(404).json({ message: "User not found" });
+    if (String(existing._id) !== String(req.user.id || req.user.userId)) {
+      return res.status(403).json({ message: "You can only update your own profile." });
+    }
+    // Never accept approval flags, credentials, or provider session data from a profile form.
+    const allowed = ["fullName", "gender", "accountType", "address", "country", "state", "city", "postalCode", "phone"];
+    const updateFields = Object.fromEntries(allowed
+      .filter(key => Object.hasOwn(req.body, key) && typeof req.body[key] === "string")
+      .map(key => [key, req.body[key]]));
+    if (existing.kycProvider === "veriff") {
+      if ((updateFields.phone && normalizePhone(updateFields.phone) !== normalizePhone(existing.phone)) ||
+          (updateFields.country && updateFields.country !== existing.country)) {
+        return res.status(409).json({ message: "Please contact support to change your mobile number or country after identity verification has started." });
+      }
+      delete updateFields.phone;
+      delete updateFields.country;
+    }
 
     const user = await User.findOneAndUpdate(
       { email },
@@ -572,6 +608,9 @@ exports.updateDocuments = async (req, res) => {
         .json({ success: false, message: "User not found." });
     }
 
+    if (user.kycProvider === "veriff") {
+      return res.status(409).json({ message: "Please complete identity verification with Veriff." });
+    }
     if (user.hasSubmittedDocuments) {
       return res.status(400).json({
         success: false,
@@ -768,6 +807,10 @@ exports.verifyKyc = async (req, res) => {
   try {
     const { email } = req.params;
     const { status } = req.body; // true = approve, false = reject
+    const managedUser = await User.findOne({ email });
+    if (managedUser?.kycProvider === "veriff") {
+      return res.status(409).json({ message: "Identity verification is managed by Veriff. Please review this client in Veriff." });
+    }
 
     if (status) {
       // Guard against re-creating the isKycVerified-without-documents state
@@ -930,6 +973,9 @@ exports.rejectUserKyc = async (req, res) => {
         .json({ success: false, message: "User not found" });
     }
 
+    if (user.kycProvider === "veriff") {
+      return res.status(409).json({ message: "Identity verification is managed by Veriff. Please review this client in Veriff." });
+    }
     // 2️⃣ Update KYC status
     user.isKycVerified = false; // mark unverified
     user.hasSubmittedDocuments = false; // reset submission flag
