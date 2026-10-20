@@ -1,35 +1,21 @@
 const nodemailer = require("nodemailer");
+const { mailConfig } = require("./mailConfig");
 require("dotenv").config();
 
-const sendEmail = async ({ to, subject, text, html, attachments, throwOnError = false }) => {
-  try {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
-
-    const mailOptions = {
-      from: `"Billion Dollar Fx " <info@billiondollarfx.com>`,
-      to: to || "support@billiondollarfx.com", // generic or your own address
-
-      subject,
-      text,
-      html,
-      attachments,
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`📧 Email sent to ${to}`);
-  } catch (err) {
-    console.error("❌ Failed to send email:", err);
-    if (throwOnError) throw new Error("Email delivery failed. Please try again shortly.");
-  }
-};
-
-module.exports = sendEmail;
+function createMailer({ env = process.env, mail = nodemailer, logger = console } = {}) {
+  let transporter;
+  return async ({ to, subject, text, html, attachments, throwOnError = false }) => {
+    try {
+      const config = mailConfig(env);
+      transporter ||= mail.createTransport(config.transport);
+      await transporter.sendMail({ from: config.from, replyTo: config.replyTo, to: to || "support@billiondollarfx.com", subject, text, html, attachments });
+      logger.info("BDFX email accepted by mail server");
+    } catch {
+      // Provider errors can include credentials, recipients or message content.
+      logger.error("BDFX email delivery failed");
+      if (throwOnError) throw new Error("Email delivery failed. Please try again shortly.");
+    }
+  };
+}
+module.exports = createMailer();
+module.exports.createMailer = createMailer;

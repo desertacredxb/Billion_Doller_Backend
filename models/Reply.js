@@ -16,7 +16,10 @@ const messageSchema = new mongoose.Schema(
     message: {
       type: String,
       required: true,
+      trim: true,
+      maxlength: 5000,
     },
+    requestId: { type: String, maxlength: 80 },
     attachments: [String], // Optional: Array of file URLs if needed
 
     // NEW: read flags
@@ -26,4 +29,5 @@ const messageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+messageSchema.index({ ticket: 1, senderType: 1, requestId: 1 }, { unique: true, partialFilterExpression: { requestId: { $type: "string" } } });
 module.exports = mongoose.model("Message", messageSchema);

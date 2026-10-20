@@ -32,6 +32,7 @@ const startServer = async () => {
   await checkOnStartup();
   await require("./services/adminBootstrap.service").run();
   enquiryNotifications.start();
+  require("./services/ticketNotifications.service").start();
 
   const app = express();
   app.set("trust proxy", 1);
