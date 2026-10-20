@@ -68,7 +68,8 @@ function controllerFor(user = account(), options = {}) {
   const database = modelFor(user, options);
   const veriff = { ...service, getConfig: () => ({ ...config, ...options.config }), isEnabled: () => true,
     createSession: options.createSession || (async () => ({ id: sessionId, url: "https://magic.veriff.me/test-session" })) };
-  return { ...database, controller: createController({ users: database.model, veriff }) };
+  return { ...database, controller: createController({ users: database.model, veriff,
+    ...(options.syncIB ? { syncIB: options.syncIB } : {}) }) };
 }
 
 test("HMAC authenticates exact raw bytes and rejects tampering or a wrong integration", () => {
@@ -319,5 +320,30 @@ test("profile updates cannot write approval flags, session references, or creden
   assert.deepEqual(written, { city: "Mumbai" });
   const denied = response();
   await auth.updateUserProfile({ user: { id: "other-user" }, params: { email: "synthetic@example.test" }, body: { city: "Delhi" } }, denied);
+  assert.equal(denied.code, 403);
+});
+
+test("retrying a committed identity decision retries IB approval without rewriting KYC", async () => {
+  let attempts = 0;
+  const { controller, state } = controllerFor(account(), { syncIB: async () => {
+    if (++attempts === 1) throw Error("Synthetic IB transaction failure");
+  } });
+  const first = response(); await controller.decisionWebhook(signedRequest(), first);
+  assert.equal(first.code, 500);
+  assert.equal(state.user.isKycVerified, true);
+  const retry = response(); await controller.decisionWebhook(signedRequest(), retry);
+  assert.equal(retry.code, 200);
+  assert.equal(attempts, 2);
+  assert.equal(state.writes, 1);
+});
+
+test("IB registration cannot be submitted for another user", async t => {
+  const User = require("../models/User");
+  const { registerIB } = require("../controllers/ibController");
+  const original = User.findById;
+  User.findById = async () => ({ ...account(), email: "owner@example.test" });
+  t.after(() => { User.findById = original; });
+  const denied = response();
+  await registerIB({ user: { id: "user-1" }, body: { email: "other@example.test" } }, denied);
   assert.equal(denied.code, 403);
 });

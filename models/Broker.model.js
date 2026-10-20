@@ -4,6 +4,10 @@ const ibSchema = new mongoose.Schema(
   {
     // user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     email: { type: String, required: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", unique: true, sparse: true },
+    approvalProvider: { type: String, enum: ["manual", "veriff"], default: "manual" },
+    approvalSessionId: String,
+    approvedAt: Date,
 
     // Onboarding Questions
     existingClientBase: { type: String, enum: ["Yes", "No"], required: true },

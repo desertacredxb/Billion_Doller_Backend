@@ -1,19 +1,22 @@
 const { randomUUID } = require("node:crypto");
 const User = require("../models/User");
 const provider = require("../services/veriff.service");
+const ibApproval = require("../services/ibAutoApproval.service");
 const { isUae, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision } = require("../utils/veriffPolicy");
 
 const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash";
 const ownerId = req => req.user?.id || req.user?.userId;
 const publicStatus = (user, enabled) => ({
   enabled,
+  managedByVeriff: user.kycProvider === "veriff",
+  ibApproved: !!user.isApprovedIB,
   approved: !!user.isKycVerified,
   status: user.isKycVerified ? "approved" : (user.veriff?.status || "not_started"),
   message: user.isKycVerified ? "Your identity has been verified successfully." : (user.veriff?.message || "Complete identity verification to activate your account."),
   residenceCountry: user.residenceCountry || "",
 });
 
-function createController({ users = User, veriff = provider } = {}) {
+function createController({ users = User, veriff = provider, syncIB = ibApproval.syncUser } = {}) {
   async function getStatus(req, res) {
     try {
       const user = await users.findById(ownerId(req));
@@ -33,7 +36,8 @@ function createController({ users = User, veriff = provider } = {}) {
       if (!user) return res.status(404).json({ message: "User not found" });
       if (!user.isVerified) return res.status(403).json({ message: "Please verify your email first." });
       res.set("Cache-Control", "no-store");
-      if (user.isKycVerified) return res.json(publicStatus(user, true));
+      const reverifyForIB = req.body?.purpose === "ib" && ibApproval.isEnabled() && user.kycProvider !== "veriff";
+      if (user.isKycVerified && !reverifyForIB) return res.json(publicStatus(user, true));
 
       const residenceCountry = user.residenceCountry || req.body?.residenceCountry;
       if (typeof residenceCountry !== "string" || !residenceCountry.trim() || residenceCountry.length > 100) {
@@ -64,11 +68,12 @@ function createController({ users = User, veriff = provider } = {}) {
       reference = randomUUID();
       const claimed = await users.findOneAndUpdate({
         _id: user._id,
-        isKycVerified: false,
+        isKycVerified: user.isKycVerified,
         "veriff.reference": current.reference || null,
         "veriff.revision": current.revision == null ? { $exists: false } : current.revision,
       }, { $set: {
         kycProvider: "veriff",
+        isKycVerified: false,
         residenceCountry: residenceCountry.trim(),
         veriff: {
           reference, mode: config.mode, integrationKeyHash: config.keyHash,
@@ -77,7 +82,13 @@ function createController({ users = User, veriff = provider } = {}) {
       } }, { new: true });
       if (!claimed) return res.status(409).json({ message: "Verification changed. Please refresh and try again." });
 
-      const session = await veriff.createSession(reference, config);
+      const sessionConfig = { ...config };
+      if (req.body?.purpose === "ib") {
+        const callback = new URL(config.callbackUrl);
+        callback.searchParams.set("returnTo", "ib");
+        sessionConfig.callbackUrl = callback.href;
+      }
+      const session = await veriff.createSession(reference, sessionConfig);
       const filter = { _id: user._id, "veriff.reference": reference,
         $or: [{ "veriff.sessionId": null }, { "veriff.sessionId": session.id }] };
       const sessionFields = { "veriff.sessionId": session.id, "veriff.sessionUrl": session.url, "veriff.sessionCreatedAt": new Date() };
@@ -122,7 +133,11 @@ function createController({ users = User, veriff = provider } = {}) {
           (current.sessionId && current.sessionId !== decision.id)) {
         return res.status(400).json({ message: "Verification session mismatch" });
       }
-      if (isStaleDecision(decision, current)) return res.json({ received: true, ignored: true });
+      if (isStaleDecision(decision, current)) {
+        // Retry a previously failed IB transaction using the CURRENT verified user state.
+        await syncIB(user._id);
+        return res.json({ received: true, ignored: true });
+      }
       const pattern = phonePattern(user.phone);
       const duplicate = pattern ? !!(await users.exists({ _id: { $ne: user._id }, phone: pattern })) : false;
       const outcome = decisionOutcome(decision, user, config, duplicate);
@@ -140,6 +155,7 @@ function createController({ users = User, veriff = provider } = {}) {
       }, $inc: { "veriff.revision": 1 } }, { new: true });
       // A concurrent update should be retried by Veriff rather than acknowledged/lost.
       if (!updated) return res.status(503).json({ message: "Please retry webhook delivery" });
+      await syncIB(updated._id);
       return res.json({ received: true });
     } catch (error) {
       return res.status(error.status === 503 ? 503 : 500).json({ message: "Unable to process verification decision" });

@@ -1,6 +1,6 @@
 # Veriff registration verification
 
-New registrations remain unverified for KYC until a signed Veriff result approves their linked session and BDFX eligibility checks pass. Email OTP remains the existing email-verification step. This change does not provision MT5 accounts, approve IB business applications, approve bank details, or implement WhatsApp OTP.
+New registrations remain unverified for KYC until a signed Veriff result approves their linked session and BDFX eligibility checks pass. With `VERIFF_IB_AUTO_APPROVAL=true`, a submitted IB application is also approved automatically after a live Veriff identity approval. It receives an IB role and referral code together. Email OTP remains the existing email-verification step. MT5 provisioning, bank approval, and WhatsApp OTP are separate flows.
 
 ## Configuration and release
 
@@ -10,9 +10,10 @@ Pair this backend branch with `codex/veriff-registration-auto-approval` in `dese
 2. Open the existing BDFX integration. Record whether it is a test or live integration and whether its product uses the decision or Full Auto webhook. Do not replace an existing integration or rotate its keys as part of setup.
 3. Store the exact API base URL, API key, and shared secret in the backend's secret environment settings. Use `config/veriff.env.example` for variable names. Never put secrets in the frontend, Git, a URL, or logs.
 4. Configure the selected integration's **Webhook decisions URL** to `https://billion-doller-backend.onrender.com/api/veriff/webhooks/decision`. For the Full Auto product, use the same endpoint in **Webhook Full Auto URL** and set `VERIFF_WEBHOOK_TYPE=fullauto` instead. Configure the return/callback URL as `https://billiondollarfx.com/verify-identity`.
-5. Deploy the paired code with flags disabled. In an isolated staging environment, set `VERIFF_ENABLED=true`, `VERIFF_MODE=test`, and frontend `NEXT_PUBLIC_VERIFF_ENABLED=true`; rebuild the frontend when changing its public flag. Use the selected test integration's keys and staging callback/webhook URLs. Do not route test decisions to production or change production integration URLs for a staging test.
-6. Test an entire registration with a synthetic test client: email OTP, authenticated session creation, hosted verification, signed webhook, and displayed result. Veriff test integrations require manually triggered test decisions. Check approved, declined, resubmission, expired, wrong-signature, duplicate-delivery, UAE, and duplicate-mobile cases. Test-mode approvals must leave `isKycVerified=false`.
-7. Activate production only after confirming the live integration, live credentials, correct product/webhook, supported documents, production URLs, and required business verification checks in the portal. Set `VERIFF_MODE=live` and enable both flags. Complete an authorized live smoke test before describing the system as live.
+5. Deploy the paired code with flags disabled. In an isolated staging environment, set `VERIFF_ENABLED=true`, `VERIFF_IB_AUTO_APPROVAL=true`, `VERIFF_MODE=test`, and frontend `NEXT_PUBLIC_VERIFF_ENABLED=true`; rebuild the frontend when changing its public flag. Use the selected test integration's keys and staging callback/webhook URLs. Do not route test decisions to production or change production integration URLs for a staging test.
+6. Test an entire registration with a synthetic test client: email OTP, authenticated session creation, hosted verification, signed webhook, and displayed result. Test IB applications submitted both before and after identity verification. Veriff test integrations require manually triggered test decisions. Check approved, declined, resubmission, expired, wrong-signature, duplicate-delivery, UAE, and duplicate-mobile cases. Test-mode approvals must leave `isKycVerified=false` and `isApprovedIB=false`.
+7. Confirm MongoDB transaction support (replica set or sharded cluster), the IB collection, and its sparse unique user index in staging before enabling IB automation. A failed transaction deliberately does not fall back to partial role/referral-code writes.
+8. Activate production only after confirming the live integration, live credentials, correct product/webhook, supported documents, production URLs, required business verification checks in the portal, and staging results. Set `VERIFF_MODE=live` and enable the client/IB flags and frontend flag. Complete an authorized live smoke test before describing the system as live.
 
 The Render service identified for this backend is `Billion_Doller_Backend` (`srv-d39uut0dl3ps73aiomjg`) in `Dessert's workspace`. It deploys `main` automatically. This branch must remain separate until configuration and release checks are complete.
 
@@ -26,11 +27,21 @@ The Render service identified for this backend is `Billion_Doller_Backend` (`srv
 - Declined, review, resubmission, expired, and abandoned outcomes remain unverified. Re-submission resumes the original link. Test approvals show `test_approved` and do not enable live KYC. Duplicate and older decisions are acknowledged without reapplying them. A concurrent change causes a retryable response. Raw document numbers, images, selfies, and full provider payloads are not stored by this integration.
 - Legacy upload and manual KYC mutations reject Veriff-managed accounts. Profile updates require ownership and allow only profile fields, preventing client-supplied KYC/session flags from overriding the result. Existing manual accounts retain their manual KYC flow.
 
+## Automatic IB approval
+
+- IB submissions require the signed-in user's bearer token and are linked to their persisted user ID. A request cannot apply on another user's behalf or set an approval flag.
+- Only a submitted Veriff-managed IB application is considered. Ordinary clients are not enrolled as IBs automatically. Historical manual IB requests retain their manual workflow.
+- A live Veriff approval must still match the server's integration credentials and pass country, verified-email, and duplicate-mobile checks. A test result, manual KYC flag, missing session, or a pending/review result cannot grant an automated IB role.
+- The existing form's direct commission choices (2, 4, 6, 8, 10 per lot), equal Your Share/Client Share split, and zero Sub IB expectation are validated/recomputed on the server for automatic applications. Existing symbol commission calculations and payout functions are unchanged.
+- IB status/referral code and `User.isApprovedIB` update in one MongoDB transaction. Repeated deliveries keep the same referral code. If identity commits but IB processing fails, a webhook retry re-runs IB synchronization against current verified state without reapplying the old KYC decision.
+- A declined verification rejects/revokes the automated IB application and its outbound referral code. Pending/review outcomes keep the role unapproved. Existing unauthenticated legacy approve/reject endpoints cannot override a Veriff-managed application.
+- A previously manual-verified client can opt into a fresh Veriff check for their new IB application. The verification page explains that starting the check returns identity verification to pending. The fixed callback preserves `returnTo=ib`; no arbitrary redirect destination is accepted.
+
 The existing legacy admin uses a separate access pattern. This change does not replace that admin system; it prevents those old KYC endpoints from deciding Veriff-managed accounts. Cases requiring review must be handled in Veriff using an authorized operator and a decision webhook; a local manual override is intentionally unavailable for these accounts.
 
 ## Validation
 
-Run `npm ci --ignore-scripts` and `npm test`. Tests use local synthetic fixtures and in-memory model doubles, including an HTTP router/HMAC test. They do not contact Veriff, MongoDB, clients, email, WhatsApp, or MT5. A real MongoDB/staging round trip and live Veriff smoke test are still required before activation.
+Run `npm ci --ignore-scripts` and `npm test`. The 36 tests use local synthetic fixtures and in-memory model/transaction doubles, including an HTTP router/HMAC test and simulated IB rollback/retry cases. They do not contact Veriff, MongoDB, clients, email, WhatsApp, or MT5. A real MongoDB/staging round trip and live Veriff smoke test are still required before activation.
 
 Official references:
 
