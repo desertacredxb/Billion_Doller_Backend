@@ -19,11 +19,14 @@ const mt5Routes = require("./routes/mt5Routes");
 const dealRoutes = require("./routes/dealRoutes");
 const aiRoutes = require("./routes/ai.routes");
 const veriffRoutes = require("./routes/veriffRoutes");
+const enquiryRoutes = require("./routes/enquiryRoutes");
+const enquiryNotifications = require("./services/enquiryNotifications.service");
 const { checkOnStartup } = require("./services/veriffReadiness.service");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
   await checkOnStartup();
+  enquiryNotifications.start();
 
   const app = express();
   app.set("trust proxy", 1);
@@ -50,6 +53,7 @@ const startServer = async () => {
   app.use("/api/payment", paymentRoutes);
   app.use("/api/ib", IBRoutes);
   app.use("/api/ai", aiRoutes);
+  app.use("/api/enquiries", enquiryRoutes);
 
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);

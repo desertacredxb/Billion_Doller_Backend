@@ -84,7 +84,7 @@ test("expired, unsigned and fake legacy administrator tokens are rejected before
 
 test("all private production router entry points require a bearer token before any controller or upload", async t => {
   const app = express(); app.use(express.json());
-  for (const [prefix, file] of [["auth", "authRoutes"], ["payment", "paymentRoutes"], ["mt5", "mt5Routes"], ["moneyplant", "moneyplant.routes"], ["ib", "IBRoutes"], ["tickets", "ticketRoutes"], ["brokers", "brokerRoutes"], ["deals", "dealRoutes"]]) app.use(`/api/${prefix}`, require(`../routes/${file}`));
+  for (const [prefix, file] of [["auth", "authRoutes"], ["payment", "paymentRoutes"], ["mt5", "mt5Routes"], ["moneyplant", "moneyplant.routes"], ["ib", "IBRoutes"], ["tickets", "ticketRoutes"], ["brokers", "brokerRoutes"], ["deals", "dealRoutes"], ["enquiries", "enquiryRoutes"]]) app.use(`/api/${prefix}`, require(`../routes/${file}`));
   const server = app.listen(0, "127.0.0.1");
   t.after(() => server.close());
   await new Promise(resolve => server.once("listening", resolve));
@@ -98,6 +98,7 @@ test("all private production router entry points require a bearer token before a
     ["POST", "payment/approve/test"], ["POST", "payment/cregis/deposit"], ["GET", "ib"], ["GET", "ib/connections"], ["PUT", "ib/client@example.invalid/approve"],
     ["POST", "ib/withdrawalIBamountV2"], ["POST", "ib/update-commission"], ["GET", "tickets/admin"], ["GET", "tickets/one/test"], ["POST", "tickets/test/messages"],
     ["GET", "brokers"], ["PATCH", "brokers/test/mark"], ["GET", "deals?login=1001"],
+    ["GET", "enquiries"], ["PATCH", "enquiries/111111111111111111111111"],
   ];
   for (const [method, path] of cases) {
     const result = await fetch(`${base}/api/${path}`, { method });
