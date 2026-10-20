@@ -15,7 +15,7 @@ function storage({ missingIndex = false, transactionError = false } = {}) {
       assert.equal(value, session);
       return { async lean() {
         calls.push(name);
-        if (transactionError) throw new Error("Unsupported transactions; private connection details");
+        if (transactionError) throw Object.assign(new Error("Unsupported transactions; private connection details"), { code: 20 });
         return null;
       } };
     } };
@@ -43,7 +43,7 @@ test("a missing IB uniqueness index blocks readiness before any transaction", as
 
 test("a failed transaction check always closes its session", async () => {
   const db = storage({ transactionError: true });
-  await assert.rejects(checkIBStorage(db), /Unsupported transactions/);
+  await assert.rejects(checkIBStorage(db), error => error.readinessStage === "transaction" && error.mongoCode === 20);
   assert.deepEqual(db.calls, ["start", "user-read", "end"]);
 });
 
