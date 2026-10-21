@@ -9,7 +9,7 @@ const consentUser = { _id: "user1", email: "client@example.invalid", isVerified:
 function query(value) { return { select() { return this; }, lean() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); }, sort() { return this; }, cursor: async function* () { for (const item of value) yield item; } }; }
 function fixture({ paused = false, failure = false, prior = null, reservedToday = 0, time = "2026-10-21T08:00:00Z" } = {}) {
   const current = new Date(time), state = { paused, reservedToday, budgetDate: "2026-10-21" };
-  const sub = { _id: "sub1", publicId: "12345678-1234-1234-1234-123456789012", userId: "user1", email: consentUser.email, active: true, held: false, nextDay: 0, nextAt: new Date("2026-10-21T07:00:00Z") };
+  const sub = { _id: "sub1", publicId: "12345678-1234-1234-1234-123456789012", userId: "user1", email: consentUser.email, active: true, held: false, nextDay: 0, nextAt: new Date("2026-10-21T06:00:00Z") };
   const receipts = prior ? [prior] : []; let sent = 0;
   const apply = (target, update) => { Object.assign(target, update.$set || {}); for (const [k, v] of Object.entries(update.$inc || {})) target[k] = (target[k] || 0) + v; };
   const users = { find: () => query([]), findById: () => query(consentUser) };
@@ -29,9 +29,9 @@ test("legacy registrations and unverified or withdrawn consent are never eligibl
   assert.equal(config({}).enabled, false); assert.equal(config({ EMAIL_MARKETING_DAILY_LIMIT: "NaN" }).dailyLimit, 0);
 });
 test("Dubai schedule crosses date boundaries and never chains seven emails on restart", () => {
-  assert.equal(nextSlot(new Date("2026-10-21T06:59:00Z")).toISOString(), "2026-10-21T07:00:00.000Z");
-  assert.equal(nextSlot(new Date("2026-10-21T08:00:00Z")).toISOString(), "2026-10-22T07:00:00.000Z");
-  assert.equal(nextSlot(new Date("2026-10-21T22:00:00Z")).toISOString(), "2026-10-22T07:00:00.000Z");
+  assert.equal(nextSlot(new Date("2026-10-21T05:59:00Z")).toISOString(), "2026-10-21T06:00:00.000Z");
+  assert.equal(nextSlot(new Date("2026-10-21T08:00:00Z")).toISOString(), "2026-10-22T06:00:00.000Z");
+  assert.equal(nextSlot(new Date("2026-10-21T22:00:00Z")).toISOString(), "2026-10-22T06:00:00.000Z");
 });
 test("unsubscribe tokens cannot target an arbitrary subscriber and every email contains one-click headers", () => {
   const id = "12345678-1234-1234-1234-123456789012", token = unsubscribeToken(id, secret);

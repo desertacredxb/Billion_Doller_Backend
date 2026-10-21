@@ -12,7 +12,7 @@ const DATE = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dubai", year: "n
 const dubaiDate = date => DATE.format(date);
 function nextSlot(date, tomorrow = false) {
   const shifted = new Date(date.getTime() + 4 * 3600000);
-  let target = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate(), 7); // 11:00 Dubai
+  let target = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate(), 6); // 10:00 Dubai
   if (tomorrow || target < date.getTime()) target += DAY;
   return new Date(target);
 }
@@ -91,7 +91,7 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
       }
       const cfg = config(env), slot = Math.floor(current.getTime() / 60000);
       if (!cfg.enabled || !cfg.dailyLimit || !cfg.secretReady || state.paused) return { outcome: "paused" };
-      if (new Date(current.getTime() + 4 * 3600000).getUTCHours() < 11) return { outcome: "outside_window" };
+      if (new Date(current.getTime() + 4 * 3600000).getUTCHours() < 10) return { outcome: "outside_window" };
       if (state.lastSlot === slot) return { outcome: "throttled" };
       const date = dubaiDate(current);
       if (state.budgetDate !== date) await states.updateOne({ _id: ID, leaseToken }, { $set: { budgetDate: date, reservedToday: 0 } }, { writeConcern: WRITE });
@@ -147,7 +147,7 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
     ]);
     const cfg = config(env);
     return { registered, optedIn, enrolled, accepted, held, unsubscribed, paused: state?.paused !== false,
-      sendingConfigured: cfg.enabled && !!cfg.dailyLimit && cfg.secretReady, dailyLimit: cfg.dailyLimit, timezone: "Asia/Dubai", startsAt: "11:00",
+      sendingConfigured: cfg.enabled && !!cfg.dailyLimit && cfg.secretReady, dailyLimit: cfg.dailyLimit, timezone: "Asia/Dubai", startsAt: "10:00",
       lastSyncAt: state?.lastSyncAt || null, lastRunAt: state?.lastRunAt || null, plan };
   }
   async function setPaused(paused) {
