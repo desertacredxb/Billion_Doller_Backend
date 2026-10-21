@@ -4,11 +4,11 @@ require("dotenv").config();
 
 function createMailer({ env = process.env, mail = nodemailer, logger = console } = {}) {
   let transporter;
-  return async ({ to, subject, text, html, attachments, throwOnError = false }) => {
+  return async ({ to, subject, text, html, attachments, headers, throwOnError = false }) => {
     try {
       const config = mailConfig(env);
       transporter ||= mail.createTransport(config.transport);
-      await transporter.sendMail({ from: config.from, replyTo: config.replyTo, to: to || "support@billiondollarfx.com", subject, text, html, attachments });
+      await transporter.sendMail({ from: config.from, replyTo: config.replyTo, to: to || "support@billiondollarfx.com", subject, text, html, attachments, headers });
       logger.info("BDFX email accepted by mail server");
     } catch {
       // Provider errors can include credentials, recipients or message content.

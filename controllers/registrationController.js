@@ -113,6 +113,8 @@ function createController({ users = User, brokers = IB, send = sendEmail, sendPh
         nationality: body.nationality.trim(), state: body.state.trim(), city: body.city.trim(),
         country: kyc ? body.residenceCountry.trim() : body.nationality.trim(),
         residenceCountry: kyc ? body.residenceCountry.trim() : undefined, kycProvider: kyc ? "veriff" : "manual",
+        marketingConsent: body.marketingConsent === true,
+        ...(body.marketingConsent === true ? { marketingConsentAt: now(), marketingConsentVersion: require("../services/emailMarketing.service").VERSION } : {}),
         password: await bcrypt.hash(body.password, 10), referralCode, referredByIB, isVerified: false });
       const token = randomToken(), code = randomCode(), nonce = randomId();
       user.registration = { tokenHash: hashToken(token), expiresAt: new Date(now().getTime() + 15 * 60000), mobileRequired: mobileRequired(),

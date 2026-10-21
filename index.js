@@ -83,6 +83,7 @@ const startServer = async () => {
   app.use("/api/operations", operationsRoutes);
   app.use("/api/staff", staffRoutes);
   app.use("/api/analytics", websiteAnalyticsRoutes);
+  app.use("/api/email-marketing", require("./routes/emailMarketingRoutes"));
 
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
@@ -99,6 +100,7 @@ const startServer = async () => {
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   // Durable weekly queue. Failure is isolated from authentication/payments.
   require("./services/blogAutomation.service").start();
+  require("./services/emailMarketing.service").start();
 };
 
 startServer();
