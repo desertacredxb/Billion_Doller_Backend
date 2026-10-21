@@ -128,7 +128,8 @@ exports.getAllUsers = async (req, res) => {
       .select("-password -otp -otpExpires -resetOtp -resetOtpExpires")
       .sort({ createdAt: -1 }); // ✅ newest first
 
-    res.json(users);
+    res.set("Cache-Control", "no-store");
+    res.json(await require("../services/adminUsers.service").withReferrerNames(users));
   } catch (err) {
     res
       .status(500)
