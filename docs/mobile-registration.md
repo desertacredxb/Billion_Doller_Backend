@@ -1,5 +1,15 @@
 # Email and WhatsApp registration verification
 
+## WATI migration checkpoint — 21 October 2026
+
+The owner selected WATI tenant 358063 and confirmed +441157911131 for BDFX OTP; Master Trader is separate. `bdfx_registration_otp` (English, Authentication, five-minute expiry, Copy code) was submitted through WATI and showed Pending. Submission is not approval or delivery.
+
+The adapter now supports explicit `WHATSAPP_OTP_PROVIDER=wati` with `WATI_TENANT_ID=358063`, `WATI_CHANNEL_NUMBER=441157911131`, `WATI_OTP_TEMPLATE_NAME=bdfx_registration_otp` and secret `WATI_API_TOKEN`. Tenant, channel and template are pinned; redirects are disabled and provider errors are redacted. WATI acceptance is not phone verification; the existing matching-code proof still applies. Legacy Teleobi mode remains compatible. No production environment was changed and OTP enforcement remains off.
+
+A new credential form was prepared, not generated: name BDFX registration OTP, expiry 90 days, only messagetemplate:write (WATI describes this as sending/scheduling/updating templates). Browser action-time confirmation is required before creating this persistent API access. Store any approved credential only in existing Render secrets; never Git, logs or chat. Approval, credential storage, live delivery and full registration verification remain pending. 145 backend tests pass with mocked WATI outcomes.
+
+Official API: https://docs.wati.io/reference/sendtemplatemessage ; setup guide: https://support.wati.io/en/articles/11463224-how-to-send-otp-on-whatsapp-using-wati-api .
+
 Owner request, 21 October 2026 (Dubai): verify the registered mobile by OTP and prevent another client login with the same email OR mobile. The owner explicitly selected WhatsApp, not SMS. This concerns BDFX client identity, not the number of permitted MT5 trading accounts or an IB role linked to the same verified client.
 
 ## Identity uniqueness

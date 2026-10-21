@@ -9,11 +9,33 @@ function configuration(env = process.env) {
   };
 }
 function isConfigured(env = process.env) {
+  if (env.WHATSAPP_OTP_PROVIDER === "wati") {
+    return typeof env.WATI_API_TOKEN === "string" && !!env.WATI_API_TOKEN.trim()
+      && env.WATI_OTP_TEMPLATE_NAME === "bdfx_registration_otp"
+      && env.WATI_TENANT_ID === "358063" && env.WATI_CHANNEL_NUMBER === "441157911131";
+  }
+  if (env.WHATSAPP_OTP_PROVIDER && env.WHATSAPP_OTP_PROVIDER !== "teleobi") return false;
   return Object.values(configuration(env)).every(value => typeof value === "string" && value.trim());
 }
 function createSender({ http = axios, env = process.env } = {}) {
   return async (phone, code) => {
     if (!isConfigured(env) || !/^\+[1-9]\d{6,14}$/.test(phone) || !/^\d{6}$/.test(code)) return { success: false };
+    if (env.WHATSAPP_OTP_PROVIDER === "wati") {
+      try {
+        const response = await http.post("https://live-mt-server.wati.io/358063/api/v1/sendTemplateMessage", {
+          template_name: env.WATI_OTP_TEMPLATE_NAME,
+          broadcast_name: "bdfx_registration_otp",
+          channel_number: "441157911131",
+          parameters: [{ name: "1", value: code }],
+        }, {
+          params: { whatsappNumber: phone.slice(1) },
+          timeout: 12000, maxRedirects: 0, maxContentLength: 32768,
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.WATI_API_TOKEN.trim()}` },
+        });
+        // Acceptance does not establish delivery or possession; verification still requires the code.
+        return { success: response.status >= 200 && response.status < 300 && response.data?.result === true };
+      } catch { return { success: false }; }
+    }
     const config = configuration(env);
     const payload = new URLSearchParams({ apiToken: config.token, phone_number_id: config.numberId,
       template_id: config.templateId, phone_number: phone.slice(1), "templateVariable-OTP-1": code });
