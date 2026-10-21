@@ -4,11 +4,13 @@ const provider = require("../services/veriff.service");
 const ibApproval = require("../services/ibAutoApproval.service");
 const { isUae, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision } = require("../utils/veriffPolicy");
 
+const { reasonMessage, retryable } = require("../utils/veriffReasons");
 const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash";
 const ownerId = req => req.user?.id || req.user?.userId;
 // Retry provider verification failures, while retaining policy and review blocks.
 const canRetry = user => user.veriff?.status === "declined"
   && user.veriff.message === "Your identity could not be verified. Please contact support."
+  && retryable.has(user.veriff.reasonCode)
   && !isUae(user.nationality) && !isUae(user.residenceCountry);
 const editableFields = { fullName: 150, address: 300, state: 100, city: 100, postalCode: 30 };
 const canEditDetails = user => user.isVerified && !user.isKycVerified &&
@@ -24,12 +26,32 @@ const publicStatus = (user, enabled) => ({
   status: user.isKycVerified ? "approved" : (user.veriff?.status || "not_started"),
   message: user.isKycVerified ? "Your identity has been verified successfully." : (user.veriff?.message || "Complete identity verification to activate your account."),
   residenceCountry: user.residenceCountry || "",
+  ...(["declined", "resubmission_requested", "review"].includes(user.veriff?.status) && !user.isKycVerified ? { failureReason: reasonMessage(user.veriff.reasonCode), reasonCode: user.veriff.reasonCode || null } : {}),
 });
 
 function createController({ users = User, veriff = provider, syncIB = ibApproval.syncUser } = {}) {
+  const reasonLookups = new Map();
+  async function withReason(user) {
+    const current = user.veriff;
+    if (!current?.sessionId || current.reasonCode || !["declined", "resubmission_requested", "review"].includes(current.status)) return user;
+    const key = String(user._id) + ":" + current.sessionId;
+    if (reasonLookups.get(key) > Date.now()) return user;
+    reasonLookups.set(key, Date.now() + 60000);
+    if (reasonLookups.size > 500) reasonLookups.delete(reasonLookups.keys().next().value);
+    try {
+      const config = veriff.getConfig();
+      if (current.integrationKeyHash !== config.keyHash || current.mode !== config.mode) return user;
+      const decision = await veriff.getDecisionReason(current.sessionId, current.reference, config);
+      if (!decision?.reasonCode || decision.status !== current.status) return user;
+      return await users.findOneAndUpdate({ _id: user._id, "veriff.reference": current.reference,
+        "veriff.sessionId": current.sessionId, "veriff.revision": current.revision,
+      }, { $set: { "veriff.reasonCode": decision.reasonCode } }, { new: true }) || user;
+    } catch { return user; }
+  }
   async function getStatus(req, res) {
     try {
-      const user = await users.findById(ownerId(req));
+      const found = await users.findById(ownerId(req)).select(PRIVATE_FIELDS);
+      const user = found ? await withReason(found) : null;
       if (!user) return res.status(404).json({ message: "User not found" });
       res.set("Cache-Control", "no-store");
       return res.json(publicStatus(user, veriff.isEnabled()));
@@ -41,7 +63,8 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
   async function updateDetails(req, res) {
     res.set("Cache-Control", "no-store");
     try {
-      const user = await users.findById(ownerId(req)).select(PRIVATE_FIELDS);
+      const found = await users.findById(ownerId(req)).select(PRIVATE_FIELDS);
+      const user = found ? await withReason(found) : null;
       if (!user) return res.status(404).json({ message: "User not found" });
       if (!canEditDetails(user)) return res.status(409).json({ message: "Details cannot be changed during an active verification or after approval. Please contact support on WhatsApp." });
       const body = req.body;
@@ -61,7 +84,8 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
     let reference;
     try {
       const config = veriff.getConfig();
-      const user = await users.findById(ownerId(req)).select(PRIVATE_FIELDS);
+      const found = await users.findById(ownerId(req)).select(PRIVATE_FIELDS);
+      const user = found ? await withReason(found) : null;
       if (!user) return res.status(404).json({ message: "User not found" });
       if (!user.isVerified) return res.status(403).json({ message: "Please verify your email first." });
       res.set("Cache-Control", "no-store");
@@ -178,6 +202,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
         "veriff.sessionId": decision.id,
         "veriff.status": outcome.status,
         "veriff.message": outcome.message,
+        "veriff.reasonCode": decision.reasonCode,
         "veriff.decisionAt": new Date(decision.timestamp),
         isKycVerified: outcome.approved,
         hasSubmittedDocuments: !["expired", "abandoned"].includes(decision.status),

@@ -84,4 +84,17 @@ async function createSession(reference, config) {
   return { id: verification.id, url: verification.url };
 }
 
-module.exports = { isEnabled, getConfig, isVeriffUrl, authenticateWebhook, createSession };
+async function getDecisionReason(sessionId, reference, config) {
+  if (!/^[a-f0-9-]{36}$/i.test(sessionId || "")) throw Error("Invalid verification session");
+  const response = await axios.get(`${config.apiUrl}/${sessionId}/decision`, {
+    headers: { "Content-Type": "application/json", "X-AUTH-CLIENT": config.apiKey,
+      "X-HMAC-SIGNATURE": crypto.createHmac("sha256", config.sharedSecret).update(sessionId).digest("hex") },
+    responseType: "text", transformResponse: [value => value], timeout: 10000, maxRedirects: 0, maxContentLength: 256 * 1024,
+  });
+  if (!authenticateWebhook(Buffer.from(response.data), response.headers, config)) throw Error("Invalid decision signature");
+  const payload = JSON.parse(response.data), decision = payload.verification;
+  if (payload.status !== "success" || !decision || decision.id !== sessionId || decision.vendorData !== reference) throw Error("Decision mismatch");
+  return { status: decision.status, reasonCode: require("../utils/veriffReasons").reasonCode(decision.reasonCode) };
+}
+
+module.exports = { isEnabled, getConfig, isVeriffUrl, authenticateWebhook, createSession, getDecisionReason };

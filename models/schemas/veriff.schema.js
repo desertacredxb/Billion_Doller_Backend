@@ -8,6 +8,7 @@ module.exports = new mongoose.Schema({
   integrationKeyHash: { type: String, select: false },
   status: { type: String, default: "not_started" },
   message: String,
+  reasonCode: Number,
   creationStartedAt: Date,
   sessionCreatedAt: Date,
   decisionAt: Date,

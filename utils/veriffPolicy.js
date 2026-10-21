@@ -34,6 +34,7 @@ function normalizeDecision(payload, webhookType) {
   const unwrap = field => fullAuto ? field?.value : field;
   return {
     id, reference, status, timestamp,
+    reasonCode: require("./veriffReasons").reasonCode(verification.reasonCode),
     documentCountry: unwrap(verification.document?.country),
     documentType: unwrap(verification.document?.type),
     nationality: unwrap(verification.person?.nationality),

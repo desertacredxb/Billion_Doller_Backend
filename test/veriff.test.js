@@ -67,6 +67,7 @@ function modelFor(initial, { duplicate = false, conflict = false } = {}) {
 function controllerFor(user = account(), options = {}) {
   const database = modelFor(user, options);
   const veriff = { ...service, getConfig: () => ({ ...config, ...options.config }), isEnabled: () => true,
+    getDecisionReason: options.getDecisionReason || (async () => null),
     createSession: options.createSession || (async () => ({ id: sessionId, url: "https://magic.veriff.me/test-session" })) };
   return { ...database, controller: createController({ users: database.model, veriff,
     ...(options.syncIB ? { syncIB: options.syncIB } : {}) }) };
@@ -351,7 +352,7 @@ test("IB registration cannot be submitted for another user", async t => {
 
 test("a failed provider verification can start a new check without granting KYC approval", async () => {
   const user = account(); user.veriff.status = "declined";
-  user.veriff.message = "Your identity could not be verified. Please contact support.";
+  user.veriff.message = "Your identity could not be verified. Please contact support."; user.veriff.reasonCode = 101;
   const { controller, state } = controllerFor(user);
   const before = response(); await controller.getStatus({ user: { id: "user-1" } }, before);
   assert.equal(before.data.canRetry, true);
@@ -371,7 +372,7 @@ test("policy rejection and review cannot be bypassed by requesting another sessi
 });
 
 test("clients can correct their own name/address before retry without changing verification or identity controls", async () => {
-  const user = account(); user.veriff.status = "declined"; user.veriff.message = "Your identity could not be verified. Please contact support.";
+  const user = account(); user.veriff.status = "declined"; user.veriff.message = "Your identity could not be verified. Please contact support."; user.veriff.reasonCode = 101;
   const { controller, state } = controllerFor(user);
   const res = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: " Correct Name ", city: "Delhi" } }, res);
   assert.equal(res.code, 200); assert.equal(state.user.fullName, "Correct Name"); assert.equal(res.data.details.fullName, "Correct Name");
@@ -390,4 +391,36 @@ test("identity corrections are blocked for active, approved, policy-rejected and
   const user = account(); user.veriff.status = "expired";
   const { controller } = controllerFor(user, { conflict: true }); const res = response();
   await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Changed" } }, res); assert.equal(res.code, 409);
+});
+
+
+test("signed webhook reason codes produce safe client guidance without exposing raw provider data", async () => {
+  const { controller, state } = controllerFor(); const res = response();
+  await controller.decisionWebhook(signedRequest(fixture({ status: "declined", code: 9102, reasonCode: 501, reason: "PRIVATE PROVIDER TEXT" })), res);
+  assert.equal(state.user.veriff.reasonCode, 501);
+  const view = response(); await controller.getStatus({ user: { id: "user-1" } }, view);
+  assert.match(view.data.failureReason, /security review/); assert.equal(view.data.canRetry, false);
+  assert.ok(!JSON.stringify(view.data).includes("PRIVATE PROVIDER TEXT"));
+  const retry = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, retry); assert.equal(retry.code, 409);
+});
+test("legacy failures load authenticated reasons once and never change KYC approval", async () => {
+  const user = account(); Object.assign(user.veriff, { status: "declined", message: "Your identity could not be verified. Please contact support." });
+  let calls = 0; const { controller, state } = controllerFor(user, { getDecisionReason: async () => { calls++; return { status: "declined", reasonCode: 104 }; } });
+  for (let i = 0; i < 2; i++) { const res = response(); await controller.getStatus({ user: { id: "user-1" } }, res); assert.equal(res.data.canRetry, true); assert.match(res.data.failureReason, /name/); }
+  assert.equal(calls, 1); assert.equal(state.user.isKycVerified, false);
+});
+
+test("decision reason lookup rejects unsigned and mismatched provider responses", async () => {
+  const axios = require("axios"), original = axios.get;
+  let body = fixture({ status: "declined", code: 9102, reasonCode: 104 }); let valid = true;
+  axios.get = async () => {
+    const data = JSON.stringify(body);
+    return { data, headers: { "x-auth-client": config.apiKey, "x-hmac-signature": valid ? crypto.createHmac("sha256", config.sharedSecret).update(data).digest("hex") : "bad" } };
+  };
+  try {
+    const cfg = { ...config, apiUrl: "https://example.veriff.com/v1/sessions" };
+    assert.deepEqual(await service.getDecisionReason(sessionId, reference, cfg), { status: "declined", reasonCode: 104 });
+    valid = false; await assert.rejects(service.getDecisionReason(sessionId, reference, cfg));
+    valid = true; body = fixture({ vendorData: "other-account" }); await assert.rejects(service.getDecisionReason(sessionId, reference, cfg));
+  } finally { axios.get = original; }
 });
