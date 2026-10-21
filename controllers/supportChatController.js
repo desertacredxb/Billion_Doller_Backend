@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const Session = require("../models/SupportChatSession");
 const { validateEnquiry } = require("./enquiryController");
 const { dubaiDateRange } = require("./operationsController");
+const { ensureSupportChatStorage } = require("../services/supportChatReadiness.service");
 const LANGUAGES = ["en", "hi", "bn", "th", "vi", "id"];
 const TOPICS = ["account", "verification", "deposit", "withdrawal", "mt5", "ib", "support"];
 const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
@@ -21,15 +22,7 @@ function eventValue(body, at) {
   // Arbitrary search text, messages, URLs and visitor identifiers are never retained.
   return value;
 }
-async function ensureSupportChatStorage() {
-  await Session.init();
-  // Guarantee retry safety even if a deployment disables Mongoose autoIndex.
-  await Session.collection.createIndex({ publicId: 1 }, { name: "publicId_1", unique: true });
-  await Session.collection.createIndex({ expiresAt: 1 }, { name: "expiresAt_1", expireAfterSeconds: 0 });
-}
 function createController({ sessions = Session, now = () => new Date(), ensureStorage = ensureSupportChatStorage } = {}) {
-  let storage;
-  const ready = () => storage ||= Promise.resolve().then(ensureStorage).catch(error => { storage = null; throw error; });
   const missing = res => res.status(404).json({ message: "Support session unavailable. Start a new saved session." });
   function owned(req, time) {
     const token = req.get("X-BDFX-Chat-Token");
@@ -41,7 +34,7 @@ function createController({ sessions = Session, now = () => new Date(), ensureSt
       try {
         const body = req.body || {};
         if (body.consent !== true || !UUID.test(body.requestId || "") || typeof body.secret !== "string" || !SECRET.test(body.secret) || !LANGUAGES.includes(body.language)) return res.status(400).json({ message: "Choose to save this support session before continuing." });
-        await ready();
+        await ensureStorage();
         const at = now(), secretHash = hash(body.secret), expiresAt = new Date(at.getTime() + RETENTION_DAYS * 86400000);
         try {
           await sessions.create({ publicId: body.requestId, secretHash, reference: `CHAT-${crypto.randomBytes(6).toString("hex").toUpperCase()}`, language: body.language,
