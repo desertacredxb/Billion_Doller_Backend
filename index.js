@@ -24,6 +24,7 @@ const supportChatRoutes = require("./routes/supportChatRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const operationsRoutes = require("./routes/operationsRoutes");
 const staffRoutes = require("./routes/staffRoutes");
+const websiteAnalyticsRoutes = require("./routes/websiteAnalyticsRoutes");
 const { createAudit } = require("./middleware/adminAudit");
 const enquiryNotifications = require("./services/enquiryNotifications.service");
 const { checkOnStartup } = require("./services/veriffReadiness.service");
@@ -81,6 +82,7 @@ const startServer = async () => {
   app.use("/api/support-chat", supportChatRoutes);
   app.use("/api/operations", operationsRoutes);
   app.use("/api/staff", staffRoutes);
+  app.use("/api/analytics", websiteAnalyticsRoutes);
 
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
