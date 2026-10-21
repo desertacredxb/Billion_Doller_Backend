@@ -20,6 +20,7 @@ const dealRoutes = require("./routes/dealRoutes");
 const aiRoutes = require("./routes/ai.routes");
 const veriffRoutes = require("./routes/veriffRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes");
+const supportChatRoutes = require("./routes/supportChatRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const operationsRoutes = require("./routes/operationsRoutes");
 const staffRoutes = require("./routes/staffRoutes");
@@ -71,6 +72,7 @@ const startServer = async () => {
   app.use("/api/ib", IBRoutes);
   app.use("/api/ai", aiRoutes);
   app.use("/api/enquiries", enquiryRoutes);
+  app.use("/api/support-chat", supportChatRoutes);
   app.use("/api/operations", operationsRoutes);
   app.use("/api/staff", staffRoutes);
 
