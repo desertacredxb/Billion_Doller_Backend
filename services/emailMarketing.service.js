@@ -22,10 +22,11 @@ function eligible(user) {
     && typeof user.email === "string" && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(user.email)
     && ![user.nationality, user.residenceCountry, user.country].some(isUae);
 }
+const campaignSecret = env => env.EMAIL_MARKETING_TOKEN_SECRET || env.JWT_SECRET;
 function config(env) {
   const dailyLimit = Number(env.EMAIL_MARKETING_DAILY_LIMIT || 0);
   return { enabled: env.EMAIL_MARKETING_ENABLED === "true", dailyLimit: Number.isSafeInteger(dailyLimit) && dailyLimit > 0 && dailyLimit <= 1000 ? dailyLimit : 0,
-    secretReady: typeof env.JWT_SECRET === "string" && env.JWT_SECRET.length >= 16 };
+    secretReady: typeof campaignSecret(env) === "string" && campaignSecret(env).length >= 16 };
 }
 function signature(id, secret) { return crypto.createHmac("sha256", secret).update(`bdfx-email-unsubscribe-v1:${id}`).digest("hex"); }
 function unsubscribeToken(id, secret) { return `${id}.${signature(id, secret)}`; }
@@ -130,7 +131,7 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
         await deliveries.updateOne({ subscriberId: candidate._id, day: candidate.nextDay }, { $set: { status: "cancelled" } }, { writeConcern: WRITE });
         return { outcome: "cancelled" };
       }
-      try { await send(message(candidate.nextDay, candidate, env.JWT_SECRET)); }
+      try { await send(message(candidate.nextDay, candidate, campaignSecret(env))); }
       catch {
         await deliveries.updateOne({ subscriberId: candidate._id, day: candidate.nextDay }, { $set: { status: "unknown" } }, { writeConcern: WRITE });
         await subscribers.updateOne({ _id: candidate._id }, { $set: { held: true } }, { writeConcern: WRITE });
@@ -175,7 +176,7 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
     return { subscribed: value };
   }
   async function unsubscribe(token) {
-    const id = parseToken(token, env.JWT_SECRET); if (!id) return false;
+    const id = parseToken(token, campaignSecret(env)); if (!id) return false;
     const subscriber = await subscribers.findOneAndUpdate({ publicId: id }, { $set: { active: false, unsubscribedAt: now() } }, SETTINGS);
     if (!subscriber) return false;
     await users.updateOne({ _id: subscriber.userId }, { $set: { marketingConsent: false, marketingUnsubscribedAt: now() } }, { writeConcern: WRITE });

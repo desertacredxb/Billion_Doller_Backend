@@ -7,25 +7,28 @@ const { createMailer } = require("../utils/sendEmail");
 const secret = "synthetic-email-test-key-123456";
 const consentUser = { _id: "user1", email: "client@example.invalid", isVerified: true, marketingConsent: true, marketingConsentAt: new Date(), marketingConsentVersion: VERSION, nationality: "India" };
 function query(value) { return { select() { return this; }, lean() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); }, sort() { return this; }, cursor: async function* () { for (const item of value) yield item; } }; }
-function fixture({ paused = false, failure = false, prior = null, reservedToday = 0, recentReservations = 0, time = "2026-10-21T08:00:00Z" } = {}) {
+function fixture({ paused = false, failure = false, prior = null, reservedToday = 0, recentReservations = 0, envPatch = {}, time = "2026-10-21T08:00:00Z" } = {}) {
   const current = new Date(time), state = { paused, reservedToday, budgetDate: "2026-10-21" };
   const sub = { _id: "sub1", publicId: "12345678-1234-1234-1234-123456789012", userId: "user1", email: consentUser.email, active: true, held: false, nextDay: 0, nextAt: new Date("2026-10-21T06:00:00Z") };
-  const receipts = prior ? [prior] : []; let sent = 0;
+  const receipts = prior ? [prior] : []; let sent = 0; const messages = [];
   const apply = (target, update) => { Object.assign(target, update.$set || {}); for (const [k, v] of Object.entries(update.$inc || {})) target[k] = (target[k] || 0) + v; };
-  const users = { find: () => query([]), findById: () => query(consentUser) };
+  const users = { find: () => query([]), findById: () => query(consentUser), updateOne: async () => {} };
   const states = { updateOne: async (_f, update) => apply(state, update), findOneAndUpdate: async (f, update) => {
     if (f.paused === false && (state.paused || state.reservedToday >= f.reservedToday.$lt || state.lastSlot === f.lastSlot.$ne || state.leaseUntil <= current)) return null;
     apply(state, update); return { ...state };
   } };
-  const subscribers = { findOne: () => query(sub.active && !sub.held && sub.nextDay < 7 ? { ...sub } : null), updateOne: async (_f, u) => apply(sub, u) };
+  const subscribers = { findOneAndUpdate: async (filter, update) => {
+    if (filter.publicId !== sub.publicId) return null;
+    apply(sub, update); return { ...sub };
+  }, findOne: () => query(sub.active && !sub.held && sub.nextDay < 7 ? { ...sub } : null), updateOne: async (_f, u) => apply(sub, u) };
   const deliveries = { countDocuments: async filter => {
     assert.equal(filter.reservedAt.$gt.getTime(), current.getTime() - 86400000);
     assert.deepEqual(filter.status.$in, ["sending", "accepted", "unknown", "cancelled"]);
     return recentReservations;
   }, find: () => query([]), findOne: () => query(receipts.find(r => r.day === sub.nextDay) || null), create: async entries => receipts.push(...entries), updateOne: async (f, u) => apply(receipts.find(r => r.day === f.day), u) };
   const service = createService({ users, states, subscribers, deliveries, ensure: async () => {}, now: () => current,
-    env: { JWT_SECRET: secret, EMAIL_MARKETING_ENABLED: "true", EMAIL_MARKETING_DAILY_LIMIT: "5" }, logger: { error() {} }, send: async () => { sent++; if (failure) throw Error("synthetic failure"); } });
-  return { service, sub, state, receipts, sent: () => sent };
+    env: { JWT_SECRET: secret, EMAIL_MARKETING_ENABLED: "true", EMAIL_MARKETING_DAILY_LIMIT: "5", ...envPatch }, logger: { error() {} }, send: async message => { messages.push(message); sent++; if (failure) throw Error("synthetic failure"); } });
+  return { service, sub, state, receipts, sent: () => sent, messages };
 }
 test("legacy registrations and unverified or withdrawn consent are never eligible", () => {
   assert.ok(eligible(consentUser));
@@ -91,4 +94,18 @@ test("expired rolling reservations allow a due message while retaining the per-m
   const f = fixture({ time: "2026-10-22T06:00:00Z", recentReservations: 4 });
   assert.equal((await f.service.processPending()).outcome, "accepted");
   assert.equal(f.sent(), 1); assert.equal((await f.service.processPending()).outcome, "throttled");
+});
+
+
+test("a dedicated campaign key signs and verifies unsubscribe links independently of login credentials", async () => {
+  const campaignKey = "synthetic-dedicated-campaign-key-123456789";
+  assert.equal(config({ JWT_SECRET: "short" }).secretReady, false);
+  assert.equal(config({ JWT_SECRET: "short", EMAIL_MARKETING_TOKEN_SECRET: campaignKey }).secretReady, true);
+  const f = fixture({ envPatch: { JWT_SECRET: "short", EMAIL_MARKETING_TOKEN_SECRET: campaignKey } });
+  assert.equal((await f.service.processPending()).outcome, "accepted");
+  const link = f.messages[0].headers["List-Unsubscribe"].slice(1, -1);
+  const token = new URL(link).searchParams.get("token");
+  assert.equal(parseToken(token, campaignKey), f.sub.publicId); assert.equal(parseToken(token, "short"), null);
+  assert.equal(await f.service.unsubscribe(unsubscribeToken(f.sub.publicId, "short")), false);
+  assert.equal(await f.service.unsubscribe(token), true); assert.equal(f.sub.active, false);
 });
