@@ -10,9 +10,14 @@ const ownerId = req => req.user?.id || req.user?.userId;
 const canRetry = user => user.veriff?.status === "declined"
   && user.veriff.message === "Your identity could not be verified. Please contact support."
   && !isUae(user.nationality) && !isUae(user.residenceCountry);
+const editableFields = { fullName: 150, address: 300, state: 100, city: 100, postalCode: 30 };
+const canEditDetails = user => user.isVerified && !user.isKycVerified &&
+  (!user.veriff?.status || ["not_started", "expired", "abandoned", "error"].includes(user.veriff.status) || canRetry(user));
 const publicStatus = (user, enabled) => ({
   enabled,
   canRetry: canRetry(user),
+  canEditDetails: !!canEditDetails(user),
+  details: Object.fromEntries(Object.keys(editableFields).map(key => [key, user[key] || ""])),
   managedByVeriff: user.kycProvider === "veriff",
   ibApproved: !!user.isApprovedIB,
   approved: !!user.isKycVerified,
@@ -31,6 +36,25 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
     } catch {
       return res.status(500).json({ message: "Unable to load verification status." });
     }
+  }
+
+  async function updateDetails(req, res) {
+    res.set("Cache-Control", "no-store");
+    try {
+      const user = await users.findById(ownerId(req)).select(PRIVATE_FIELDS);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      if (!canEditDetails(user)) return res.status(409).json({ message: "Details cannot be changed during an active verification or after approval. Please contact support on WhatsApp." });
+      const body = req.body;
+      if (!body || typeof body !== "object" || Array.isArray(body) || !Object.keys(body).length ||
+          Object.keys(body).some(key => !Object.hasOwn(editableFields, key) || typeof body[key] !== "string" || body[key].trim().length > editableFields[key] || /[\x00-\x1f\x7f]/.test(body[key])) ||
+          (Object.hasOwn(body, "fullName") && !body.fullName.trim())) return res.status(400).json({ message: "Enter valid name and address details exactly as shown on your ID." });
+      const updated = await users.findOneAndUpdate({ _id: user._id, isKycVerified: false,
+        "veriff.reference": user.veriff?.reference || null,
+        "veriff.revision": user.veriff?.revision == null ? { $exists: false } : user.veriff.revision,
+      }, { $set: Object.fromEntries(Object.entries(body).map(([key, value]) => [key, value.trim()])) }, { new: true, runValidators: true });
+      if (!updated) return res.status(409).json({ message: "Verification changed. Refresh before editing details." });
+      return res.json(publicStatus(updated, veriff.isEnabled()));
+    } catch { return res.status(503).json({ message: "Unable to save details. Please try again." }); }
   }
 
   async function startSession(req, res) {
@@ -166,7 +190,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       return res.status(error.status === 503 ? 503 : 500).json({ message: "Unable to process verification decision" });
     }
   }
-  return { getStatus, startSession, decisionWebhook };
+  return { getStatus, updateDetails, startSession, decisionWebhook };
 }
 
 module.exports = { ...createController(), createController };

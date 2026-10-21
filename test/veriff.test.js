@@ -369,3 +369,25 @@ test("policy rejection and review cannot be bypassed by requesting another sessi
     assert.equal(res.code, 409); assert.equal(calls, 0);
   }
 });
+
+test("clients can correct their own name/address before retry without changing verification or identity controls", async () => {
+  const user = account(); user.veriff.status = "declined"; user.veriff.message = "Your identity could not be verified. Please contact support.";
+  const { controller, state } = controllerFor(user);
+  const res = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: " Correct Name ", city: "Delhi" } }, res);
+  assert.equal(res.code, 200); assert.equal(state.user.fullName, "Correct Name"); assert.equal(res.data.details.fullName, "Correct Name");
+  assert.equal(state.user.isKycVerified, false); assert.equal(state.user.veriff.status, "declined"); assert.equal(res.data.canRetry, true);
+  for (const body of [{ isKycVerified: true }, { nationality: "India" }, { residenceCountry: "India" }, { phone: "+919876543210" }, { userId: "other", fullName: "Other" }, { fullName: " " }, { fullName: { $ne: null } }]) {
+    const bad = response(); await controller.updateDetails({ user: { id: "user-1" }, body }, bad); assert.equal(bad.code, 400);
+  }
+});
+test("identity corrections are blocked for active, approved, policy-rejected and review accounts, including races", async () => {
+  for (const status of ["created", "creating", "resubmission_requested", "approved", "review", "declined", "test_approved"]) {
+    const user = account(); user.veriff.status = status; user.isKycVerified = status === "approved";
+    const { controller, state } = controllerFor(user); const res = response();
+    await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Changed" } }, res);
+    assert.equal(res.code, 409); assert.equal(state.writes, 0);
+  }
+  const user = account(); user.veriff.status = "expired";
+  const { controller } = controllerFor(user, { conflict: true }); const res = response();
+  await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Changed" } }, res); assert.equal(res.code, 409);
+});
