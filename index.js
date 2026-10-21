@@ -31,6 +31,13 @@ const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
   await require("./services/depositCredit.service").checkDepositReadiness();
   await checkOnStartup();
+  try {
+    await require("./services/registrationReadiness.service").ensureRegistrationStorage();
+    console.log("Registration identity storage preflight passed.");
+  } catch {
+    console.error("Registration identity storage preflight unavailable; new registrations are blocked until storage is ready.");
+  }
+  console.log(`Registration WhatsApp OTP: ${require("./utils/sendWhatsAppOTP").isConfigured() ? "configured" : "unconfigured"}; enforcement ${process.env.REGISTRATION_WHATSAPP_OTP_ENABLED === "true" ? "enabled" : "disabled"}.`);
   await require("./services/adminBootstrap.service").run();
   enquiryNotifications.start();
   require("./services/ticketNotifications.service").start();
