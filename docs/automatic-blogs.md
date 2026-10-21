@@ -26,6 +26,8 @@ Mocked tests cover repeated/concurrent workers, interrupted checkpoint recovery,
 
 The frontend verifies Dubai date round-trips, public-only contextual links, publisher Organization markup and all pre-existing tests/build checks. Actual deployment/public-article results must be recorded after release. Search indexing and rankings are not guaranteed by publication or structured data.
 
+The first rollout (main 0368c36, Render dep-dbc1nge7bikc73fi7t20) failed because the locally tested worker file was omitted from the staged Git release. The prior instance remained healthy. The packaging fix includes that file and adds a release test that traverses server requires against staged Git files, so an unstaged dependency cannot be mistaken for a deployable release. Record the successful replacement deployment after verification; do not redeploy the incomplete intermediate commit.
+
 Sources checked for the educational series and structured data:
 
 - https://www.metatrader5.com/en/terminal/help/trading/market_watch
