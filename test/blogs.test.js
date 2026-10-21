@@ -57,7 +57,7 @@ test("blog administration and uploads reject anonymous requests before database 
   const server = app.listen(0, "127.0.0.1");
   await new Promise(resolve => server.once("listening", resolve));
   try {
-    for (const [method, path] of [["GET", ""], ["POST", ""], ["POST", "/upload"], ["PATCH", "/012345678901234567890123"], ["DELETE", "/012345678901234567890123"]]) {
+    for (const [method, path] of [["GET", ""], ["POST", ""], ["POST", "/upload"], ["GET", "/automation"], ["PATCH", "/automation"], ["POST", "/seo"], ["PATCH", "/012345678901234567890123"], ["DELETE", "/012345678901234567890123"]]) {
       const result = await fetch(`http://127.0.0.1:${server.address().port}/api/blogs${path}`, { method });
       assert.equal(result.status, 401, `${method} ${path}`);
     }

@@ -1,10 +1,11 @@
 const Blog = require("../models/Blog");
 const sanitizeHtml = require("sanitize-html");
+const { completeSeo, seoChecks } = require("../utils/blogSeo");
 
 const liveFilter = (now = new Date()) => ({ status: "published", $or: [{ publishedAt: null }, { publishedAt: { $lte: now } }] });
 const isLive = (blog, now = new Date()) => blog?.status === "published" && (!blog.publishedAt || new Date(blog.publishedAt) <= now);
 const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const fields = ["title", "slug", "shortDescription", "content", "coverImage", "coverAlt", "status", "author", "tags", "category", "faqs", "metaTitle", "metaDescription", "metaKeywords", "canonicalUrl", "scheduledAt", "featured", "allowComments"];
+const fields = ["title", "slug", "shortDescription", "content", "coverImage", "coverAlt", "status", "author", "tags", "category", "faqs", "metaTitle", "metaDescription", "metaKeywords", "canonicalUrl", "scheduledAt", "autoPublish", "featured", "allowComments"];
 const safeUrl = value => typeof value === "string" && (value.startsWith("/") && !value.startsWith("//") || /^https:\/\//i.test(value));
 
 function normalizePost(input, existing = {}, now = new Date()) {
@@ -30,7 +31,8 @@ function normalizePost(input, existing = {}, now = new Date()) {
   }
   if (data.faqs !== undefined && (!Array.isArray(data.faqs) || data.faqs.length > 30 || data.faqs.some(faq => !faq || typeof faq.question !== "string" || typeof faq.answer !== "string" || faq.question.length > 1000 || faq.answer.length > 10000))) throw new Error("Enter valid FAQ questions and answers.");
   data.faqs = (data.faqs || []).map(faq => ({ question: faq.question.trim(), answer: faq.answer.trim() })).filter(faq => faq.question && faq.answer);
-  for (const key of ["featured", "allowComments"]) if (data[key] !== undefined && typeof data[key] !== "boolean") throw new Error(`Choose a valid ${key} setting.`);
+  for (const key of ["featured", "allowComments", "autoPublish"]) if (data[key] !== undefined && typeof data[key] !== "boolean") throw new Error(`Choose a valid ${key} setting.`);
+  if (data.status !== "draft") data.autoPublish = false;
   const scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
   if (scheduledAt && !Number.isFinite(scheduledAt.getTime())) throw new Error("Enter a valid publication date.");
   data.scheduledAt = scheduledAt;
@@ -44,7 +46,8 @@ function normalizePost(input, existing = {}, now = new Date()) {
   if (!text) throw new Error("Add article text before saving.");
   data.wordCount = text.split(/\s+/).length;
   data.readTimeMinutes = Math.max(1, Math.ceil(data.wordCount / 200));
-  return Object.fromEntries([...fields, "publishedAt", "wordCount", "readTimeMinutes"].map(key => [key, data[key]]).filter(([, value]) => value !== undefined));
+  const completed = completeSeo(data);
+  return Object.fromEntries([...fields, "publishedAt", "wordCount", "readTimeMinutes"].map(key => [key, completed[key]]).filter(([, value]) => value !== undefined));
 }
 
 function createController({ blogs = Blog, now = () => new Date() } = {}) {
@@ -55,6 +58,13 @@ function createController({ blogs = Blog, now = () => new Date() } = {}) {
     next(error);
   };
   return {
+    async seo(req, res) {
+      try {
+        const post = normalizePost(req.body, {}, now());
+        res.set("Cache-Control", "no-store");
+        res.json({ success: true, data: { metaTitle: post.metaTitle, metaDescription: post.metaDescription, metaKeywords: post.metaKeywords, coverAlt: post.coverAlt }, checks: seoChecks(post) });
+      } catch (error) { res.status(400).json({ success: false, error: error.message }); }
+    },
     async list(req, res, next) {
       try {
         const published = req.query.status === "published";
@@ -116,7 +126,7 @@ function createController({ blogs = Blog, now = () => new Date() } = {}) {
       try {
         if (!/^[a-f\d]{24}$/i.test(req.params.id || "")) return notFound(res);
         // Keep the content recoverable in the administrator's archived list.
-        const data = await blogs.findByIdAndUpdate(req.params.id, { $set: { status: "archived" } }, { new: true });
+        const data = await blogs.findByIdAndUpdate(req.params.id, { $set: { status: "archived", autoPublish: false } }, { new: true });
         if (!data) return notFound(res);
         res.json({ success: true, message: "Article archived. It can be restored from the archived list." });
       } catch (error) { fail(error, res, next); }

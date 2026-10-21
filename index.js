@@ -80,6 +80,8 @@ const startServer = async () => {
 
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  // Durable weekly queue. Failure is isolated from authentication/payments.
+  require("./services/blogAutomation.service").start();
 };
 
 startServer();
