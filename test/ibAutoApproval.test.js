@@ -193,3 +193,12 @@ test("reading an older rejected application explains the failure without approvi
   assert.equal(result.canReapply, true); assert.match(result.statusReason, /security review/); assert.equal(result.referralCode, undefined);
   assert.equal(broker.status, "rejected"); assert.equal(result.kycManualReview, undefined); assert.equal(result.veriff, undefined);
 });
+
+test("an owner KYC rejection revokes an approved IB even when the original provider result was approved", async () => {
+  const user = userFixture(); user.isKycVerified = false; user.isApprovedIB = true;
+  user.kycManualReview = { approved: false, sessionId: user.veriff.sessionId, reviewId: "review-reject", reviewerId: "owner1", reviewedAt: new Date() };
+  const { state, service } = fixture({ user, broker: { ...brokerFixture(), status: "approved", referralCode: "IBOLD" } });
+  const result = await service.syncUser(user._id);
+  assert.equal(result.status, "rejected"); assert.equal(result.reasonCode, "identity_manual_review");
+  assert.equal(state.user.isApprovedIB, false); assert.equal(state.broker.referralCode, undefined);
+});

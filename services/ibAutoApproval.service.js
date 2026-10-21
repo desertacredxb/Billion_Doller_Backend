@@ -59,7 +59,7 @@ function createService({ users = User, brokers = IB, enabled = isEnabled,
       const reason = eligibilityReason(user, config, duplicateMobile);
       const eligible = !reason;
       if (!eligible) {
-        const rejected = user.veriff?.status === "declined" || isUae(user.residenceCountry) || isUae(user.nationality);
+        const rejected = user.veriff?.status === "declined" || reason.reasonCode === "identity_manual_review" || isUae(user.residenceCountry) || isUae(user.nationality);
         const status = rejected ? "rejected" : "pending";
         if (broker.status !== status || broker.referralCode || broker.statusReason !== reason.statusReason) {
           await brokers.updateOne({ _id: broker._id, approvalProvider: "veriff" }, {

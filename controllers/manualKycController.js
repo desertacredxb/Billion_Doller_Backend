@@ -3,7 +3,8 @@ const User = require("../models/User");
 const Reviews = require("../models/KycReview");
 const { isUae, phonePattern } = require("../utils/veriffPolicy");
 const sendEmail = require("../utils/sendEmail");
-function createController({ users = User, reviews = Reviews, transaction = work => User.db.transaction(work, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } }), ensure = async () => { try { await Reviews.createCollection(); } catch (e) { if (e.code !== 48) throw e; } }, send = sendEmail, now = () => new Date() } = {}) {
+const ibAutoApproval = require("../services/ibAutoApproval.service");
+function createController({ users = User, reviews = Reviews, transaction = work => User.db.transaction(work, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } }), ensure = async () => { try { await Reviews.createCollection(); } catch (e) { if (e.code !== 48) throw e; } }, send = sendEmail, syncIB = (id, options) => ibAutoApproval.syncUser(id, options), now = () => new Date() } = {}) {
   return async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!req.principal?.isAdmin || req.principal.adminRole !== "owner") return res.status(403).json({ message: "Only an owner can record a manual KYC decision." });
@@ -40,9 +41,18 @@ function createController({ users = User, reviews = Reviews, transaction = work 
         return updated;
       });
       req.auditEvent = body.approved ? "kyc:manual-approved" : "kyc:manual-rejected"; req.auditTargetId = String(result._id);
+      // Recheck an existing application only after the owner's review commits.
+      // Keep the KYC result truthful if the separate IB transaction needs a retry.
+      let ibResult, ibSyncFailed = false;
+      try { ibResult = await syncIB(result._id, { reconsiderRejected: body.approved }); }
+      catch { ibSyncFailed = true; }
       // A notification failure never reverses a committed review.
       try { await send({ to: result.email, subject: "BDFX identity review update", text: `Your BDFX identity review has been ${body.approved ? "approved" : "declined"} following a manual review. For assistance contact +447999283366 on WhatsApp.` }); } catch {}
-      return res.json({ message: body.approved ? "Manual KYC approval recorded." : "Manual KYC rejection recorded.", approved: result.isKycVerified });
+      const kycMessage = body.approved ? "Manual KYC approval recorded." : "Manual KYC rejection recorded.";
+      const ibMessage = ibSyncFailed ? " IB update could not be confirmed. Open IB and use Approve using verified KYC to retry approval." :
+        ibResult?.managed ? (ibResult.status === "approved" ? " IB automatically approved." : ` IB ${ibResult.status}: ${ibResult.statusReason}`) : "";
+      return res.json({ message: kycMessage + ibMessage, approved: result.isKycVerified,
+        ibStatus: ibSyncFailed ? "update_required" : ibResult?.status, ibSyncFailed });
     } catch (error) { return res.status(error.httpStatus || 503).json({ message: error.httpStatus ? error.message : "Manual review could not be saved. No approval is confirmed; refresh and try again." }); }
   };
 }
