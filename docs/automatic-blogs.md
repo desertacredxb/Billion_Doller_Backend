@@ -32,7 +32,7 @@ The first rollout (main 0368c36, Render dep-dbc1nge7bikc73fi7t20) failed because
 
 The worker logged publication of `forex-pips-points-and-pip-value` at `2026-10-21T02:03:08Z`; the article's stored publishedAt is `2026-10-21T02:03:07.587Z` (06:03 Dubai). The public list returns exactly one article. The other five starter guides stay queued as drafts; the public `margin-and-leverage-explained` route returns 404. Anonymous `/api/blogs/automation` returns 401 and `/health` returns 200 with the database connected. Public list and article rendering were checked in the production browser, including canonical, description, BlogPosting Organization author and contextual links. This does not certify the signed-in production admin panel.
 
-The next automatic slot is no earlier than 28 October 2026 at 06:03 Dubai, subject to the worker check. Frontend cache responses can remain stale while revalidation finishes. The frontend cover-image allowlist/sitemap refresh follow-up is tracked in the frontend continuation checkpoint.
+The next automatic slot is no earlier than 28 October 2026 at 06:03 Dubai, subject to the worker check. Frontend cache responses can remain stale while revalidation finishes. Frontend PR 8 is live on main `2af2d0b` with successful Vercel deployment `5NVvLTaREycx5GvxCwFZXBbFZ7M8`. The exact BDFX social-card path is allowed through image optimization; its live endpoint returned 200 and the browser loaded the cover. The sitemap refresh is now 60 seconds; live XML includes 29 page URLs and one image URL, with the first guide present and future drafts absent. Google indexing remains unverified. See the frontend continuation checkpoint for current provider dependencies.
 
 Sources checked for the educational series and structured data:
 
