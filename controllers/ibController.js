@@ -130,7 +130,7 @@ const getAllIBRequests = async (req, res) => {
   try {
     const ibRequests = await IB.find().sort({ createdAt: -1 });
     const users = await User.find({ email: { $in: ibRequests.map(ib => ib.email) } })
-      .select("email commission isVerified isKycVerified kycProvider residenceCountry nationality phone veriff +veriff.integrationKeyHash +kycManualReview").lean();
+      .select("email commission isVerified isKycVerified kycProvider residenceCountry nationality phone veriff.status veriff.reasonCode veriff.mode veriff.sessionId +veriff.integrationKeyHash +kycManualReview").lean();
     const usersByEmail = new Map(users.map(user => [user.email, user]));
     const config = ibRequests.some(ib => ib.approvalProvider === "veriff") ? require("../services/veriff.service").getConfig() : null;
     const result = ibRequests.map(ib => {
