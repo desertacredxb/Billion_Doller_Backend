@@ -1,7 +1,7 @@
 const axios = require("axios");
 const crypto = require("crypto");
 const Order = require("../models/Order");
-const { updateMT5Balance } = require("./MT5/mt5Balance");
+const { runDeposit, balanceWithClaim: updateMT5Balance } = require("../services/depositCredit.service");
 const {
   encryptData,
   decryptData,
@@ -268,7 +268,9 @@ async function reconcilePendingOrders(orderCount = null) {
 
     console.log(`📋 Found ${pendingOrders.length} pending orders to reconcile.`);
 
-    for (const order of pendingOrders) {
+    for (const pendingOrder of pendingOrders) {
+      try {
+        await runDeposit(pendingOrder.orderid, async order => {
       console.log(`\n----------------------------------------`);
       console.log(`Processing Order: ${order.orderid}`);
 
@@ -282,13 +284,13 @@ async function reconcilePendingOrders(orderCount = null) {
           provider = "RAMEE";
         } else if (order.orderid.startsWith("OCP")) {
           provider = "CRYPTO";
-        } else if (order.orderid.startsWith("ORD") || order.providerOrderId?.startsWith("po")) {
+        } else if (order.providerOrderId?.startsWith("po")) {
           provider = "CREGIS";
         } else if (order.providerOrderId) {
           provider = "TRUSTPAY24";
         } else {
           console.warn(`⚠️ Cannot infer provider for Order ID: ${order.orderid}. Skipping.`);
-          continue;
+          return;
         }
 
         // Save inferred provider back to order
@@ -297,13 +299,17 @@ async function reconcilePendingOrders(orderCount = null) {
         console.log(`⚙️ Inferred provider as: ${provider}`);
       }
 
+      // Closed providers are retained for owner reconciliation, never
+      // automatically credited or reactivated by this job.
+      if (!["RAMEE", "CRYPTO", "CREGIS"].includes(provider)) return;
+
       // CREGIS needs the full settlement breakdown (not just a status string) to
       // credit only what's actually been paid, so it gets its own dedicated path.
       if (provider === "CREGIS") {
         const queryId = order.providerOrderId || order.orderid;
         const cregisInfo = await checkCregisOrderInfo(queryId);
         await reconcileCregisOrder(order, cregisInfo);
-        continue;
+        return;
       }
 
       let orderStatus = null;
@@ -337,7 +343,7 @@ async function reconcilePendingOrders(orderCount = null) {
         const orderAmount = Number(order.amount);
         if (!Number.isFinite(orderAmount) || orderAmount <= 0) {
           console.error(`❌ Invalid order amount for ${order.orderid}:`, order.amount);
-          continue;
+          return;
         }
         // CREGIS is handled separately above (reconcileCregisOrder), so only
         // CRYPTO reaches here needing a 1:1 USD amount; RAMEE/TRUSTPAY24 need INR->USD.
@@ -374,6 +380,10 @@ async function reconcilePendingOrders(orderCount = null) {
         console.log(`❌ Order ${order.orderid} marked FAILED in DB.`);
       } else {
         console.log(`⏳ Order ${order.orderid} is still pending on provider side (${orderStatus || "No status"}).`);
+      }
+            });
+      } catch {
+        console.error("Deposit reconciliation was skipped: processing or manual review required");
       }
     }
 

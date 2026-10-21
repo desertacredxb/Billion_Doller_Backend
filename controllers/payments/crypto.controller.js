@@ -4,7 +4,7 @@ const Order = require("../../models/Order");
 const Withdrawal = require("../../models/withdrawal");
 const Account = require("../../models/account.model");
 const sendEmail = require("../../utils/sendEmail");
-const { updateMT5Balance } = require("../../utils/MT5/mt5Balance");
+const { runDeposit, balanceWithClaim: updateMT5Balance } = require("../../services/depositCredit.service");
 const { sendSuccessEmail } = require("../payout.controller");
 const fetchRate = require("./fetchRate");
 
@@ -170,6 +170,7 @@ exports.handleCryptoCallback = async (req, res) => {
     // =========================================================================
     // CHECK 2: DEPOSIT / PAYIN PROCESSING
     // =========================================================================
+    return await runDeposit(orderid, async () => {
     const order = await Order.findOne({ orderid });
     if (!order) {
       console.error("❌ Order/Withdrawal not found in DB:", orderid);
@@ -258,6 +259,7 @@ exports.handleCryptoCallback = async (req, res) => {
     }
 
     return res.status(200).json({ success: true });
+    }, () => res.status(200).json({ success: true, message: "Already processed" }));
   } catch (error) {
     console.error("❌ Callback Error:", error);
     return res.status(500).json({ success: false, error: error.message });

@@ -1,0 +1,11 @@
+# Production monitoring — 21 October 2026
+
+The production-health GitHub Actions workflow checks the backend `/health` (including database readiness) and expected public website content hourly at minute 17 UTC. It also runs when its files reach main and supports manual dispatch. The workflow uses no database, email, hosting or payment credentials. Its repository token has contents read and issues write only; checkout does not persist credentials.
+
+A failure creates one bot-owned `BDFX production health alert` issue. Subsequent checks update that issue instead of producing duplicates; a healthy check closes only that marked bot issue. A failed check also fails the workflow. Actual GitHub notification/email delivery depends on repository watching and account preferences; no test outage or test alert was sent. GitHub scheduled runs can be delayed and are not a real-time SLA. This monitor does not replace a Render readiness gate or database backup alerts.
+
+Render's HTTP health path still needs `/health` in its service settings. The connector has read/service logs and environment writes but no health-path update. Secure dashboard login was attempted; the user declined the GitHub credential step. Existing GitHub repository access remains working. No credentials were requested in chat and no settings were changed through that uncompleted session.
+
+The connected MongoDB organization exposed Project 0 (`6ad7f5e9d7869265e2a7db73`). Cluster listing returned `Group ... is not an Atlas group; use the Cloud Manager Public API`. Therefore production Atlas cluster/tier, backup schedule, snapshots, retention and alert destinations remain unverified. No replacement cluster, paid upgrade or production restore was performed.
+
+To complete recovery validation: connect the existing production Atlas/Cloud Manager project; inspect supported backups and recent successful snapshots; restore a snapshot into a separate isolated destination; compare collection counts, required unique indexes and representative non-sensitive integrity checks; record recovery point and elapsed restore time. Production must never be the restore target. Access to the existing project is required before claiming this step complete.

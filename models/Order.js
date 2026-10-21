@@ -21,6 +21,16 @@ const orderSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Persistent claim shared by active deposit callbacks and reconciliation. Claims
+    // that reached MT5 are never automatically expired/retried.
+    settlementAttempt: {
+      token: String,
+      state: { type: String, enum: ["processing", "submitting", "review"] },
+      startedAt: Date,
+      targetCents: Number,
+      deltaCents: Number,
+    },
+    lastSettlementTicket: { type: String, default: "" },
     // Payment-processor surcharge already folded into `amount` (e.g. Cregis's
     // 0.5% charge). Kept separately just so the breakdown is visible later
     // (support/accounting) - `amount` itself is the real total asked from the payer.

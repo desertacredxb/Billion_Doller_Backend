@@ -4,7 +4,7 @@ const Order = require("../../models/Order");
 const Withdrawal = require("../../models/withdrawal");
 const Account = require("../../models/account.model");
 const sendEmail = require("../../utils/sendEmail");
-const { updateMT5Balance } = require("../../utils/MT5/mt5Balance");
+const { runDeposit, balanceWithClaim: updateMT5Balance } = require("../../services/depositCredit.service");
 const { sendSuccessEmail } = require("../payout.controller");
 const fetchRate = require("./fetchRate");
 
@@ -164,6 +164,9 @@ exports.handleRameeCallback = async (req, res) => {
     // =========================================================================
     // CHECK 2: DEPOSIT / PAYIN PROCESSING
     // =========================================================================
+    const matchedOrder = await Order.findOne({ orderid: { $in: candidateOrderIds } });
+    if (!matchedOrder) return res.status(404).json({ success: false, message: "Order not found" });
+    return await runDeposit(matchedOrder.orderid, async () => {
     const order = await Order.findOne({ orderid: { $in: candidateOrderIds } });
     if (!order) {
       console.error("❌ Order/Withdrawal not found in DB:", orderid);
@@ -284,6 +287,7 @@ exports.handleRameeCallback = async (req, res) => {
     }
 
     return res.status(200).json({ success: true, status: "SUCCESS" });
+    }, () => res.status(200).json({ success: true, status: "SUCCESS", message: "Already processed" }));
   } catch (error) {
     console.error("❌ Callback Error:", error);
     return res.status(500).json({ success: false, error: error.message });
