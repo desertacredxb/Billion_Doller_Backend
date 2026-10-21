@@ -2,7 +2,7 @@ const Order = require("../../models/Order");
 const Withdrawal = require("../../models/withdrawal");
 const Account = require("../../models/account.model");
 const sendEmail = require("../../utils/sendEmail");
-const { updateMT5Balance } = require("../../utils/MT5/mt5Balance");
+const { runDeposit, balanceWithClaim: updateMT5Balance } = require("../../services/depositCredit.service");
 const { sendSuccessEmail } = require("../payout.controller");
 
 // Cregis WaaS payout (withdrawal) webhook - a completely different, flat shape
@@ -122,6 +122,7 @@ exports.handleCregisCallback = async (req, res) => {
     // Withdrawal/payout webhooks never reach here (they're flat, no event_type/data,
     // and are routed to handleCregisPayoutCallback above) - this shape is always a
     // deposit/order callback.
+    return await runDeposit(targetOrderId, async () => {
     const order = await Order.findOne({ orderid: targetOrderId });
 
     if (!order) {
@@ -289,6 +290,7 @@ exports.handleCregisCallback = async (req, res) => {
     }
 
     return res.status(200).send("success");
+    }, () => res.status(200).send("success"));
   } catch (error) {
     console.error("Cregis callback error:", error.message);
     return res.status(200).send("success");

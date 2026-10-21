@@ -2,8 +2,14 @@ const email = value => typeof value === "string" && /^[^\s<>@]+@[^\s<>@]+\.[^\s<
 function mailConfig(env = process.env) {
   const user = env.SMTP_USER || env.EMAIL_USER;
   const pass = env.SMTP_PASS || env.EMAIL_PASS;
-  const from = env.SMTP_FROM || env.EMAIL_FROM || user;
-  if (!email(user) || !pass || !email(from)) throw new Error("Mail configuration is incomplete.");
+  const requestedFrom = env.SMTP_FROM || env.EMAIL_FROM || user;
+  if (!email(user) || !pass || !email(requestedFrom)) throw new Error("Mail configuration is incomplete.");
+  // Received BDFX mail shows consumer Gmail rewriting an unverified domain
+  // From address. Keep the authenticated mailbox unless its alias has actually
+  // been verified. This does not configure domain DKIM or promise inbox placement.
+  const gmailTransport = !env.SMTP_HOST || /^(?:smtp\.)?gmail\.com$/i.test(env.SMTP_HOST);
+  const consumerGmail = /@(?:gmail|googlemail)\.com$/i.test(user);
+  const from = gmailTransport && consumerGmail && env.SMTP_FROM_VERIFIED !== "true" ? user : requestedFrom;
   let transport;
   if (env.SMTP_HOST) {
     const port = Number(env.SMTP_PORT || 465);

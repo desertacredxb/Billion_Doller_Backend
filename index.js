@@ -29,6 +29,7 @@ const { checkOnStartup } = require("./services/veriffReadiness.service");
 
 const startServer = async () => {
   await connect(); // ⛔ BLOCK until Mongo connects
+  await require("./services/depositCredit.service").checkDepositReadiness();
   await checkOnStartup();
   await require("./services/adminBootstrap.service").run();
   enquiryNotifications.start();

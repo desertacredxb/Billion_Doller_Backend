@@ -17,3 +17,10 @@ test("mail errors fail OTP callers safely without logging message content or pro
   await assert.rejects(send({ subject: "OTP", text: "private OTP", throwOnError: true }), /Email delivery failed/);
   assert.equal(logs.join(" ").includes("private"), false);
 });
+test("consumer Gmail uses its authenticated mailbox until a sender alias is verified", () => {
+  const config = { EMAIL_USER: "sender@gmail.com", EMAIL_PASS: "mock-password", EMAIL_FROM: "info@example.invalid" };
+  assert.equal(mailConfig(config).from.address, "sender@gmail.com");
+  assert.equal(mailConfig({ ...config, SMTP_FROM_VERIFIED: "true" }).from.address, "info@example.invalid");
+  assert.equal(mailConfig({ ...config, SMTP_HOST: "smtp.gmail.com" }).from.address, "sender@gmail.com");
+  assert.equal(mailConfig({ ...config, SMTP_HOST: "smtp.example.invalid" }).from.address, "info@example.invalid");
+});
