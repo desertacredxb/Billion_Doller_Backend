@@ -39,6 +39,12 @@ const startServer = async () => {
     console.error("Registration identity storage preflight unavailable; new registrations are blocked until storage is ready.");
   }
   console.log(`Registration WhatsApp OTP: ${require("./utils/sendWhatsAppOTP").isConfigured() ? "configured" : "unconfigured"}; enforcement ${process.env.REGISTRATION_WHATSAPP_OTP_ENABLED === "true" ? "enabled" : "disabled"}.`);
+  try {
+    await require("./services/supportChatReadiness.service").ensureSupportChatStorage();
+    console.log("Support chat storage preflight passed.");
+  } catch {
+    console.error("Support chat storage preflight unavailable; saved sessions require storage recovery.");
+  }
   await require("./services/adminBootstrap.service").run();
   enquiryNotifications.start();
   require("./services/ticketNotifications.service").start();
