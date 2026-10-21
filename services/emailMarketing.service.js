@@ -113,6 +113,13 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
         await deliveries.create([{ subscriberId: candidate._id, day: candidate.nextDay, status: "skipped", reservedAt: current }], { writeConcern: WRITE });
         await advance(current); return { outcome: "skipped" };
       }
+      // Provider allowance is rolling, so a Dubai date change must not reset it.
+      // The shared campaign lease serializes this count and the reservation.
+      const recentReservations = await deliveries.countDocuments({
+        reservedAt: { $gt: new Date(current.getTime() - DAY) },
+        status: { $in: ["sending", "accepted", "unknown", "cancelled"] },
+      });
+      if (recentReservations >= cfg.dailyLimit) return { outcome: "rolling_limit" };
       const budget = await states.findOneAndUpdate({ _id: ID, leaseToken, leaseUntil: { $gt: now() }, paused: false, reservedToday: { $lt: cfg.dailyLimit }, lastSlot: { $ne: slot } },
         { $inc: { reservedToday: 1 }, $set: { lastSlot: slot } }, SETTINGS);
       if (!budget) return { outcome: "daily_limit" };

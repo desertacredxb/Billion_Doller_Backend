@@ -7,7 +7,7 @@ const { createMailer } = require("../utils/sendEmail");
 const secret = "synthetic-email-test-key-123456";
 const consentUser = { _id: "user1", email: "client@example.invalid", isVerified: true, marketingConsent: true, marketingConsentAt: new Date(), marketingConsentVersion: VERSION, nationality: "India" };
 function query(value) { return { select() { return this; }, lean() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); }, sort() { return this; }, cursor: async function* () { for (const item of value) yield item; } }; }
-function fixture({ paused = false, failure = false, prior = null, reservedToday = 0, time = "2026-10-21T08:00:00Z" } = {}) {
+function fixture({ paused = false, failure = false, prior = null, reservedToday = 0, recentReservations = 0, time = "2026-10-21T08:00:00Z" } = {}) {
   const current = new Date(time), state = { paused, reservedToday, budgetDate: "2026-10-21" };
   const sub = { _id: "sub1", publicId: "12345678-1234-1234-1234-123456789012", userId: "user1", email: consentUser.email, active: true, held: false, nextDay: 0, nextAt: new Date("2026-10-21T06:00:00Z") };
   const receipts = prior ? [prior] : []; let sent = 0;
@@ -18,7 +18,11 @@ function fixture({ paused = false, failure = false, prior = null, reservedToday 
     apply(state, update); return { ...state };
   } };
   const subscribers = { findOne: () => query(sub.active && !sub.held && sub.nextDay < 7 ? { ...sub } : null), updateOne: async (_f, u) => apply(sub, u) };
-  const deliveries = { find: () => query([]), findOne: () => query(receipts.find(r => r.day === sub.nextDay) || null), create: async entries => receipts.push(...entries), updateOne: async (f, u) => apply(receipts.find(r => r.day === f.day), u) };
+  const deliveries = { countDocuments: async filter => {
+    assert.equal(filter.reservedAt.$gt.getTime(), current.getTime() - 86400000);
+    assert.deepEqual(filter.status.$in, ["sending", "accepted", "unknown", "cancelled"]);
+    return recentReservations;
+  }, find: () => query([]), findOne: () => query(receipts.find(r => r.day === sub.nextDay) || null), create: async entries => receipts.push(...entries), updateOne: async (f, u) => apply(receipts.find(r => r.day === f.day), u) };
   const service = createService({ users, states, subscribers, deliveries, ensure: async () => {}, now: () => current,
     env: { JWT_SECRET: secret, EMAIL_MARKETING_ENABLED: "true", EMAIL_MARKETING_DAILY_LIMIT: "5" }, logger: { error() {} }, send: async () => { sent++; if (failure) throw Error("synthetic failure"); } });
   return { service, sub, state, receipts, sent: () => sent };
@@ -75,4 +79,16 @@ test("unsubscribe GET does not mutate, POST opts out; owner and self-preference 
     assert.equal((await put({ subscribed: "true" })).status, 400); assert.equal((await put({ subscribed: true, userId: "victim" })).status, 400); assert.equal(preference, undefined);
     assert.equal((await put({ subscribed: true })).status, 200); assert.deepEqual(preference, { id: "self", value: true });
   } finally { await new Promise(r => server.close(r)); }
+});
+
+
+test("rolling campaign budget still blocks delivery after the Dubai daily counter resets", async () => {
+  const f = fixture({ time: "2026-10-22T06:00:00Z", reservedToday: 0, recentReservations: 5 });
+  assert.equal((await f.service.processPending()).outcome, "rolling_limit");
+  assert.equal(f.state.budgetDate, "2026-10-22"); assert.equal(f.sent(), 0); assert.equal(f.receipts.length, 0);
+});
+test("expired rolling reservations allow a due message while retaining the per-minute throttle", async () => {
+  const f = fixture({ time: "2026-10-22T06:00:00Z", recentReservations: 4 });
+  assert.equal((await f.service.processPending()).outcome, "accepted");
+  assert.equal(f.sent(), 1); assert.equal((await f.service.processPending()).outcome, "throttled");
 });

@@ -11,6 +11,7 @@ const delivery = new mongoose.Schema({ subscriberId: { type: mongoose.Schema.Typ
   status: { type: String, enum: ["sending", "accepted", "unknown", "skipped", "cancelled"], required: true }, reservedAt: Date, acceptedAt: Date,
 }, { timestamps: true });
 delivery.index({ subscriberId: 1, day: 1 }, { unique: true });
+delivery.index({ reservedAt: 1 });
 const state = new mongoose.Schema({ _id: String, paused: { type: Boolean, default: true }, leaseToken: String, leaseUntil: Date,
   lastSlot: Number, budgetDate: String, reservedToday: { type: Number, default: 0 }, lastSyncAt: Date, lastRunAt: Date,
   lastOutcome: String, lastError: String }, { timestamps: true });
