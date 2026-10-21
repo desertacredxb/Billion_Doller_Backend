@@ -347,3 +347,25 @@ test("IB registration cannot be submitted for another user", async t => {
   await registerIB({ user: { id: "user-1" }, body: { email: "other@example.test" } }, denied);
   assert.equal(denied.code, 403);
 });
+
+
+test("a failed provider verification can start a new check without granting KYC approval", async () => {
+  const user = account(); user.veriff.status = "declined";
+  user.veriff.message = "Your identity could not be verified. Please contact support.";
+  const { controller, state } = controllerFor(user);
+  const before = response(); await controller.getStatus({ user: { id: "user-1" } }, before);
+  assert.equal(before.data.canRetry, true);
+  const res = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, res);
+  assert.equal(res.code, 201); assert.equal(state.user.isKycVerified, false);
+  assert.notEqual(state.user.veriff.reference, reference);
+  const stale = response(); await controller.decisionWebhook(signedRequest(), stale);
+  assert.equal(state.user.isKycVerified, false);
+});
+test("policy rejection and review cannot be bypassed by requesting another session", async () => {
+  for (const [status, message] of [["declined", "We don't accept UAE clients or UAE-issued identity documents."], ["review", "Your verification needs further review. Please contact support."], ["test_approved", "Test verification completed."]]) {
+    const user = account(); Object.assign(user.veriff, { status, message });
+    let calls = 0; const { controller } = controllerFor(user, { createSession: async () => { calls++; } });
+    const res = response(); await controller.startSession({ user: { id: "user-1" }, body: { canRetry: true } }, res);
+    assert.equal(res.code, 409); assert.equal(calls, 0);
+  }
+});

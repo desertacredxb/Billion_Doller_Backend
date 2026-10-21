@@ -6,8 +6,13 @@ const { isUae, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision
 
 const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash";
 const ownerId = req => req.user?.id || req.user?.userId;
+// Retry provider verification failures, while retaining policy and review blocks.
+const canRetry = user => user.veriff?.status === "declined"
+  && user.veriff.message === "Your identity could not be verified. Please contact support."
+  && !isUae(user.nationality) && !isUae(user.residenceCountry);
 const publicStatus = (user, enabled) => ({
   enabled,
+  canRetry: canRetry(user),
   managedByVeriff: user.kycProvider === "veriff",
   ibApproved: !!user.isApprovedIB,
   approved: !!user.isKycVerified,
@@ -52,7 +57,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
         return res.status(409).json({ message: "This mobile number is already registered. Please contact support." });
       }
       const current = user.veriff || {};
-      if (["declined", "review", "test_approved"].includes(current.status)) {
+      if (["declined", "review", "test_approved"].includes(current.status) && !canRetry(user)) {
         return res.status(409).json({ message: current.message || "Please contact support about your verification." });
       }
       if (current.sessionUrl && ["created", "resubmission_requested"].includes(current.status) &&
