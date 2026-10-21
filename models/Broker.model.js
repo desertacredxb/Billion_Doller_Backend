@@ -28,6 +28,8 @@ const ibSchema = new mongoose.Schema(
       enum: ["pending", "approved", "rejected"],
       default: "pending",
     },
+    statusReason: { type: String, maxlength: 1000 },
+    reasonCode: String,
     referralCode: { type: String, unique: true, sparse: true },
   },
   { timestamps: true }

@@ -1,6 +1,6 @@
 # Owner manual KYC review
 
-Owners can record a manual approval or rejection for a submitted live Veriff session from Users. They must review the documents and provider result, confirm that review, and enter a reason. Managers cannot use this endpoint. This action approves client KYC only; it does not grant IB approval or initiate a financial transaction.
+Owners can record a manual approval or rejection for a submitted live Veriff session from Users. They must review the documents and provider result, confirm that review, and enter a reason. Managers cannot use this endpoint. This action records client KYC only. An existing Veriff-managed IB application can then pass its normal eligibility checks when the client explicitly reapplies or the owner selects Approve using verified KYC. No IB application is created by KYC review, and no financial transaction is initiated.
 
 The user flag and permanent KycReview record commit in one MongoDB transaction. The record includes the reviewer, reason, timestamp and original provider outcome. Review details are not exposed in client profile responses. The current provider session revision prevents stale reviews from overwriting concurrent decisions.
 

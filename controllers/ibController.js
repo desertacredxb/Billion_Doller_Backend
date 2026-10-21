@@ -42,10 +42,16 @@ const registerIB = async (req, res) => {
     const existingIB = await IB.findOne({ email });
     if (existingIB) {
       if (existingIB.approvalProvider === "veriff" && String(existingIB.user) === String(user._id)) {
-        const result = await ibAutoApproval.syncUser(user._id);
-        const status = result.status || existingIB.status;
-        return res.json({ message: status === "approved" ? "Your IB application is approved." : "Your IB application is awaiting identity verification.",
-          newIB: { status }, verificationRequired: result.managed ? result.verificationRequired : status === "pending" });
+        const result = await ibAutoApproval.syncUser(user._id, { reconsiderRejected: req.body.reapply === true });
+        const details = result.managed ? result : ibAutoApproval.applicationDetails(existingIB, user, require("../services/veriff.service").getConfig());
+        return res.json({ message: details.statusReason || "Your IB application is approved.", newIB: details, verificationRequired: details.verificationRequired });
+      }
+      if (req.body.reapply === true && existingIB.status === "rejected" && (!existingIB.user || String(existingIB.user) === String(user._id))) {
+        existingIB.status = "pending";
+        existingIB.statusReason = "Your application has been resubmitted and is awaiting support review.";
+        existingIB.reasonCode = "manual_review";
+        await existingIB.save();
+        return res.json({ message: existingIB.statusReason, newIB: ibAutoApproval.applicationDetails(existingIB), verificationRequired: false });
       }
       return res.status(400).json({ message: "IB request already submitted" });
     }
@@ -109,8 +115,8 @@ const registerIB = async (req, res) => {
 
     res
       .status(201)
-      .json({ message: approval.status === "approved" ? "Your IB application is approved." : "IB request submitted successfully",
-        newIB: { ...newIB.toObject(), ...(approval.managed ? { status: approval.status, referralCode: approval.referralCode } : {}) },
+      .json({ message: approval.statusReason || "IB request submitted successfully",
+        newIB: { ...newIB.toObject(), ...(approval.managed ? { ...approval } : {}) },
         verificationRequired: !!approval.verificationRequired });
   } catch (err) {
     res.status(err.code === 11000 ? 409 : 503).json({ message: err.code === 11000 ? "IB request already submitted. Please refresh." : "Unable to finish your IB application. Please try again shortly." });
@@ -123,16 +129,14 @@ const registerIB = async (req, res) => {
 const getAllIBRequests = async (req, res) => {
   try {
     const ibRequests = await IB.find().sort({ createdAt: -1 });
-    // Attach commission from User schema
-    const result = await Promise.all(
-      ibRequests.map(async (ib) => {
-        const user = await User.findOne({ email: ib.email }, "commission");
-        return {
-          ...ib.toObject(),
-          commission: user ? user.commission : null, // add commission field
-        };
-      })
-    );
+    const users = await User.find({ email: { $in: ibRequests.map(ib => ib.email) } })
+      .select("email commission isVerified isKycVerified kycProvider residenceCountry nationality phone veriff +veriff.integrationKeyHash +kycManualReview").lean();
+    const usersByEmail = new Map(users.map(user => [user.email, user]));
+    const config = ibRequests.some(ib => ib.approvalProvider === "veriff") ? require("../services/veriff.service").getConfig() : null;
+    const result = ibRequests.map(ib => {
+      const user = usersByEmail.get(ib.email);
+      return { ...ib.toObject(), ...ibAutoApproval.applicationDetails(ib, user, config), commission: user?.commission ?? null };
+    });
 
     res.json(result);
   } catch (err) {
@@ -150,7 +154,13 @@ const approveIBByEmail = async (req, res) => {
 
     const ib = await IB.findOne({ email });
     if (!ib) return res.status(404).json({ message: "IB request not found" });
-    if (ib.approvalProvider === "veriff") return res.status(409).json({ message: "This IB application is managed by Veriff identity verification." });
+    if (ib.approvalProvider === "veriff") {
+      if (req.principal?.adminRole !== "owner") return res.status(403).json({ message: "Only an owner can approve an IB application using reviewed KYC." });
+      const result = await ibAutoApproval.syncUser(ib.user, { reconsiderRejected: true });
+      if (result.status !== "approved") return res.status(409).json({ message: result.statusReason || "IB approval requires valid live identity verification or a recorded owner KYC approval, plus the normal eligibility checks." });
+      req.auditEvent = "ib:approved-from-reviewed-kyc"; req.auditTargetId = String(ib._id);
+      return res.json({ message: "IB approved using verified KYC.", referralCode: result.referralCode });
+    }
 
     if (ib.status === "approved") {
       return res.status(400).json({
@@ -165,6 +175,8 @@ const approveIBByEmail = async (req, res) => {
 
     // update IB
     ib.status = "approved";
+    ib.statusReason = undefined;
+    ib.reasonCode = undefined;
     ib.referralCode = referralCode;
     await ib.save();
 
@@ -219,6 +231,9 @@ const rejectIBByEmail = async (req, res) => {
       return res.status(400).json({ message: "IB is already rejected" });
     }
 
+    const rejectionReason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (rejectionReason.length < 10 || rejectionReason.length > 1000) return res.status(400).json({ message: "Please give a clear rejection reason (10–1000 characters)." });
+
     // If this IB was previously approved, rejection is a revocation: stop
     // the referral code from matching new signups. Existing clients keep
     // their historical User.referralCode for record-keeping - only the IB's
@@ -226,6 +241,8 @@ const rejectIBByEmail = async (req, res) => {
     const wasApproved = ib.status === "approved";
 
     ib.status = "rejected";
+    ib.statusReason = rejectionReason;
+    ib.reasonCode = "manual_rejection";
     if (wasApproved) {
       ib.referralCode = undefined;
     }
@@ -256,7 +273,8 @@ const rejectIBByEmail = async (req, res) => {
             <li><strong>Date:</strong> ${new Date().toLocaleString()}</li>
           </ul>
 
-          <p>If you believe this was a mistake or would like to reapply, please contact our support team for further guidance.</p>
+          <p><strong>Reason:</strong> ${rejectionReason.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))}</p>
+          <p>You can apply again from your IB page. For help, contact WhatsApp support at +447999283366.</p>
           
           <br/>
           <p>Best Regards,<br/>The Support Team</p>
@@ -278,11 +296,12 @@ const referralCode = async (req, res) => {
     const ib = await IB.findOne({ email });
 
     if (!ib) {
-      return res.status(404).json({ message: "IB not found" });
+      return res.json({ status: "not_applied", canReapply: false });
     }
 
     // assuming your schema has `referralCode` field
-    return res.json({ referralCode: ib.referralCode });
+    const user = ib.approvalProvider === "veriff" ? await User.findOne({ email }).select("+veriff.integrationKeyHash +kycManualReview") : null;
+    return res.json(ibAutoApproval.applicationDetails(ib, user, ib.approvalProvider === "veriff" ? require("../services/veriff.service").getConfig() : null));
   } catch (err) {
     console.error("❌ Error fetching referral code:", err);
     res.status(500).json({ message: "Server error" });

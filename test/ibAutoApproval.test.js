@@ -132,3 +132,64 @@ test("disabled automation does not provision any IB role", async () => {
   assert.equal(state.transactions, 0);
   assert.equal(state.writes, 0);
 });
+
+test("an owner-reviewed live identity qualifies for an existing IB application while preserving the provider decline", async () => {
+  const user = userFixture(); user.veriff.status = "declined"; user.veriff.reasonCode = 501;
+  user.kycManualReview = { approved: true, sessionId: user.veriff.sessionId, reviewId: "review1", reviewerId: "owner1", reviewedAt: new Date() };
+  const { state, service } = fixture({ user }); const result = await service.syncUser(user._id);
+  assert.equal(result.status, "approved"); assert.equal(state.user.isApprovedIB, true); assert.equal(state.user.veriff.status, "declined");
+});
+test("a rejected IB requires explicit owner reconsideration even when identity is now approved", async () => {
+  const user = userFixture(); user.veriff.status = "declined";
+  user.kycManualReview = { approved: true, sessionId: user.veriff.sessionId, reviewId: "review1", reviewerId: "owner1", reviewedAt: new Date() };
+  const { state, service } = fixture({ user, broker: { ...brokerFixture(), status: "rejected" } });
+  assert.equal((await service.syncUser(user._id)).status, "rejected"); assert.equal(state.writes, 0);
+  assert.equal((await service.syncUser(user._id, { reconsiderRejected: true })).status, "approved"); assert.equal(state.user.isApprovedIB, true);
+});
+test("manual identity acceptance cannot cross sessions or bypass duplicate and country restrictions", async () => {
+  const user = userFixture(); user.veriff.status = "declined";
+  user.kycManualReview = { approved: true, sessionId: "different", reviewId: "review1", reviewerId: "owner1", reviewedAt: new Date() };
+  assert.equal((await fixture({ user }).service.syncUser(user._id, { reconsiderRejected: true })).status, "rejected");
+  user.kycManualReview.sessionId = user.veriff.sessionId;
+  for (const options of [{ duplicate: true }, { user: { ...user, nationality: "UAE" } }]) {
+    const f = fixture({ user, ...options }); assert.notEqual((await f.service.syncUser(user._id, { reconsiderRejected: true })).status, "approved"); assert.equal(f.state.user.isApprovedIB, false);
+  }
+});
+
+test("failed eligibility stores actionable reasons and never provisions a referral", async () => {
+  const variants = [
+    { patch: { residenceCountry: "AE" }, code: "country_ineligible", status: "rejected" },
+    { patch: { isVerified: false }, code: "email_unverified", status: "pending" },
+    { patch: { phone: "" }, code: "phone_invalid", status: "pending" },
+    { duplicate: true, code: "phone_duplicate", status: "pending" },
+    { patch: { veriff: { ...userFixture().veriff, status: "declined", reasonCode: 501 }, isKycVerified: false }, code: "identity_declined", status: "rejected" },
+  ];
+  for (const variant of variants) {
+    const { state, service } = fixture({ user: { ...userFixture(), ...variant.patch }, duplicate: variant.duplicate });
+    const result = await service.syncUser("synthetic-user");
+    assert.equal(result.reasonCode, variant.code); assert.equal(result.status, variant.status);
+    assert.equal(state.broker.statusReason, result.statusReason); assert.ok(result.statusReason.length > 20);
+    assert.equal(state.broker.referralCode, undefined); assert.equal(state.user.isApprovedIB, false);
+    if (variant.code === "identity_declined") assert.match(result.statusReason, /security review/);
+  }
+});
+
+test("reapplying before correction retains the reason; corrected live KYC clears the rejection", async () => {
+  const user = userFixture(); user.isKycVerified = false; user.veriff.status = "declined"; user.veriff.reasonCode = 101;
+  const { state, service } = fixture({ user });
+  const failed = await service.syncUser(user._id); assert.match(failed.statusReason, /physical ID/);
+  const retry = await service.syncUser(user._id, { reconsiderRejected: true }); assert.equal(retry.status, "rejected"); assert.equal(retry.canReapply, true);
+  state.user.veriff.status = "approved"; state.user.isKycVerified = true;
+  const approved = await service.syncUser(user._id, { reconsiderRejected: true });
+  assert.equal(approved.status, "approved"); assert.equal(state.broker.statusReason, undefined); assert.equal(state.broker.reasonCode, undefined);
+  assert.equal(state.user.isApprovedIB, true);
+});
+
+test("reading an older rejected application explains the failure without approving it or exposing review records", () => {
+  const { applicationDetails } = require("../services/ibAutoApproval.service");
+  const user = userFixture(); user.isKycVerified = false; user.veriff.status = "declined"; user.veriff.reasonCode = 501;
+  const broker = { ...brokerFixture(), status: "rejected", referralCode: "OLD" };
+  const result = applicationDetails(broker, user, config);
+  assert.equal(result.canReapply, true); assert.match(result.statusReason, /security review/); assert.equal(result.referralCode, undefined);
+  assert.equal(broker.status, "rejected"); assert.equal(result.kycManualReview, undefined); assert.equal(result.veriff, undefined);
+});
