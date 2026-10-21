@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createGuard, balanceWithClaim } = require("../services/depositCredit.service");
+const { createGuard, balanceWithClaim, checkDepositReadiness } = require("../services/depositCredit.service");
 
 function storage(patch = {}) {
   const record = { _id: "db1", orderid: "ORD1", accountNo: "1001", provider: "CREGIS", amount: 100, creditedAmount: 0, status: "PENDING", ...patch };
@@ -111,6 +111,12 @@ test("missing or partial order uniqueness indexes block credit before a claim or
     await assert.rejects(h.pay(100), /uniqueness index/);
     assert.equal(h.credits.length, 0); assert.equal(h.orders.record.settlementAttempt, undefined);
   }
+});
+test("startup preflight inspects connected storage without reusing a cached Model.init failure", async () => {
+  let checked = 0;
+  await checkDepositReadiness({ guard: { checkReadiness: async () => { checked++; } } });
+  assert.equal(checked, 1);
+  await assert.rejects(checkDepositReadiness({ guard: { checkReadiness: async () => { throw new Error("missing unique index"); } } }), /unique index/);
 });
 test("closed gateways refuse deposits and callbacks without loading financial services", async () => {
   for (const [file, names] of [

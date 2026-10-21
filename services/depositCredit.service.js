@@ -102,8 +102,10 @@ function defaultGuard() {
   return guard;
 }
 function runDeposit(...args) { return defaultGuard().run(...args); }
-async function checkDepositReadiness() {
-  await require("../models/Order").init();
-  await defaultGuard().checkReadiness();
+async function checkDepositReadiness({ guard: connectedGuard = defaultGuard() } = {}) {
+  // Model.init() can retain an auto-create failure from before connect() when
+  // buffering is disabled. Inspect the already connected collection directly,
+  // as the existing Veriff storage preflight does.
+  await connectedGuard.checkReadiness();
 }
 module.exports = { createGuard, runDeposit, balanceWithClaim, checkDepositReadiness };
