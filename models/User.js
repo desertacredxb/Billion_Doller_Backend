@@ -8,6 +8,12 @@ const userSchema = new mongoose.Schema(
     gender: { type: String },
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true, unique: true },
+    registrationEmailKey: { type: String, select: false },
+    registrationPhoneKey: { type: String, select: false },
+    emailVerifiedAt: Date,
+    phoneVerifiedAt: Date,
+    phoneVerificationChannel: { type: String, enum: ["whatsapp"] },
+    registration: { type: require("./schemas/registration.schema"), select: false, default: undefined },
     accountType: {
       type: String,
       enum: ["Individual", "Corporate"],
@@ -40,6 +46,7 @@ const userSchema = new mongoose.Schema(
     lastWithdrawalDate: { type: Date, default: null },
     otp: { type: String, default: null },
     otpExpires: { type: Date, default: null },
+    legacyOtpAttempts: { type: Number, default: 0, select: false },
     isVerified: { type: Boolean, default: false },
     resetOtp: { type: String, default: null },
     resetOtpExpires: { type: Date, default: null },
@@ -85,14 +92,19 @@ userSchema.virtual("accounts", {
 // Ensure virtuals are included
 userSchema.set("toObject", { virtuals: true });
 userSchema.set("toJSON", { virtuals: true, transform: (_doc, result) => {
-  for (const key of ["password", "otp", "otpExpires", "resetOtp", "resetOtpExpires"]) delete result[key];
+  for (const key of ["password", "otp", "otpExpires", "resetOtp", "resetOtpExpires", "registration", "registrationEmailKey", "registrationPhoneKey", "legacyOtpAttempts"]) delete result[key];
   return result;
 } });
 
-// Auto-expire unverified accounts after 5 minutes (for example)
+for (const key of ["registrationEmailKey", "registrationPhoneKey"]) {
+  userSchema.index({ [key]: 1 }, { name: `registration_${key}_unique`, unique: true,
+    partialFilterExpression: { [key]: { $type: "string" } } });
+}
+
+// Allow 15 minutes for the email and WhatsApp verification stages.
 userSchema.index(
   { createdAt: 1 },
-  { expireAfterSeconds: 300, partialFilterExpression: { isVerified: false } }
+  { expireAfterSeconds: 900, partialFilterExpression: { isVerified: false } }
 );
 
 module.exports = mongoose.model("User", userSchema);

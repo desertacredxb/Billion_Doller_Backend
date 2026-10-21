@@ -30,9 +30,18 @@ const adminLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHe
   message: { message: "Too many administrator sign-in attempts. Please try again later." } });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, skipSuccessfulRequests: true,
   standardHeaders: "draft-7", legacyHeaders: false, message: { message: "Too many sign-in attempts. Please try again later." } });
+const registration = require("../controllers/registrationController");
+const registrationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10,
+  standardHeaders: "draft-7", legacyHeaders: false, message: { message: "Too many registration requests. Please try again later." } });
+const registrationCodeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 40,
+  standardHeaders: "draft-7", legacyHeaders: false, message: { message: "Too many verification requests. Please try again later." } });
 
-router.post("/register", register);
-router.post("/verify-otp", loginLimiter, verifyOTP);
+router.get("/registration-options", registration.options);
+router.post("/register", registrationLimiter, register);
+router.post("/verify-otp", registrationCodeLimiter, verifyOTP);
+router.post("/registration/resend-email", registrationCodeLimiter, registration.resendEmail);
+router.post("/registration/send-mobile", registrationCodeLimiter, registration.sendMobile);
+router.post("/registration/verify-mobile", registrationCodeLimiter, registration.verifyMobile);
 router.post("/login", loginLimiter, login);
 router.post("/request-reset", loginLimiter, requestPasswordReset);
 router.post("/verify-reset-otp", loginLimiter, verifyAndResetPassword);

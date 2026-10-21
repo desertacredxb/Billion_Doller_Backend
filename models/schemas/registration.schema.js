@@ -1,0 +1,20 @@
+const mongoose = require("mongoose");
+module.exports = new mongoose.Schema({
+  tokenHash: String,
+  expiresAt: Date,
+  mobileRequired: { type: Boolean, default: false },
+  whatsappConsentAt: Date,
+  emailChallengeId: String,
+  emailHash: String,
+  emailExpiresAt: Date,
+  emailAttempts: { type: Number, default: 0 },
+  emailSends: { type: Number, default: 0 },
+  emailSentAt: Date,
+  phoneChallengeId: String,
+  phoneHash: String,
+  phoneExpiresAt: Date,
+  phoneAttempts: { type: Number, default: 0 },
+  phoneSends: { type: Number, default: 0 },
+  phoneSentAt: Date,
+  phoneDelivery: { type: String, enum: ["pending", "accepted", "unconfirmed"] },
+}, { _id: false });
