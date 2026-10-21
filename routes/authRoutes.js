@@ -79,6 +79,7 @@ router.patch("/bank-approve/:email", access.admin, approveBankDetails);
 
 router.put("/change-password/:email", access.emailOwner(), changePassword);
 router.put("/:email/verify-kyc", access.admin, verifyKyc);
+router.post("/manual-kyc/:email", access.owner, require("../controllers/manualKycController").review);
 router.get("/unverified", access.admin, getUnverifiedUsers);
 router.delete("/delete/:email", access.admin, deleteUser);
 router.post("/reject/:email", access.admin, rejectUserKyc);

@@ -424,3 +424,17 @@ test("decision reason lookup rejects unsigned and mismatched provider responses"
     valid = true; body = fixture({ vendorData: "other-account" }); await assert.rejects(service.getDecisionReason(sessionId, reference, cfg));
   } finally { axios.get = original; }
 });
+
+test("a provider webhook retains the owner's recorded manual decision for the reviewed session", async () => {
+  for (const approved of [true, false]) {
+    const user = account(); user.kycManualReview = { sessionId, approved };
+    const { controller, state } = controllerFor(user); const res = response();
+    await controller.decisionWebhook(signedRequest(fixture({ status: approved ? "declined" : "approved", reasonCode: approved ? 501 : null })), res);
+    assert.equal(res.code, 200); assert.equal(state.user.isKycVerified, approved); assert.equal(state.user.veriff.status, approved ? "declined" : "approved");
+  }
+});
+test("a manually rejected client cannot restart verification to discard the owner's decision", async () => {
+  const user = account(); user.kycManualReview = { sessionId, approved: false };
+  const { controller } = controllerFor(user); const res = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, res); assert.equal(res.code, 409);
+  const view = response(); await controller.getStatus({ user: { id: "user-1" } }, view); assert.equal(view.data.status, "manual_rejected"); assert.equal(view.data.canRetry, false);
+});

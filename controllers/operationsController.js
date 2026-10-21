@@ -35,7 +35,7 @@ function createController({ users = User, accounts = Account, ibs = IB, orders =
   return {
     async onboarding(req, res, next) {
       try {
-        const user = await users.findById(req.principal.id).select("isVerified isKycVerified veriff.status kycProvider").lean();
+        const user = await users.findById(req.principal.id).select("isVerified isKycVerified veriff.status kycProvider +kycManualReview").lean();
         if (!user) return res.status(404).json({ message: "Account not found." });
         const ownAccounts = await accounts.find({ user: req.principal.id, accountType: "LIVE" }).select("_id accountNo").lean();
         const accountNumbers = ownAccounts.map(account => String(account.accountNo));
@@ -43,7 +43,7 @@ function createController({ users = User, accounts = Account, ibs = IB, orders =
           ownAccounts.length ? orders.exists({ $or: [{ account: { $in: ownAccounts.map(account => account._id) } }, { accountNo: { $in: accountNumbers } }], status: "SUCCESS" }) : null,
           ibs.findOne({ email: req.principal.email }).select("status").lean(),
         ]);
-        res.json({ emailVerified: !!user.isVerified, identityVerified: !!user.isKycVerified, identityStatus: user.veriff?.status || (user.isKycVerified ? "approved" : "not_started"), identityProvider: user.kycProvider, tradingAccountCreated: ownAccounts.length > 0, firstDepositCompleted: !!deposit, ibStatus: ib?.status || "not_applied" });
+        res.json({ emailVerified: !!user.isVerified, identityVerified: !!user.isKycVerified, identityStatus: user.isKycVerified ? "approved" : user.kycManualReview?.approved === false ? "manual_rejected" : user.veriff?.status || "not_started", identityProvider: user.kycProvider, tradingAccountCreated: ownAccounts.length > 0, firstDepositCompleted: !!deposit, ibStatus: ib?.status || "not_applied" });
       } catch (error) { next(error); }
     },
     async overview(_req, res, next) { try { res.json({ generatedAt: now(), queues: await queues() }); } catch (error) { next(error); } },

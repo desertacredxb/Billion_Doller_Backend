@@ -5,15 +5,16 @@ const ibApproval = require("../services/ibAutoApproval.service");
 const { isUae, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision } = require("../utils/veriffPolicy");
 
 const { reasonMessage, retryable } = require("../utils/veriffReasons");
-const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash";
+const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash +kycManualReview";
 const ownerId = req => req.user?.id || req.user?.userId;
 // Retry provider verification failures, while retaining policy and review blocks.
-const canRetry = user => user.veriff?.status === "declined"
+const manuallyRejected = user => user.kycManualReview?.sessionId === user.veriff?.sessionId && user.kycManualReview?.approved === false;
+const canRetry = user => !manuallyRejected(user) && user.veriff?.status === "declined"
   && user.veriff.message === "Your identity could not be verified. Please contact support."
   && retryable.has(user.veriff.reasonCode)
   && !isUae(user.nationality) && !isUae(user.residenceCountry);
 const editableFields = { fullName: 150, address: 300, state: 100, city: 100, postalCode: 30 };
-const canEditDetails = user => user.isVerified && !user.isKycVerified &&
+const canEditDetails = user => !manuallyRejected(user) && user.isVerified && !user.isKycVerified &&
   (!user.veriff?.status || ["not_started", "expired", "abandoned", "error"].includes(user.veriff.status) || canRetry(user));
 const publicStatus = (user, enabled) => ({
   enabled,
@@ -23,8 +24,8 @@ const publicStatus = (user, enabled) => ({
   managedByVeriff: user.kycProvider === "veriff",
   ibApproved: !!user.isApprovedIB,
   approved: !!user.isKycVerified,
-  status: user.isKycVerified ? "approved" : (user.veriff?.status || "not_started"),
-  message: user.isKycVerified ? "Your identity has been verified successfully." : (user.veriff?.message || "Complete identity verification to activate your account."),
+  status: user.isKycVerified ? "approved" : manuallyRejected(user) ? "manual_rejected" : (user.veriff?.status || "not_started"),
+  message: user.isKycVerified ? "Your identity has been verified successfully." : manuallyRejected(user) ? "Your manual identity review was declined. Please contact BDFX support on WhatsApp." : (user.veriff?.message || "Complete identity verification to activate your account."),
   residenceCountry: user.residenceCountry || "",
   ...(["declined", "resubmission_requested", "review"].includes(user.veriff?.status) && !user.isKycVerified ? { failureReason: reasonMessage(user.veriff.reasonCode), reasonCode: user.veriff.reasonCode || null } : {}),
 });
@@ -33,7 +34,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
   const reasonLookups = new Map();
   async function withReason(user) {
     const current = user.veriff;
-    if (!current?.sessionId || current.reasonCode || !["declined", "resubmission_requested", "review"].includes(current.status)) return user;
+    if (user.kycManualReview || !current?.sessionId || current.reasonCode || !["declined", "resubmission_requested", "review"].includes(current.status)) return user;
     const key = String(user._id) + ":" + current.sessionId;
     if (reasonLookups.get(key) > Date.now()) return user;
     reasonLookups.set(key, Date.now() + 60000);
@@ -104,6 +105,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       if (await users.exists({ _id: { $ne: user._id }, phone: pattern })) {
         return res.status(409).json({ message: "This mobile number is already registered. Please contact support." });
       }
+      if (manuallyRejected(user)) return res.status(409).json({ message: "Your manual identity review was declined. Please contact BDFX support on WhatsApp." });
       const current = user.veriff || {};
       if (["declined", "review", "test_approved"].includes(current.status) && !canRetry(user)) {
         return res.status(409).json({ message: current.message || "Please contact support about your verification." });
@@ -126,6 +128,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
         "veriff.revision": current.revision == null ? { $exists: false } : current.revision,
       }, { $set: {
         kycProvider: "veriff",
+        kycManualReview: null,
         isKycVerified: false,
         residenceCountry: residenceCountry.trim(),
         veriff: {
@@ -204,7 +207,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
         "veriff.message": outcome.message,
         "veriff.reasonCode": decision.reasonCode,
         "veriff.decisionAt": new Date(decision.timestamp),
-        isKycVerified: outcome.approved,
+        isKycVerified: user.kycManualReview?.sessionId === decision.id ? user.kycManualReview.approved : outcome.approved,
         hasSubmittedDocuments: !["expired", "abandoned"].includes(decision.status),
       }, $inc: { "veriff.revision": 1 } }, { new: true });
       // A concurrent update should be retried by Veriff rather than acknowledged/lost.
