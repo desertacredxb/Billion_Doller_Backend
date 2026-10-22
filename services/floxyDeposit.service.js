@@ -185,12 +185,22 @@ function createFloxyDeposit({ client, orders, runDeposit, balanceWithClaim, fetc
       return { ok: false, status: 502, message: "Floxy is unavailable right now. Please try again shortly." };
     }
 
-    if (typeof link?.id !== "string" || !link.id.startsWith("plink_") || typeof link.url !== "string" || !link.url.startsWith("https://") ||
-        link.amount !== vndAmount || link.currency !== CURRENCY) {
+    const problems = [
+      !(typeof link?.id === "string" && link.id.startsWith("plink_")) && "id",
+      !(typeof link?.url === "string" && link.url.startsWith("https://")) && "url",
+      link?.amount !== vndAmount && "amount",
+      link?.currency !== CURRENCY && "currency",
+    ].filter(Boolean);
+    if (problems.length) {
       order.status = "FAILED";
-      order.comment = "Floxy returned an unexpected payment link.";
+      order.comment = `Floxy returned an unexpected payment link (${problems.join(", ")}).`;
       await order.save();
-      logger.error(`Floxy returned an unexpected link for ${orderid}`);
+      // Field names and value types only: enough to diagnose, nothing sensitive.
+      const shape = link && typeof link === "object"
+        ? Object.entries(link).map(([key, value]) => `${key}:${Array.isArray(value) ? "array" : typeof value}`).join(",")
+        : typeof link;
+      logger.error(`Floxy returned an unexpected link for ${orderid}: failed [${problems.join(", ")}]; ` +
+        `amount=${JSON.stringify(link?.amount)} currency=${JSON.stringify(link?.currency)}; response shape {${shape}}`);
       return { ok: false, status: 502, message: "Floxy is unavailable right now. Please try again shortly." };
     }
 
