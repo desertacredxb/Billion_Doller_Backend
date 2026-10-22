@@ -156,6 +156,14 @@ test("createDeposit enforces the minimum, locks the rate and stores the link", a
   assert.equal(h.orders.record.amount, 20); assert.equal(h.orders.record.floxy.linkId, "plink_new"); assert.equal(h.orders.record.floxy.vndPerUsd, 26000);
 });
 
+test("an unexpected link response is refused and the failing fields are recorded", async () => {
+  const h = harness({ patch: { floxy: undefined } });
+  h.client.createPaymentLink = async () => ({ data: "sealed-response" });
+  const out = await h.svc.createDeposit({ account: { _id: "a1", accountNo: 1001 }, vndAmount: 300000, makeOrderId: () => "FLX9" });
+  assert.equal(out.ok, false); assert.equal(out.status, 502); assert.equal(h.orders.record.status, "FAILED");
+  assert.match(h.orders.record.comment, /\(id, url, amount, currency\)/);
+});
+
 test("createDeposit marks the order FAILED when Floxy refuses the link", async () => {
   const h = harness({ patch: { floxy: undefined } });
   h.client.createPaymentLink = async () => { const e = new Error("refused"); e.code = "amount_out_of_range"; throw e; };
