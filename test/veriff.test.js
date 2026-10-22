@@ -67,6 +67,7 @@ function modelFor(initial, { duplicate = false, conflict = false } = {}) {
 function controllerFor(user = account(), options = {}) {
   const database = modelFor(user, options);
   const veriff = { ...service, getConfig: () => ({ ...config, ...options.config }), isEnabled: () => true,
+    getDecision: options.getDecision || (async () => null),
     getDecisionReason: options.getDecisionReason || (async () => null),
     createSession: options.createSession || (async () => ({ id: sessionId, url: "https://magic.veriff.me/test-session" })) };
   return { ...database, controller: createController({ users: database.model, veriff,
@@ -116,10 +117,57 @@ test("live approved decision enables KYC only for an eligible client", () => {
   for (const patch of [{ residenceCountry: "UAE" }, { nationality: "AE" }, { residenceCountry: "" }, { isVerified: false }]) {
     assert.equal(decisionOutcome(decision, { ...account(), ...patch }, config, false).approved, false);
   }
-  for (const patch of [{ documentCountry: "AE" }, { nationality: "ARE" }, { documentCountry: null }, { documentType: "VISA" }]) {
+  for (const patch of [{ documentCountry: "AE" }, { nationality: "ARE" }, { documentCountry: null }]) {
     assert.equal(decisionOutcome({ ...decision, ...patch }, account(), config, false).approved, false);
   }
   assert.equal(decisionOutcome(decision, account(), config, true).status, "review");
+});
+
+test("live Veriff-approved document classes are accepted without a separate BDFX type whitelist", async () => {
+  for (const type of ["DRIVERS_LICENSE", "RESIDENCE_PERMIT", "VISA", "OTHER", "GOVERNMENT_ISSUED_LETTER"]) {
+    const { controller, state } = controllerFor();
+    const res = response();
+    await controller.decisionWebhook(signedRequest(fixture({ document: { country: "IN", type } })), res);
+    assert.equal(res.code, 200); assert.equal(state.user.isKycVerified, true);
+  }
+});
+
+test("status refresh reconciles an existing review from the same authenticated live approval", async () => {
+  const user = account(); user.veriff.status = "review"; user.veriff.decisionAt = new Date("2026-10-20T12:00:00Z");
+  const { controller, state } = controllerFor(user, { getDecision: async () => normalizeDecision(fixture({ document: { country: "IN", type: "DRIVERS_LICENSE" } }), "decision") });
+  const res = response(); await controller.getStatus({ user: { id: "user-1" } }, res);
+  assert.equal(res.data.approved, true); assert.equal(res.data.status, "approved");
+  assert.equal(state.user.isKycVerified, true); assert.equal(state.writes, 1);
+});
+
+test("approval refresh preserves manual decisions, session ownership, country and duplicate-phone checks", async () => {
+  const approved = normalizeDecision(fixture(), "decision");
+  const cases = [
+    { user: { nationality: "UAE" } }, { duplicate: true },
+    { config: { mode: "test" } },
+    { decision: { ...approved, reference: "different-account" } },
+    { decision: { ...approved, id: "different-session" } },
+    { decision: { ...approved, status: "declined" } },
+    { decision: { ...approved, timestamp: Date.parse("2026-10-19T12:00:00Z") } },
+    { user: { kycManualReview: { sessionId, approved: false } } },
+    { conflict: true },
+  ];
+  for (const scenario of cases) {
+    const user = { ...account(), ...scenario.user }; user.veriff.status = "review"; user.veriff.decisionAt = new Date("2026-10-20T12:00:00Z");
+    const { controller, state } = controllerFor(user, { ...scenario, getDecision: async () => scenario.decision || approved });
+    const res = response(); await controller.getStatus({ user: { id: "user-1" } }, res);
+    assert.equal(res.data.approved, false); assert.equal(state.user.isKycVerified, false); assert.equal(state.writes, 0);
+  }
+});
+
+test("owner sync requires the current session and cannot be used by a client", async () => {
+  const user = account(); user._id = "a".repeat(24); user.veriff.status = "review";
+  const { controller, state } = controllerFor(user, { getDecision: async () => normalizeDecision(fixture(), "decision") });
+  const req = { principal: { isAdmin: true, adminRole: "owner" }, params: { userId: user._id }, body: { sessionId, expectedRevision: user.veriff.revision } };
+  const denied = response(); await controller.syncStatus({ ...req, principal: { isAdmin: false } }, denied); assert.equal(denied.code, 403);
+  const stale = response(); await controller.syncStatus({ ...req, body: { ...req.body, expectedRevision: 999 } }, stale); assert.equal(stale.code, 409); assert.equal(state.writes, 0);
+  const res = response(); await controller.syncStatus(req, res); assert.equal(res.code, 200); assert.equal(res.data.approved, true);
+  assert.equal(req.auditEvent, "kyc:provider-synced");
 });
 
 test("test-mode sessions and test-mode deployments never enable live KYC", () => {
@@ -410,6 +458,17 @@ test("legacy failures load authenticated reasons once and never change KYC appro
   assert.equal(calls, 1); assert.equal(state.user.isKycVerified, false);
 });
 
+test("BDFX review without a provider rejection reason is not presented as a provider failure", async () => {
+  const user = account(); user.veriff.status = "review";
+  const { controller, state } = controllerFor(user);
+  const res = response(); await controller.getStatus({ user: { id: "user-1" } }, res);
+  assert.equal(res.data.status, "review"); assert.equal(res.data.approved, false);
+  assert.equal(res.data.canRetry, false);
+  assert.match(res.data.failureReason, /BDFX review/);
+  assert.doesNotMatch(res.data.failureReason, /provider has not supplied|unsuccessful/i);
+  assert.equal(state.user.isKycVerified, false);
+});
+
 test("decision reason lookup rejects unsigned and mismatched provider responses", async () => {
   const axios = require("axios"), original = axios.get;
   let body = fixture({ status: "declined", code: 9102, reasonCode: 104 }); let valid = true;
@@ -422,6 +481,26 @@ test("decision reason lookup rejects unsigned and mismatched provider responses"
     assert.deepEqual(await service.getDecisionReason(sessionId, reference, cfg), { status: "declined", reasonCode: 104 });
     valid = false; await assert.rejects(service.getDecisionReason(sessionId, reference, cfg));
     valid = true; body = fixture({ vendorData: "other-account" }); await assert.rejects(service.getDecisionReason(sessionId, reference, cfg));
+  } finally { axios.get = original; }
+});
+
+test("decision refresh validates the response signature, approval code and saved session correlation", async () => {
+  const axios = require("axios"), original = axios.get;
+  let payload = fixture({ document: { country: "IN", type: "DRIVERS_LICENSE" } }), signed = true;
+  axios.get = async () => {
+    const data = JSON.stringify(payload);
+    return { data, headers: { "x-auth-client": config.apiKey, "x-hmac-signature": signed ? crypto.createHmac("sha256", config.sharedSecret).update(data).digest("hex") : "invalid" } };
+  };
+  const cfg = { ...config, apiUrl: "https://example.veriff.com/v1/sessions" };
+  try {
+    const decision = await service.getDecision(sessionId, reference, cfg);
+    assert.equal(decision.status, "approved"); assert.equal(decision.documentType, "DRIVERS_LICENSE");
+    assert.equal(decision.id, sessionId); assert.equal(decision.reference, reference);
+    assert.equal(decision.document?.number, undefined);
+    signed = false; await assert.rejects(service.getDecision(sessionId, reference, cfg));
+    signed = true; payload = fixture({ code: 9102 }); await assert.rejects(service.getDecision(sessionId, reference, cfg));
+    payload = fixture({ vendorData: "other-client" }); await assert.rejects(service.getDecision(sessionId, reference, cfg));
+    payload = { status: "success", verification: null }; assert.equal(await service.getDecision(sessionId, reference, cfg), null);
   } finally { axios.get = original; }
 });
 
