@@ -3,7 +3,29 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { createGuard, balanceWithClaim } = require("../services/depositCredit.service");
 const { createFloxyDeposit, fetchVndPerUsd, minimumVnd, toUsd } = require("../services/floxyDeposit.service");
-const { verifySignature } = require("../utils/floxyClient");
+const { verifySignature, createClient, seal, unseal } = require("../utils/floxyClient");
+
+const SEAL_ENV = { FLOXY_API_KEY: "sk_test_x", FLOXY_SECRET_KEY: "11".repeat(32), FLOXY_SECRET_IV: "22".repeat(16) };
+
+test("client opens sealed responses and sealed error bodies; plain responses pass through", async () => {
+  const link = { id: "plink_1", url: "https://floxymoney.com/pay/plink_1", amount: 260000, currency: "VND", status: "active" };
+  const sealedHttp = { request: async () => ({ data: seal(link, SEAL_ENV) }) };
+  assert.deepEqual(await createClient({ env: SEAL_ENV, http: sealedHttp }).getPaymentLink("plink_1"), link);
+
+  const plainHttp = { request: async () => ({ data: link }) };
+  assert.deepEqual(await createClient({ env: { FLOXY_API_KEY: "k" }, http: plainHttp }).getPaymentLink("plink_1"), link);
+
+  const failing = { request: async () => { const e = new Error("422"); e.response = { status: 422, data: seal({ error: { code: "amount_out_of_range" } }, SEAL_ENV) }; throw e; } };
+  await assert.rejects(createClient({ env: SEAL_ENV, http: failing }).createPaymentLink({}, "FLX12345678"), err => err.code === "amount_out_of_range" && err.status === 422);
+});
+
+test("sealed response without keys, with wrong keys or wrong key lengths fails loudly", async () => {
+  const sealedHttp = { request: async () => ({ data: seal({ id: "plink_1" }, SEAL_ENV) }) };
+  await assert.rejects(createClient({ env: { FLOXY_API_KEY: "k" }, http: sealedHttp }).getPaymentLink("plink_1"), /SECRET_KEY \/ FLOXY_SECRET_IV are not set/);
+  await assert.rejects(createClient({ env: { ...SEAL_ENV, FLOXY_SECRET_KEY: "33".repeat(32) }, http: sealedHttp }).getPaymentLink("plink_1"), /Could not decrypt/);
+  assert.throws(() => unseal({ data: "x" }, { FLOXY_SECRET_KEY: "abcd", FLOXY_SECRET_IV: "22".repeat(16) }), /64 hex chars/);
+  assert.deepEqual(unseal({ data: [1] }, {}), { data: [1] }, "a list response is not a sealed envelope");
+});
 
 const SECRET = "whsec_test";
 const sign = (body, t, secret = SECRET) => `t=${t},v1=${crypto.createHmac("sha256", secret).update(`${t}.${body}`).digest("hex")}`;
