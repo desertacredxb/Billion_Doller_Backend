@@ -1,17 +1,10 @@
 // middleware/cloudinaryUploader.js
 const multer = require("multer");
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const { createCloudinaryStorage } = require("../utils/cloudinaryStorage");
 const cloudinary = require("../utils/cloudinary");
 
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: "Billio-dollar-FX",
-    allowed_formats: ["jpg", "jpeg", "png", "pdf"],
-  },
-});
-
 const MAX_FILE_SIZE_MB = 10;
+const storage = createCloudinaryStorage(cloudinary, { maxBytes: MAX_FILE_SIZE_MB * 1024 * 1024 });
 const SUPPORTED_FORMATS_LABEL = "JPG, JPEG, PNG, or PDF";
 
 const upload = multer({
@@ -36,7 +29,7 @@ function uploadKycDocuments(fields) {
         });
       }
 
-      console.error("Document upload failed:", err);
+      console.error("Document upload failed");
       return res.status(400).json({
         success: false,
         message: `We couldn't upload that file. Please make sure it's a ${SUPPORTED_FORMATS_LABEL} file up to ${MAX_FILE_SIZE_MB}MB.`,

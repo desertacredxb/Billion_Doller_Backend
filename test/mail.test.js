@@ -24,3 +24,13 @@ test("consumer Gmail uses its authenticated mailbox until a sender alias is veri
   assert.equal(mailConfig({ ...config, SMTP_HOST: "smtp.gmail.com" }).from.address, "sender@gmail.com");
   assert.equal(mailConfig({ ...config, SMTP_HOST: "smtp.example.invalid" }).from.address, "info@example.invalid");
 });
+test("the updated Nodemailer preserves OTP and notification message composition without sending mail", async () => {
+  const nodemailer = require("nodemailer");
+  const config = mailConfig({ ...env, SMTP_HOST: "smtp.example.invalid", SMTP_FROM: "verified@example.invalid" });
+  const transport = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: "unix" });
+  const result = await transport.sendMail({ from: config.from, replyTo: config.replyTo, to: "owner@example.invalid", subject: "Synthetic OTP", text: "Your code is 000000", html: "<p>Your code is 000000</p>", headers: { "List-Unsubscribe": "<https://example.invalid/unsubscribe>" } });
+  const message = result.message.toString();
+  assert.match(message, /From: Billion Dollar FX <verified@example.invalid>/);
+  assert.match(message, /Reply-To: support@billiondollarfx.com/);
+  assert.match(message, /List-Unsubscribe:/); assert.match(message, /Your code is 000000/);
+});

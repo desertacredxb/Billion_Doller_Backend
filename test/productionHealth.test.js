@@ -22,5 +22,7 @@ test("outage alerts reuse one bot issue and recovery closes only that issue", as
   await run([health(true)]); assert.equal(writes.length, 0);
   await run([health(false)]); await run([health(false)]); await run([health(true)]);
   assert.deepEqual(writes.map(value => [value.method, value.path]), [["POST", "/issues"], ["PATCH", "/issues/2"], ["PATCH", "/issues/2"]]);
+  assert.deepEqual(writes[0].data.assignees, ["desertacredxb"]);
+  assert.deepEqual(writes[1].data.assignees, ["desertacredxb"]);
   assert.equal(writes[2].data.state, "closed"); assert.ok(writes[2].data.body.includes(MARKER));
 });

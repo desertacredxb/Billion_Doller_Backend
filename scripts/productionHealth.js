@@ -1,6 +1,7 @@
 const { appendFile } = require("node:fs/promises");
 const TITLE = "BDFX production health alert";
 const MARKER = "<!-- bdfx-production-health-v1 -->";
+const ALERT_OWNER = "desertacredxb";
 const TARGETS = [
   { name: "Backend and database", url: "https://billion-doller-backend.onrender.com/health", json: true },
   { name: "Public website", url: "https://www.billiondollarfx.com/", json: false },
@@ -29,8 +30,8 @@ async function reportHealth({ results, github, checkedAt, runUrl }) {
   const existing = open.find(issue => !issue.pull_request && issue.title === TITLE && issue.body?.includes(MARKER));
   const body = `${MARKER}\nChecked: ${checkedAt}\n\n${results.map(result => `- ${result.name}: ${result.detail}`).join("\n")}\n\n[Workflow run](${runUrl})\n\nThis check reads public endpoints only. It does not create accounts, send OTPs or perform financial transactions.`;
   if (failures.length) {
-    if (existing) await github("PATCH", `/issues/${existing.number}`, { body });
-    else await github("POST", "/issues", { title: TITLE, body });
+    if (existing) await github("PATCH", `/issues/${existing.number}`, { body, assignees: [ALERT_OWNER] });
+    else await github("POST", "/issues", { title: TITLE, body, assignees: [ALERT_OWNER] });
   } else if (existing) {
     await github("PATCH", `/issues/${existing.number}`, { state: "closed", state_reason: "completed", body: `${body}\n\nRecovered on this check.` });
   }
