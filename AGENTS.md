@@ -2,6 +2,8 @@
 
 Keep owner-approved flows unchanged during unrelated fixes. If a requested change affects an existing flow, check its callers, UI contract and regression tests before publishing. Update the agreed contract only when the owner explicitly requests a different behavior.
 
+Read `docs/approved-behavior.md` before changing an existing feature. That baseline covers the owner's two-day review. Verify affected dependent flows as well as the changed endpoint. Existing tests and CI are regression checks, not a claim that branch protection or a permanent repository write lock is configured.
+
 ## Client identity corrections (owner confirmed 22 October 2026)
 
 - Keep client **Edit name & resubmit → Save details → Resubmit verification** available for ordinary, unapproved review, provider resubmission and retryable failures.
