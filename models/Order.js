@@ -62,6 +62,20 @@ const orderSchema = new mongoose.Schema(
       expiredAt: { type: Date },
       failedAt: { type: Date },
     },
+    // Floxy (VND payment link) bookkeeping. `amount` above holds the USD to
+    // credit, locked at link creation; localAmount is what the client pays.
+    floxy: {
+      currency: { type: String },
+      localAmount: { type: Number },
+      vndPerUsd: { type: Number },
+      rateSource: { type: String },
+      linkId: { type: String },
+      linkUrl: { type: String },
+      linkStatus: { type: String },
+      expiresAt: { type: Date },
+      paymentId: { type: String },
+      paidAt: { type: Date },
+    },
   },
   { timestamps: true }
 );
