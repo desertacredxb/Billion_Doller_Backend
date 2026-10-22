@@ -98,6 +98,8 @@ const startServer = async () => {
 
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  // A failed reporting connection does not delay server startup or other APIs.
+  void require("./services/websiteAnalyticsReadiness.service").checkOnStartup();
   // Durable weekly queue. Failure is isolated from authentication/payments.
   require("./services/blogAutomation.service").start();
   require("./services/emailMarketing.service").start();

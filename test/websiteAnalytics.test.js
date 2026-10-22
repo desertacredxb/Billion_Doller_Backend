@@ -3,9 +3,10 @@ const assert = require("node:assert/strict");
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const { createService, period, PROPERTY_ID, createClientProvider } = require("../services/websiteAnalytics.service");
-const { createController } = require("../controllers/websiteAnalyticsController");
+const { createController, reportingFailure } = require("../controllers/websiteAnalyticsController");
 const { createRouter } = require("../routes/websiteAnalyticsRoutes");
 const { createAccessControl } = require("../middleware/accessControl");
+const { checkOnStartup } = require("../services/websiteAnalyticsReadiness.service");
 function fakeClient({ fail = false } = {}) {
   const calls = [];
   const result = async (request, options) => {
@@ -78,6 +79,40 @@ test("the actual HTTP route blocks anonymous, client, manager and stale sessions
 });
 test("provider errors are redacted and not converted into misleading success cards", async () => {
   const res = { code: 200, set() {}, status(code) { this.code = code; return this; }, json(value) { this.data = value; } };
-  await createController({ service: { report: async () => { throw new Error("private-key-or-token-must-not-leak"); } } })({ query: {} }, res);
+  const logs = [];
+  await createController({ logger: { error: line => logs.push(line) }, service: { report: async () => { throw new Error("private-key-or-token-must-not-leak"); } } })({ query: {} }, res);
   assert.equal(res.code, 503); assert.equal(res.data.totals, undefined); assert.equal(JSON.stringify(res.data).includes("private-key-or-token"), false);
+  assert.deepEqual(logs, ["[website-analytics] GA4_UNAVAILABLE"]);
+});
+test("reporting failures give actionable, allowlisted diagnostics without provider data", () => {
+  for (const [error, code] of [
+    [{ code: 7, reason: "SERVICE_DISABLED", message: "private-secret-project-details" }, "GA4_API_DISABLED"],
+    [{ code: 7, message: "private-property-and-email" }, "GA4_ACCESS_DENIED"],
+    [{ code: 16, message: "private-token" }, "GA4_AUTH_FAILED"],
+    [{ message: "invalid_grant: private-token" }, "GA4_AUTH_FAILED"],
+    [{ code: 4, message: "private-request" }, "GA4_TIMEOUT"],
+    [{ code: 8, message: "private-project" }, "GA4_QUOTA"],
+    [{ code: 3, message: "private-payload" }, "GA4_REQUEST_INVALID"],
+    [{ message: "Reporting response invalid" }, "GA4_RESPONSE_INVALID"],
+    [{ code: "arbitrary-private-code", message: "private-key" }, "GA4_UNAVAILABLE"],
+  ]) {
+    const failure = reportingFailure(error);
+    assert.equal(failure.code, code);
+    assert.equal(JSON.stringify(failure).includes("private-"), false);
+  }
+  for (const raw of ["{broken-private-json", "null", "{}"])
+    assert.throws(() => createClientProvider({ GA4_REPORTING_CREDENTIALS_JSON: raw })(), { code: "GA4_CREDENTIALS_INVALID" });
+});
+test("startup verification skips absent credentials and logs no report or credential data", async () => {
+  let calls = 0;
+  const logs = [], logger = { info: line => logs.push(line), error: line => logs.push(line) };
+  const service = { report: async days => { calls++; assert.equal(days, 7); return { connected: true, totals: { users: 123456 }, private: "private-value" }; } };
+  assert.deepEqual(await checkOnStartup({ env: {}, service, logger }), { connected: false });
+  assert.equal(calls, 0); assert.deepEqual(logs, ["[website-analytics] UNCONFIGURED"]);
+  logs.length = 0;
+  assert.deepEqual(await checkOnStartup({ env: { GA4_REPORTING_CREDENTIALS_JSON: "private-key" }, service, logger }), { connected: true });
+  assert.equal(calls, 1); assert.deepEqual(logs, ["[website-analytics] READY"]);
+  const broken = { report: async () => { throw Object.assign(new Error("private-key-and-provider-body"), { code: 7, reason: "SERVICE_DISABLED" }); } };
+  assert.deepEqual(await checkOnStartup({ env: { GA4_REPORTING_CREDENTIALS_JSON: "private-key" }, service: broken, logger }), { connected: false, code: "GA4_API_DISABLED" });
+  assert.deepEqual(logs, ["[website-analytics] READY", "[website-analytics] GA4_API_DISABLED"]);
 });

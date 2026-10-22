@@ -16,8 +16,10 @@ function createClientProvider(env = process.env) {
     if (!raw) return null;
     const next = crypto.createHash("sha256").update(raw).digest("hex");
     if (next === fingerprint) return client;
-    const credentials = JSON.parse(raw);
-    if (credentials.type !== "service_account" || typeof credentials.client_email !== "string" || !credentials.client_email.endsWith(".iam.gserviceaccount.com") || typeof credentials.private_key !== "string" || !credentials.private_key.includes("BEGIN PRIVATE KEY")) throw new Error("Reporting connection invalid");
+    let credentials;
+    try { credentials = JSON.parse(raw); }
+    catch { throw Object.assign(new Error("Reporting connection invalid"), { code: "GA4_CREDENTIALS_INVALID" }); }
+    if (!credentials || credentials.type !== "service_account" || typeof credentials.client_email !== "string" || !credentials.client_email.endsWith(".iam.gserviceaccount.com") || typeof credentials.private_key !== "string" || !credentials.private_key.includes("BEGIN PRIVATE KEY")) throw Object.assign(new Error("Reporting connection invalid"), { code: "GA4_CREDENTIALS_INVALID" });
     // Fixed property, read-only scope, no delegated user or caller-supplied endpoint.
     const replacement = new BetaAnalyticsDataClient({ credentials: { client_email: credentials.client_email, private_key: credentials.private_key }, scopes: [SCOPE], fallback: true });
     client?.close().catch(() => {});
