@@ -23,6 +23,42 @@ function isConfigured(env = process.env) {
   return Boolean(env.FLOXY_API_KEY && env.FLOXY_WEBHOOK_SECRET);
 }
 
+// "Sealed responses" (APIs page setting): every answer arrives as {"data": "<base64>"},
+// AES-256-CBC encrypted with the account's Secret Key + Secret IV (both hex).
+function sealKeys(env) {
+  if (!env.FLOXY_SECRET_KEY || !env.FLOXY_SECRET_IV) return null;
+  const key = Buffer.from(env.FLOXY_SECRET_KEY.trim(), "hex");
+  const iv = Buffer.from(env.FLOXY_SECRET_IV.trim(), "hex");
+  if (key.length !== 32 || iv.length !== 16) {
+    throw new FloxyError(`FLOXY_SECRET_KEY must be 64 hex chars and FLOXY_SECRET_IV 32 hex chars (got ${key.length} and ${iv.length} bytes)`);
+  }
+  return { key, iv };
+}
+
+function isSealed(body) {
+  return Boolean(body) && typeof body === "object" && !Array.isArray(body) &&
+    typeof body.data === "string" && Object.keys(body).length === 1;
+}
+
+function unseal(body, env = process.env) {
+  if (!isSealed(body)) return body;
+  const keys = sealKeys(env);
+  if (!keys) throw new FloxyError("Floxy sent a sealed response but FLOXY_SECRET_KEY / FLOXY_SECRET_IV are not set");
+  try {
+    const decipher = crypto.createDecipheriv("aes-256-cbc", keys.key, keys.iv);
+    return JSON.parse(decipher.update(body.data, "base64", "utf8") + decipher.final("utf8"));
+  } catch {
+    throw new FloxyError("Could not decrypt Floxy's sealed response (check FLOXY_SECRET_KEY / FLOXY_SECRET_IV)");
+  }
+}
+
+function seal(value, env = process.env) {
+  const keys = sealKeys(env);
+  if (!keys) throw new FloxyError("FLOXY_SECRET_KEY / FLOXY_SECRET_IV are not set");
+  const cipher = crypto.createCipheriv("aes-256-cbc", keys.key, keys.iv);
+  return { data: cipher.update(JSON.stringify(value), "utf8", "base64") + cipher.final("base64") };
+}
+
 function createClient({ env = process.env, http = axios } = {}) {
   const baseURL = (env.FLOXY_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
 
@@ -30,15 +66,19 @@ function createClient({ env = process.env, http = axios } = {}) {
     if (!env.FLOXY_API_KEY) throw new FloxyError("Floxy is not configured");
     const headers = { Authorization: `Bearer ${env.FLOXY_API_KEY}`, "Content-Type": "application/json" };
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+    let response;
     try {
-      const { data } = await http.request({ method, url: `${baseURL}${path}`, data: body, headers, timeout: 15000 });
-      return data;
+      response = await http.request({ method, url: `${baseURL}${path}`, data: body, headers, timeout: 15000 });
     } catch (error) {
       // Branch on error.code, never on the message text (guide section 5).
+      // Error bodies may be sealed too; a body we cannot open still yields the status.
       const status = error.response?.status;
-      const code = error.response?.data?.error?.code;
-      throw new FloxyError(`Floxy ${method.toUpperCase()} ${path} failed${code ? `: ${code}` : ""}`, { status, code });
+      let errorBody = error.response?.data;
+      try { errorBody = unseal(errorBody, env); } catch { errorBody = undefined; }
+      const code = errorBody?.error?.code;
+      throw new FloxyError(`Floxy ${method.toUpperCase()} ${path} failed${code ? `: ${code}` : status ? ` (HTTP ${status})` : ""}`, { status, code });
     }
+    return unseal(response.data, env);
   }
 
   function id(value) {
@@ -72,4 +112,4 @@ function verifySignature(rawBody, header, secret, nowSeconds = Date.now() / 1000
   return crypto.timingSafeEqual(expected, Buffer.from(parts.v1, "hex"));
 }
 
-module.exports = { createClient, verifySignature, isConfigured, FloxyError };
+module.exports = { createClient, verifySignature, isConfigured, seal, unseal, FloxyError };

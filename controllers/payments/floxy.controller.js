@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const Account = require("../../models/account.model");
-const { verifySignature, isConfigured } = require("../../utils/floxyClient");
+const { verifySignature, isConfigured, unseal } = require("../../utils/floxyClient");
 const { service, fetchVndPerUsd, minimumVnd } = require("../../services/floxyDeposit.service");
 const { MIN_DEPOSIT_USD } = require("../../config/depositLimits");
 
@@ -61,7 +61,7 @@ exports.handleFloxyPayoutCallback = async (req, res) => {
     return res.status(401).json({ success: false, message: "Invalid signature" });
   }
   let event;
-  try { event = JSON.parse(req.body.toString("utf8")); } catch {
+  try { event = unseal(JSON.parse(req.body.toString("utf8"))); } catch {
     return res.status(400).json({ success: false, message: "Invalid payload" });
   }
   console.log(`Floxy payout callback received (not processed yet): ${event?.type || "unknown"} ${event?.id || ""}`);
@@ -78,6 +78,11 @@ exports.handleFloxyCallback = async (req, res) => {
   let event;
   try { event = JSON.parse(req.body.toString("utf8")); } catch {
     return res.status(400).json({ success: false, message: "Invalid payload" });
+  }
+  // With sealed responses enabled the event body may be {"data": "<encrypted>"}.
+  try { event = unseal(event); } catch (error) {
+    console.error("Floxy callback could not be decrypted:", error.message);
+    return res.status(500).json({ received: false });
   }
 
   try {
