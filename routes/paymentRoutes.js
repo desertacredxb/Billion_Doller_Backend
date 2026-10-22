@@ -14,6 +14,7 @@ const { handleTrustpay24Deposit, handleTrustpay24Callback } = require("../contro
 const { handleTruepay9Callback } = require("../controllers/payments/truepay9.controller");
 const { handleCregisCallback } = require("../controllers/payments/cregis.controller");
 const { handleManualPaymentRequest } = require("../controllers/payments/manualPayment.controller");
+const { getFloxyQuote, createFloxyDeposit } = require("../controllers/payments/floxy.controller");
 
 const { createCregisCheckout } = require("../controllers/paymentOrder.controller");
 const { createPayoutRequest, approvePayoutReq, rejectPayoutRequest } = require("../controllers/payout.controller");
@@ -53,6 +54,9 @@ router.post("/cregis/deposit", access.accountOwner(), createCregisCheckout);
 router.post("/trustpay24/deposit", access.accountOwner(), handleTrustpay24Deposit);
 router.post("/ramee/deposit", access.accountOwner(), handleRameeDeposit);
 router.post("/crypto/deposit", access.accountOwner(), handleCryptoDeposit);
+// Floxy webhook is mounted separately in index.js (raw body, before express.json).
+router.get("/floxy/quote", getFloxyQuote);
+router.post("/floxy/deposit", access.accountOwner(), createFloxyDeposit);
 
 // ---------------------------------------------------------------------------
 // Withdrawal routes

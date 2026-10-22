@@ -58,6 +58,7 @@ const startServer = async () => {
   app.use("/api", createAudit());
   app.use("/api/veriff", veriffRoutes);
   app.use("/api/blogs", blogRoutes);
+  app.use("/api/payment/floxy", require("./routes/floxyWebhookRoutes"));
   app.use(express.json());
 
   app.get("/check-ip", async (req, res) => {

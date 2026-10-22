@@ -301,7 +301,15 @@ async function reconcilePendingOrders(orderCount = null) {
 
       // Closed providers are retained for owner reconciliation, never
       // automatically credited or reactivated by this job.
-      if (!["RAMEE", "CRYPTO", "CREGIS"].includes(provider)) return;
+      if (!["RAMEE", "CRYPTO", "CREGIS", "FLOXY"].includes(provider)) return;
+
+      // FLOXY: the payment link's status (read with our API key) is the source
+      // of truth; credits the USD amount locked when the link was created.
+      if (provider === "FLOXY") {
+        const result = await require("../services/floxyDeposit.service").service().settle(order);
+        console.log(`Floxy order ${order.orderid}: ${result}`);
+        return;
+      }
 
       // CREGIS needs the full settlement breakdown (not just a status string) to
       // credit only what's actually been paid, so it gets its own dedicated path.
