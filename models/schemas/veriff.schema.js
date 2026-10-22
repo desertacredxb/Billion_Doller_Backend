@@ -13,4 +13,5 @@ module.exports = new mongoose.Schema({
   sessionCreatedAt: Date,
   decisionAt: Date,
   revision: { type: Number, default: 0 },
+  resubmissionRequired: { type: Boolean, default: false },
 }, { _id: false });

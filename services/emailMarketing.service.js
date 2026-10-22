@@ -75,14 +75,15 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
   }
   async function processPending() {
     if (running) return { outcome: "busy" }; running = true;
-    const leaseToken = crypto.randomUUID(); let locked = false;
+    const leaseToken = crypto.randomUUID(); let locked = false, lastOutcome = "unavailable";
+    const finish = outcome => { lastOutcome = outcome; return { outcome }; };
     const current = now();
     try {
       await ready();
       await states.updateOne({ _id: ID }, { $setOnInsert: { paused: true, reservedToday: 0 } }, { upsert: true, writeConcern: WRITE });
       const state = await states.findOneAndUpdate({ _id: ID, $or: [{ leaseUntil: null }, { leaseUntil: { $lte: current } }] },
         { $set: { leaseToken, leaseUntil: new Date(current.getTime() + 120000) } }, SETTINGS);
-      if (!state) return { outcome: "busy" }; locked = true;
+      if (!state) return finish("busy"); locked = true;
       await sync();
       // SMTP cannot provide exactly-once delivery. Never blindly retry an interrupted send.
       const interrupted = await deliveries.find({ status: "sending", reservedAt: { $lt: new Date(current.getTime() - 120000) } }).select("subscriberId").lean();
@@ -91,16 +92,16 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
         await subscribers.updateOne({ _id: item.subscriberId }, { $set: { held: true } }, { writeConcern: WRITE });
       }
       const cfg = config(env), slot = Math.floor(current.getTime() / 60000);
-      if (!cfg.enabled || !cfg.dailyLimit || !cfg.secretReady || state.paused) return { outcome: "paused" };
-      if (new Date(current.getTime() + 4 * 3600000).getUTCHours() < 10) return { outcome: "outside_window" };
-      if (state.lastSlot === slot) return { outcome: "throttled" };
+      if (!cfg.enabled || !cfg.dailyLimit || !cfg.secretReady || state.paused) return finish("paused");
+      if (new Date(current.getTime() + 4 * 3600000).getUTCHours() < 10) return finish("outside_window");
+      if (state.lastSlot === slot) return finish("throttled");
       const date = dubaiDate(current);
       if (state.budgetDate !== date) await states.updateOne({ _id: ID, leaseToken }, { $set: { budgetDate: date, reservedToday: 0 } }, { writeConcern: WRITE });
       const candidate = await subscribers.findOne({ active: true, held: false, nextDay: { $lt: 7 }, nextAt: { $lte: current } }).sort({ nextAt: 1, _id: 1 }).lean();
-      if (!candidate) return { outcome: "empty" };
+      if (!candidate) return finish("empty");
       const user = await users.findById(candidate.userId).select("email isVerified isKycVerified nationality residenceCountry country marketingConsent marketingConsentAt marketingConsentVersion").lean();
       if (!eligible(user) || user.email.trim().toLowerCase() !== candidate.email) {
-        await subscribers.updateOne({ _id: candidate._id }, { $set: { active: false } }, { writeConcern: WRITE }); return { outcome: "ineligible" };
+        await subscribers.updateOne({ _id: candidate._id }, { $set: { active: false } }, { writeConcern: WRITE }); return finish("ineligible");
       }
       const prior = await deliveries.findOne({ subscriberId: candidate._id, day: candidate.nextDay }).lean();
       const advance = at => subscribers.updateOne({ _id: candidate._id, nextDay: candidate.nextDay },
@@ -108,11 +109,11 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
       if (prior) {
         if (["accepted", "skipped"].includes(prior.status)) await advance(prior.acceptedAt || prior.reservedAt);
         else await subscribers.updateOne({ _id: candidate._id }, { $set: { held: true } }, { writeConcern: WRITE });
-        return { outcome: "reconciled" };
+        return finish("reconciled");
       }
       if (plan[candidate.nextDay].pendingKycOnly && user.isKycVerified) {
         await deliveries.create([{ subscriberId: candidate._id, day: candidate.nextDay, status: "skipped", reservedAt: current }], { writeConcern: WRITE });
-        await advance(current); return { outcome: "skipped" };
+        await advance(current); return finish("skipped");
       }
       // Provider allowance is rolling, so a Dubai date change must not reset it.
       // The shared campaign lease serializes this count and the reservation.
@@ -120,43 +121,48 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
         reservedAt: { $gt: new Date(current.getTime() - DAY) },
         status: { $in: ["sending", "accepted", "unknown", "cancelled"] },
       });
-      if (recentReservations >= cfg.dailyLimit) return { outcome: "rolling_limit" };
+      if (recentReservations >= cfg.dailyLimit) return finish("rolling_limit");
       const budget = await states.findOneAndUpdate({ _id: ID, leaseToken, leaseUntil: { $gt: now() }, paused: false, reservedToday: { $lt: cfg.dailyLimit }, lastSlot: { $ne: slot } },
         { $inc: { reservedToday: 1 }, $set: { lastSlot: slot } }, SETTINGS);
-      if (!budget) return { outcome: "daily_limit" };
+      if (!budget) return finish("daily_limit");
       await deliveries.create([{ subscriberId: candidate._id, day: candidate.nextDay, status: "sending", reservedAt: current }], { writeConcern: WRITE });
       const latest = await users.findById(candidate.userId).select("email isVerified isKycVerified nationality residenceCountry country marketingConsent marketingConsentAt marketingConsentVersion").lean();
       const active = await subscribers.findOne({ _id: candidate._id, active: true, held: false }).lean();
       if (!eligible(latest) || latest.email.trim().toLowerCase() !== candidate.email || !active) {
         await deliveries.updateOne({ subscriberId: candidate._id, day: candidate.nextDay }, { $set: { status: "cancelled" } }, { writeConcern: WRITE });
-        return { outcome: "cancelled" };
+        return finish("cancelled");
       }
       try { await send(message(candidate.nextDay, candidate, campaignSecret(env))); }
       catch {
         await deliveries.updateOne({ subscriberId: candidate._id, day: candidate.nextDay }, { $set: { status: "unknown" } }, { writeConcern: WRITE });
         await subscribers.updateOne({ _id: candidate._id }, { $set: { held: true } }, { writeConcern: WRITE });
-        return { outcome: "delivery_unconfirmed" };
+        return finish("delivery_unconfirmed");
       }
       const acceptedAt = now();
       await deliveries.updateOne({ subscriberId: candidate._id, day: candidate.nextDay, status: "sending" }, { $set: { status: "accepted", acceptedAt } }, { writeConcern: WRITE });
-      await advance(acceptedAt); return { outcome: "accepted" };
-    } catch { logger.error("Email marketing tick failed; no automatic retry of an uncertain SMTP delivery."); return { outcome: "unavailable" }; }
+      await advance(acceptedAt); return finish("accepted");
+    } catch { logger.error("Email marketing tick failed; no automatic retry of an uncertain SMTP delivery."); return finish("unavailable"); }
     finally {
-      if (locked) { try { await states.updateOne({ _id: ID, leaseToken }, { $set: { leaseToken: null, leaseUntil: null, lastRunAt: now() } }, { writeConcern: WRITE }); } catch { /* Lease expires. */ } }
+      if (locked) { try { await states.updateOne({ _id: ID, leaseToken }, { $set: { leaseToken: null, leaseUntil: null, lastRunAt: now(), lastOutcome } }, { writeConcern: WRITE }); } catch { /* Lease expires. */ } }
       running = false;
     }
   }
   async function status() {
     await ready();
-    const [registered, optedIn, enrolled, accepted, held, unsubscribed, state] = await Promise.all([
+    const current = now(), pending = { active: true, held: false, nextDay: { $lt: 7 } };
+    const [registered, optedIn, enrolled, accepted, held, unsubscribed, state, due, scheduled, next] = await Promise.all([
       users.countDocuments({ isVerified: true }), users.countDocuments({ isVerified: true, marketingConsent: true, marketingConsentVersion: VERSION, marketingConsentAt: { $type: "date" } }),
       subscribers.countDocuments({ active: true, nextDay: { $lt: 7 } }), deliveries.countDocuments({ status: "accepted" }),
       subscribers.countDocuments({ held: true }), subscribers.countDocuments({ active: false, unsubscribedAt: { $ne: null } }), states.findById(ID).lean(),
+      subscribers.countDocuments({ ...pending, nextAt: { $lte: current } }),
+      subscribers.countDocuments({ ...pending, nextAt: { $gt: current } }),
+      subscribers.findOne(pending).sort({ nextAt: 1 }).select("nextAt -_id").lean(),
     ]);
     const cfg = config(env);
     return { registered, optedIn, enrolled, accepted, held, unsubscribed, paused: state?.paused !== false,
       sendingConfigured: cfg.enabled && !!cfg.dailyLimit && cfg.secretReady, dailyLimit: cfg.dailyLimit, timezone: "Asia/Dubai", startsAt: "10:00",
-      lastSyncAt: state?.lastSyncAt || null, lastRunAt: state?.lastRunAt || null, plan };
+      lastSyncAt: state?.lastSyncAt || null, lastRunAt: state?.lastRunAt || null, lastOutcome: state?.lastOutcome || null,
+      due, scheduled, nextScheduledAt: next?.nextAt || null, plan };
   }
   async function setPaused(paused) {
     if (typeof paused !== "boolean") throw Error("Choose pause or resume");
@@ -182,7 +188,19 @@ function createService({ users = User, subscribers = Subscriber, deliveries = De
     await users.updateOne({ _id: subscriber.userId }, { $set: { marketingConsent: false, marketingUnsubscribedAt: now() } }, { writeConcern: WRITE });
     return true;
   }
-  function start() { const tick = () => processPending().catch(() => {}); tick(); const timer = setInterval(tick, 60000); timer.unref(); return timer; }
+  function start() {
+    let previous;
+    const tick = async () => {
+      try {
+        const result = await processPending();
+        if (result.outcome === previous || result.outcome === "busy") return;
+        previous = result.outcome;
+        // Fixed outcome names only; never log recipients, tokens or message content.
+        logger.info?.(`Email marketing worker: ${result.outcome}`);
+      } catch { /* processPending records safe failure information. */ }
+    };
+    void tick(); const timer = setInterval(tick, 60000); timer.unref(); return timer;
+  }
   async function getPreference(userId) {
     const user = await users.findById(userId).select("marketingConsent marketingConsentVersion").lean();
     return { subscribed: user?.marketingConsent === true && user.marketingConsentVersion === VERSION };

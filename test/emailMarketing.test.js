@@ -52,6 +52,28 @@ test("paused worker sends nothing; active worker advances once and respects dail
   const live = fixture(); assert.equal((await live.service.processPending()).outcome, "accepted"); assert.equal(live.sent(), 1); assert.equal(live.sub.nextDay, 1); assert.equal(live.receipts[0].status, "accepted");
   await live.service.processPending(); assert.equal(live.sent(), 1);
 });
+
+test("campaign reports distinguish future scheduling from due deliveries without disclosing recipients", async () => {
+  const current = new Date("2026-10-22T10:00:00Z"), nextAt = new Date("2026-10-23T06:00:00Z");
+  const state = { paused: false, lastOutcome: "empty", lastRunAt: current };
+  const service = createService({ ensure: async () => {}, now: () => current,
+    users: { countDocuments: async () => 2 }, deliveries: { countDocuments: async () => 0 },
+    states: { findById: () => query(state) },
+    subscribers: {
+      countDocuments: async filter => filter.nextAt ? (filter.nextAt.$gt ? 1 : 0) : 1,
+      findOne: filter => {
+        assert.deepEqual(filter, { active: true, held: false, nextDay: { $lt: 7 } });
+        const q = query({ nextAt }); q.select = fields => { assert.equal(fields, "nextAt -_id"); return q; }; return q;
+      },
+    }, env: { EMAIL_MARKETING_ENABLED: "true", EMAIL_MARKETING_DAILY_LIMIT: "500", EMAIL_MARKETING_TOKEN_SECRET: secret },
+  });
+  const report = await service.status();
+  assert.equal(report.due, 0); assert.equal(report.scheduled, 1); assert.equal(report.nextScheduledAt, nextAt);
+  assert.equal(report.lastOutcome, "empty"); assert.equal(report.lastRunAt, current);
+  assert.equal(report.accepted, 0); assert.equal(report.paused, false);
+  assert.doesNotMatch(JSON.stringify(report), /client@example|subscriberId|userId/);
+  const f = fixture({ paused: true }); await f.service.processPending(); assert.equal(f.state.lastOutcome, "paused"); assert.equal(f.sent(), 0);
+});
 test("Dubai early morning is outside sending window, including UTC previous evening", async () => {
   const f = fixture({ time: "2026-10-21T22:00:00Z" }); assert.equal((await f.service.processPending()).outcome, "outside_window"); assert.equal(f.sent(), 0);
 });

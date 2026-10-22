@@ -84,7 +84,7 @@ async function createSession(reference, config) {
   return { id: verification.id, url: verification.url };
 }
 
-async function getDecisionReason(sessionId, reference, config) {
+async function fetchDecision(sessionId, reference, config) {
   if (!/^[a-f0-9-]{36}$/i.test(sessionId || "")) throw Error("Invalid verification session");
   const response = await axios.get(`${config.apiUrl}/${sessionId}/decision`, {
     headers: { "Content-Type": "application/json", "X-AUTH-CLIENT": config.apiKey,
@@ -93,8 +93,24 @@ async function getDecisionReason(sessionId, reference, config) {
   });
   if (!authenticateWebhook(Buffer.from(response.data), response.headers, config)) throw Error("Invalid decision signature");
   const payload = JSON.parse(response.data), decision = payload.verification;
+  if (payload.status === "success" && decision === null) return null;
   if (payload.status !== "success" || !decision || decision.id !== sessionId || decision.vendorData !== reference) throw Error("Decision mismatch");
+  return payload;
+}
+
+async function getDecision(sessionId, reference, config) {
+  const payload = await fetchDecision(sessionId, reference, config);
+  if (!payload) return null;
+  const decision = require("../utils/veriffPolicy").normalizeDecision(payload, "decision");
+  if (!decision) throw Error("Invalid verification decision");
+  return decision;
+}
+
+async function getDecisionReason(sessionId, reference, config) {
+  const payload = await fetchDecision(sessionId, reference, config);
+  if (!payload) return null;
+  const decision = payload.verification;
   return { status: decision.status, reasonCode: require("../utils/veriffReasons").reasonCode(decision.reasonCode) };
 }
 
-module.exports = { isEnabled, getConfig, isVeriffUrl, authenticateWebhook, createSession, getDecisionReason };
+module.exports = { isEnabled, getConfig, isVeriffUrl, authenticateWebhook, createSession, getDecision, getDecisionReason };

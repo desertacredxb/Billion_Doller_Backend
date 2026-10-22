@@ -59,10 +59,10 @@ function decisionOutcome(decision, user, config, duplicatePhone) {
     };
     return { status: decision.status, approved: false, message: messages[decision.status] };
   }
-  const documentType = typeof decision.documentType === "string" ? decision.documentType.toUpperCase() : "";
+  // The owner accepts the document classes approved by the live Veriff integration.
+  // Do not reject a signed approval just because it used a driving licence or another supported class.
   if (!user.isVerified || !user.residenceCountry?.trim() || !normalizePhone(user.phone) ||
-      typeof decision.documentCountry !== "string" || !/^[A-Z]{2}$/i.test(decision.documentCountry) ||
-      !["PASSPORT", "ID_CARD"].includes(documentType)) {
+      typeof decision.documentCountry !== "string" || !/^[A-Z]{2}$/i.test(decision.documentCountry)) {
     return { status: "review", approved: false, message: "Your verification needs further review. Please contact support." };
   }
   if (config.mode !== "live" || user.veriff?.mode !== "live") {
