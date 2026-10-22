@@ -27,11 +27,22 @@ function createClientProvider(env = process.env) {
     return client;
   };
 }
-function parseRows(report, dimensions, metrics) {
-  if (!report || metrics.some((name, i) => report.metricHeaders?.[i]?.name !== name) || dimensions.some((name, i) => report.dimensionHeaders?.[i]?.name !== name)) throw new Error("Reporting response invalid");
+const REPORT_HEADERS = new Set(["totalUsers", "sessions", "screenPageViews", "eventCount", "activeUsers", "date", "eventName", "pagePath", "sessionDefaultChannelGroup"]);
+function invalidResponse(report, stage, problem) {
+  const names = headers => Array.isArray(headers) ? headers.map(h => REPORT_HEADERS.has(h?.name) ? h.name : "other").join(",") || "empty" : "missing";
+  return Object.assign(new Error("Reporting response invalid"), { reportingDiagnostic: {
+    stage, problem, metrics: names(report?.metricHeaders), dimensions: names(report?.dimensionHeaders),
+    rows: Array.isArray(report?.rows) ? (report.rows.length ? "present" : "empty") : "missing",
+    rowCount: report?.rowCount === 0 ? "zero" : report?.rowCount === undefined ? "missing" : "nonzero",
+  } });
+}
+function parseRows(report, dimensions, metrics, stage) {
+  if (!report) throw invalidResponse(report, stage, "missing_report");
+  if (metrics.some((name, i) => report.metricHeaders?.[i]?.name !== name)) throw invalidResponse(report, stage, "metric_headers");
+  if (dimensions.some((name, i) => report.dimensionHeaders?.[i]?.name !== name)) throw invalidResponse(report, stage, "dimension_headers");
   return (report.rows || []).map(row => {
     const values = metrics.map((_, i) => Number(row.metricValues?.[i]?.value));
-    if (values.some(n => !Number.isFinite(n) || n < 0)) throw new Error("Reporting response invalid");
+    if (values.some(n => !Number.isFinite(n) || n < 0)) throw invalidResponse(report, stage, "metric_values");
     return { dimensions: dimensions.map((_, i) => String(row.dimensionValues?.[i]?.value || "")), values };
   });
 }
@@ -58,19 +69,19 @@ function createService({ clientProvider = createClientProvider(), now = () => ne
           standard(["sessionDefaultChannelGroup"], ["sessions"], { orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 8 }),
           client.runRealtimeReport({ property: `properties/${PROPERTY_ID}`, metrics: [{ name: "activeUsers" }] }, { timeout: 8000 }).then(([r]) => r),
         ]);
-        const totals = parseRows(summary, [], ["totalUsers", "sessions", "screenPageViews"])[0]?.values || [0, 0, 0];
-        const conversionRows = parseRows(events, ["eventName"], ["eventCount"]);
+        const totals = parseRows(summary, [], ["totalUsers", "sessions", "screenPageViews"], "summary")[0]?.values || [0, 0, 0];
+        const conversionRows = parseRows(events, ["eventName"], ["eventCount"], "events");
         const conversion = name => conversionRows.find(r => r.dimensions[0] === name)?.values[0] || 0;
-        const dailyValues = new Map(parseRows(daily, ["date"], ["screenPageViews"]).map(r => [r.dimensions[0], r.values[0]]));
+        const dailyValues = new Map(parseRows(daily, ["date"], ["screenPageViews"], "daily").map(r => [r.dimensions[0], r.values[0]]));
         const dailyRows = Array.from({ length: days }, (_, index) => {
           const date = new Date(Date.parse(`${range.from}T00:00:00Z`) + index * 86400000).toISOString().slice(0, 10);
           return { date, views: dailyValues.get(date.replaceAll("-", "")) || 0 };
         });
         const report = { connected: true, analyticsUrl: ANALYTICS_URL, generatedAt: now().toISOString(), range,
-          totals: { users: totals[0], sessions: totals[1], views: totals[2], leads: conversion("generate_lead"), signups: conversion("sign_up"), activeUsers30Minutes: parseRows(realtime, [], ["activeUsers"])[0]?.values[0] || 0 },
+          totals: { users: totals[0], sessions: totals[1], views: totals[2], leads: conversion("generate_lead"), signups: conversion("sign_up"), activeUsers30Minutes: parseRows(realtime, [], ["activeUsers"], "realtime")[0]?.values[0] || 0 },
           daily: dailyRows,
-          pages: parseRows(pages, ["pagePath"], ["screenPageViews"]).filter(r => PUBLIC_PATHS.includes(r.dimensions[0])).map(r => ({ path: r.dimensions[0], views: r.values[0] })),
-          channels: parseRows(channels, ["sessionDefaultChannelGroup"], ["sessions"]).map(r => ({ channel: r.dimensions[0].slice(0, 100), sessions: r.values[0] })),
+          pages: parseRows(pages, ["pagePath"], ["screenPageViews"], "pages").filter(r => PUBLIC_PATHS.includes(r.dimensions[0])).map(r => ({ path: r.dimensions[0], views: r.values[0] })),
+          channels: parseRows(channels, ["sessionDefaultChannelGroup"], ["sessions"], "channels").map(r => ({ channel: r.dimensions[0].slice(0, 100), sessions: r.values[0] })),
           thresholded: [summary, daily, events, pages, channels, realtime].some(r => r.metadata?.subjectToThresholding === true),
         };
         // Never combine a failed request with stale or invented zero-valued cards.

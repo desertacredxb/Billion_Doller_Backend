@@ -7,6 +7,7 @@ const { createController, reportingFailure } = require("../controllers/websiteAn
 const { createRouter } = require("../routes/websiteAnalyticsRoutes");
 const { createAccessControl } = require("../middleware/accessControl");
 const { checkOnStartup } = require("../services/websiteAnalyticsReadiness.service");
+const { reportingLog } = require("../services/websiteAnalyticsErrors");
 function fakeClient({ fail = false } = {}) {
   const calls = [];
   const result = async (request, options) => {
@@ -115,4 +116,20 @@ test("startup verification skips absent credentials and logs no report or creden
   const broken = { report: async () => { throw Object.assign(new Error("private-key-and-provider-body"), { code: 7, reason: "SERVICE_DISABLED" }); } };
   assert.deepEqual(await checkOnStartup({ env: { GA4_REPORTING_CREDENTIALS_JSON: "private-key" }, service: broken, logger }), { connected: false, code: "GA4_API_DISABLED" });
   assert.deepEqual(logs, ["[website-analytics] READY", "[website-analytics] GA4_API_DISABLED"]);
+});
+test("malformed reports identify only allowlisted report structure, never raw rows or unknown headers", async () => {
+  const client = fakeClient(), runReport = client.runReport;
+  client.runReport = async (request, options) => {
+    const response = await runReport(request, options);
+    if (!request.dimensions.length) response[0].metricHeaders[0].name = "private-person@example.invalid";
+    return response;
+  };
+  await assert.rejects(() => createService({ clientProvider: () => client }).report(7), error => {
+    const log = reportingLog(error, reportingFailure(error));
+    assert.match(log, /stage=summary problem=metric_headers metrics=other,sessions,screenPageViews/);
+    assert.equal(log.includes("private-person"), false);
+    return true;
+  });
+  const bad = { message: "Reporting response invalid", reportingDiagnostic: { stage: "private-key", problem: "metric_values", metrics: "private-email", rows: "present" } };
+  assert.equal(reportingLog(bad, reportingFailure(bad)).includes("private-"), false);
 });

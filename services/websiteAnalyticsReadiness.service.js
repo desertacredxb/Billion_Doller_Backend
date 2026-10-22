@@ -1,5 +1,5 @@
 const { createService } = require("./websiteAnalytics.service");
-const { reportingFailure } = require("./websiteAnalyticsErrors");
+const { reportingFailure, reportingLog } = require("./websiteAnalyticsErrors");
 
 // One read-only check per server start. Nothing is sent to a public route and
 // neither report values nor provider error details are written to logs.
@@ -14,8 +14,8 @@ async function checkOnStartup({ env = process.env, service = createService(), lo
     logger.info("[website-analytics] READY");
     return { connected: true };
   } catch (error) {
-    const { code } = reportingFailure(error);
-    logger.error(`[website-analytics] ${code}`);
+    const failure = reportingFailure(error), { code } = failure;
+    logger.error(reportingLog(error, failure));
     return { connected: false, code };
   }
 }
