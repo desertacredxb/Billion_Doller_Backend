@@ -133,3 +133,21 @@ test("malformed reports identify only allowlisted report structure, never raw ro
   const bad = { message: "Reporting response invalid", reportingDiagnostic: { stage: "private-key", problem: "metric_values", metrics: "private-email", rows: "present" } };
   assert.equal(reportingLog(bad, reportingFailure(bad)).includes("private-"), false);
 });
+test("Google's explicit zero-row realtime report keeps historical totals visible", async () => {
+  const client = fakeClient();
+  client.runRealtimeReport = async () => [{ metricHeaders: [], dimensionHeaders: [], rows: [], rowCount: 0 }];
+  const report = await createService({ clientProvider: () => client }).report(7);
+  assert.equal(report.connected, true);
+  assert.deepEqual(report.totals, { users: 17, sessions: 21, views: 32, leads: 3, signups: 0, activeUsers30Minutes: 0 });
+});
+test("an incomplete or inconsistent realtime report is never presented as zero activity", async () => {
+  for (const response of [
+    { metricHeaders: [], dimensionHeaders: [], rows: [] },
+    { metricHeaders: [], dimensionHeaders: [], rows: [], rowCount: 1 },
+    { dimensionHeaders: [], rows: [], rowCount: 0 },
+    { metricHeaders: [], dimensionHeaders: [], rows: [{ metricValues: [{ value: "9" }] }], rowCount: 0 },
+  ]) {
+    const client = fakeClient(); client.runRealtimeReport = async () => [response];
+    await assert.rejects(() => createService({ clientProvider: () => client }).report(7), /Reporting response invalid/);
+  }
+});

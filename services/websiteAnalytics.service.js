@@ -38,6 +38,9 @@ function invalidResponse(report, stage, problem) {
 }
 function parseRows(report, dimensions, metrics, stage) {
   if (!report) throw invalidResponse(report, stage, "missing_report");
+  // GA4 realtime can return an explicit zero-row response without headers when
+  // nobody is active. Only that complete empty shape is a valid zero report.
+  if (stage === "realtime" && report.rowCount === 0 && [report.rows, report.metricHeaders, report.dimensionHeaders].every(value => Array.isArray(value) && value.length === 0)) return [];
   if (metrics.some((name, i) => report.metricHeaders?.[i]?.name !== name)) throw invalidResponse(report, stage, "metric_headers");
   if (dimensions.some((name, i) => report.dimensionHeaders?.[i]?.name !== name)) throw invalidResponse(report, stage, "dimension_headers");
   return (report.rows || []).map(row => {
