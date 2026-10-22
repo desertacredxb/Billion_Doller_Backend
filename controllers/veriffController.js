@@ -4,29 +4,26 @@ const provider = require("../services/veriff.service");
 const ibApproval = require("../services/ibAutoApproval.service");
 const { isUae, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision } = require("../utils/veriffPolicy");
 
-const { reasonMessage, retryable } = require("../utils/veriffReasons");
+const { reasonMessage } = require("../utils/veriffReasons");
 const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash +kycManualReview";
 const ownerId = req => req.user?.id || req.user?.userId;
-// Retry provider verification failures, while retaining policy and review blocks.
+// Provider failure codes must not hide client correction/reverification actions.
+// A new attempt still needs its own signed approval; explicit BDFX holds remain.
 const manuallyRejected = user => user.kycManualReview?.sessionId === user.veriff?.sessionId && user.kycManualReview?.approved === false;
-const canRetry = user => !manuallyRejected(user) && user.veriff?.status === "declined"
-  && user.veriff.message === "Your identity could not be verified. Please contact support."
-  && retryable.has(user.veriff.reasonCode)
-  && !isUae(user.nationality) && !isUae(user.residenceCountry);
+const canCorrectIdentity = user => !!user.isVerified && !user.isKycVerified
+  && !isUae(user.nationality) && !isUae(user.residenceCountry)
+  && !(user.kycManualReview?.sessionId && user.kycManualReview.sessionId === user.veriff?.sessionId);
+const canRetry = user => canCorrectIdentity(user) && (
+  user.veriff?.status === "declined" && (!user.veriff.message || user.veriff.message === "Your identity could not be verified. Please contact support.") ||
+  user.veriff?.status === "review" && (!user.veriff.message || user.veriff.message === "Your verification needs further review. Please contact support.")
+);
 // Owner-confirmed client flow: edit name, save, then resubmit. Address stays read-only.
 const editableFields = { fullName: 150 };
 const canEditDetails = user => {
-  if (!user.isVerified || user.isKycVerified || isUae(user.nationality) || isUae(user.residenceCountry) ||
-      user.kycManualReview?.sessionId && user.kycManualReview.sessionId === user.veriff?.sessionId) return false;
+  if (!canCorrectIdentity(user)) return false;
   const current = user.veriff || {};
   if (!current.status || ["not_started", "expired", "abandoned", "error"].includes(current.status) || canRetry(user)) return true;
-  // Ordinary provider review/resubmission must not make the correction button disappear.
-  // Country, duplicate-mobile, security and owner-review holds still go through support.
-  const correctableReason = !current.reasonCode || retryable.has(current.reasonCode);
-  return correctableReason && (
-    current.status === "review" && (!current.message || current.message === "Your verification needs further review. Please contact support.") ||
-    current.status === "resubmission_requested" && (!current.message || current.message === "Please continue verification and resubmit the requested information.")
-  );
+  return current.status === "resubmission_requested" && (!current.message || current.message === "Please continue verification and resubmit the requested information.");
 };
 const publicStatus = (user, enabled) => ({
   enabled,

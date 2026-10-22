@@ -11,7 +11,7 @@ const retryable = new Set(groups.flatMap(([codes]) => codes));
 function reasonCode(value) { const n = typeof value === "string" && /^\d{3}$/.test(value) ? Number(value) : value; return Number.isSafeInteger(n) && n >= 100 && n <= 999 ? n : null; }
 function reasonMessage(value) {
   const code = reasonCode(value);
-  if (code === 501) return "Veriff flagged this attempt for security review. Contact BDFX on WhatsApp to review the unsuccessful result.";
-  return groups.find(([codes]) => codes.includes(code))?.[1] || (code ? "Additional identity checks were not passed. Contact BDFX on WhatsApp for a review of this result." : "The provider has not supplied a detailed reason. Contact BDFX on WhatsApp for assistance.");
+  if (code === 501) return "Veriff flagged this attempt for security review. If correction or resubmission is available below, use your own original physical ID and matching details for a fresh check. Contact BDFX on WhatsApp if you need help.";
+  return groups.find(([codes]) => codes.includes(code))?.[1] || (code ? "Additional identity checks were not passed. Use the correction or resubmission options below when available, or contact BDFX on WhatsApp for help." : "The provider has not supplied a detailed reason. Use the correction or resubmission options below when available, or contact BDFX on WhatsApp for help.");
 }
 module.exports = { reasonCode, reasonMessage, retryable };
