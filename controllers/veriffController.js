@@ -13,13 +13,26 @@ const canRetry = user => !manuallyRejected(user) && user.veriff?.status === "dec
   && user.veriff.message === "Your identity could not be verified. Please contact support."
   && retryable.has(user.veriff.reasonCode)
   && !isUae(user.nationality) && !isUae(user.residenceCountry);
-const editableFields = { fullName: 150, address: 300, state: 100, city: 100, postalCode: 30 };
-const canEditDetails = user => !manuallyRejected(user) && user.isVerified && !user.isKycVerified &&
-  (!user.veriff?.status || ["not_started", "expired", "abandoned", "error"].includes(user.veriff.status) || canRetry(user));
+// Owner-confirmed client flow: edit name, save, then resubmit. Address stays read-only.
+const editableFields = { fullName: 150 };
+const canEditDetails = user => {
+  if (!user.isVerified || user.isKycVerified || isUae(user.nationality) || isUae(user.residenceCountry) ||
+      user.kycManualReview?.sessionId && user.kycManualReview.sessionId === user.veriff?.sessionId) return false;
+  const current = user.veriff || {};
+  if (!current.status || ["not_started", "expired", "abandoned", "error"].includes(current.status) || canRetry(user)) return true;
+  // Ordinary provider review/resubmission must not make the correction button disappear.
+  // Country, duplicate-mobile, security and owner-review holds still go through support.
+  const correctableReason = !current.reasonCode || retryable.has(current.reasonCode);
+  return correctableReason && (
+    current.status === "review" && (!current.message || current.message === "Your verification needs further review. Please contact support.") ||
+    current.status === "resubmission_requested" && (!current.message || current.message === "Please continue verification and resubmit the requested information.")
+  );
+};
 const publicStatus = (user, enabled) => ({
   enabled,
   canRetry: canRetry(user),
   canEditDetails: !!canEditDetails(user),
+  resubmissionRequired: !!user.veriff?.resubmissionRequired,
   details: Object.fromEntries(Object.keys(editableFields).map(key => [key, user[key] || ""])),
   managedByVeriff: user.kycProvider === "veriff",
   ibApproved: !!user.isApprovedIB,
@@ -131,11 +144,17 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       const body = req.body;
       if (!body || typeof body !== "object" || Array.isArray(body) || !Object.keys(body).length ||
           Object.keys(body).some(key => !Object.hasOwn(editableFields, key) || typeof body[key] !== "string" || body[key].trim().length > editableFields[key] || /[\x00-\x1f\x7f]/.test(body[key])) ||
-          (Object.hasOwn(body, "fullName") && !body.fullName.trim())) return res.status(400).json({ message: "Enter valid name and address details exactly as shown on your ID." });
+          (Object.hasOwn(body, "fullName") && !body.fullName.trim())) return res.status(400).json({ message: "Enter your full name exactly as shown on your ID. Other details must be changed through support." });
       const updated = await users.findOneAndUpdate({ _id: user._id, isKycVerified: false,
         "veriff.reference": user.veriff?.reference || null,
         "veriff.revision": user.veriff?.revision == null ? { $exists: false } : user.veriff.revision,
-      }, { $set: Object.fromEntries(Object.entries(body).map(([key, value]) => [key, value.trim()])) }, { new: true, runValidators: true });
+      }, { $set: {
+        fullName: body.fullName.trim(),
+        // Retire the old correlation atomically: its delayed approval cannot verify changed details.
+        veriff: { status: "not_started", revision: (user.veriff?.revision || 0) + 1,
+          resubmissionRequired: true, message: "Your name has been saved. Resubmit your identity verification." },
+        hasSubmittedDocuments: false,
+      } }, { new: true, runValidators: true });
       if (!updated) return res.status(409).json({ message: "Verification changed. Refresh before editing details." });
       return res.json(publicStatus(updated, veriff.isEnabled()));
     } catch { return res.status(503).json({ message: "Unable to save details. Please try again." }); }

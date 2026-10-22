@@ -419,18 +419,78 @@ test("policy rejection and review cannot be bypassed by requesting another sessi
   }
 });
 
-test("clients can correct their own name/address before retry without changing verification or identity controls", async () => {
+test("clients can correct only their own name and resubmit through a fresh verification", async () => {
   const user = account(); user.veriff.status = "declined"; user.veriff.message = "Your identity could not be verified. Please contact support."; user.veriff.reasonCode = 101;
   const { controller, state } = controllerFor(user);
-  const res = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: " Correct Name ", city: "Delhi" } }, res);
+  const res = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: " Correct Name " } }, res);
   assert.equal(res.code, 200); assert.equal(state.user.fullName, "Correct Name"); assert.equal(res.data.details.fullName, "Correct Name");
-  assert.equal(state.user.isKycVerified, false); assert.equal(state.user.veriff.status, "declined"); assert.equal(res.data.canRetry, true);
-  for (const body of [{ isKycVerified: true }, { nationality: "India" }, { residenceCountry: "India" }, { phone: "+919876543210" }, { userId: "other", fullName: "Other" }, { fullName: " " }, { fullName: { $ne: null } }]) {
+  assert.equal(state.user.isKycVerified, false); assert.equal(state.user.veriff.status, "not_started");
+  assert.equal(res.data.resubmissionRequired, true); assert.equal(state.user.veriff.reference, undefined);
+  assert.equal(state.user.veriff.sessionId, undefined); assert.equal(state.user.hasSubmittedDocuments, false);
+  for (const body of [{ address: "Changed" }, { fullName: "Other", city: "Delhi" }, { state: "New" }, { postalCode: "12345" }, { isKycVerified: true }, { nationality: "India" }, { residenceCountry: "India" }, { phone: "+919876543210" }, { email: "other@example.test" }, { userId: "other", fullName: "Other" }, { fullName: " " }, { fullName: { $ne: null } }]) {
     const bad = response(); await controller.updateDetails({ user: { id: "user-1" }, body }, bad); assert.equal(bad.code, 400);
   }
 });
-test("identity corrections are blocked for active, approved, policy-rejected and review accounts, including races", async () => {
-  for (const status of ["created", "creating", "resubmission_requested", "approved", "review", "declined", "test_approved"]) {
+test("review and resubmission keep the client name-correction button and reject old-session approvals after saving", async () => {
+  for (const status of ["review", "resubmission_requested"]) {
+    const user = account(); user.fullName = "Old Name"; user.veriff.status = status;
+    user.veriff.sessionUrl = "https://magic.veriff.me/old-session";
+    const oldRevision = user.veriff.revision;
+    let newReference;
+    const { controller, state } = controllerFor(user, { createSession: async ref => {
+      newReference = ref; return { id: "b8888888-8888-4888-8888-888888888888", url: "https://magic.veriff.me/new-session" };
+    } });
+    const before = response(); await controller.getStatus({ user: { id: "user-1" } }, before);
+    assert.equal(before.data.canEditDetails, true, `${status} must keep the name correction action`);
+    assert.deepEqual(before.data.details, { fullName: "Old Name" });
+    const saved = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Correct Name" } }, saved);
+    assert.equal(saved.code, 200); assert.equal(saved.data.resubmissionRequired, true);
+    assert.ok(state.user.veriff.revision > oldRevision);
+    const oldApproval = response(); await controller.decisionWebhook(signedRequest(), oldApproval);
+    assert.equal(oldApproval.data.ignored, true); assert.equal(state.user.isKycVerified, false);
+    const started = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, started);
+    assert.equal(started.code, 201); assert.notEqual(newReference, reference);
+    assert.equal(started.data.url, "https://magic.veriff.me/new-session"); assert.equal(state.user.isKycVerified, false);
+    await controller.decisionWebhook(signedRequest(fixture({ id: state.user.veriff.sessionId, vendorData: newReference })), response());
+    assert.equal(state.user.isKycVerified, true);
+  }
+});
+test("name correction does not reopen security, duplicate-mobile, owner-review or UAE holds", async () => {
+  for (const scenario of [
+    { reasonCode: 501 }, { reasonCode: 999 },
+    { message: "This mobile number is already registered. Please contact support." },
+    { manual: true }, { nationality: "UAE" }, { residenceCountry: "United Arab Emirates" },
+  ]) {
+    const user = account(); Object.assign(user.veriff, { status: "review", message: "Your verification needs further review. Please contact support." });
+    if (scenario.reasonCode) user.veriff.reasonCode = scenario.reasonCode;
+    if (scenario.message) user.veriff.message = scenario.message;
+    if (scenario.manual) user.kycManualReview = { sessionId, approved: false };
+    if (scenario.nationality) user.nationality = scenario.nationality;
+    if (scenario.residenceCountry) user.residenceCountry = scenario.residenceCountry;
+    const { controller, state } = controllerFor(user);
+    const before = response(); await controller.getStatus({ user: { id: "user-1" } }, before);
+    assert.equal(before.data.canEditDetails, false);
+    const saved = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Changed" } }, saved);
+    assert.equal(saved.code, 409); assert.equal(state.writes, 0);
+  }
+});
+test("an approval fetched before a concurrent name correction cannot approve the corrected name", async () => {
+  const user = account(); user.veriff.status = "review";
+  let setup;
+  setup = controllerFor(user, { getDecision: async () => {
+    const saved = response();
+    await setup.controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Corrected Name" } }, saved);
+    assert.equal(saved.code, 200);
+    return normalizeDecision(fixture(), "decision");
+  } });
+  await setup.controller.getStatus({ user: { id: "user-1" } }, response());
+  assert.equal(setup.state.user.fullName, "Corrected Name");
+  assert.equal(setup.state.user.isKycVerified, false); assert.equal(setup.state.user.veriff.reference, undefined);
+  const refreshed = response(); await setup.controller.getStatus({ user: { id: "user-1" } }, refreshed);
+  assert.equal(refreshed.data.status, "not_started"); assert.equal(refreshed.data.resubmissionRequired, true);
+});
+test("identity corrections are blocked for active, approved and policy-rejected accounts, including races", async () => {
+  for (const status of ["created", "creating", "approved", "declined", "test_approved"]) {
     const user = account(); user.veriff.status = status; user.isKycVerified = status === "approved";
     const { controller, state } = controllerFor(user); const res = response();
     await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Changed" } }, res);
