@@ -17,6 +17,7 @@ const {
     RAMEEPAY_MIN_INR,
     RAMEEPAY_MAX_INR,
 } = require("../config/withdrawalLimits");
+const { fetchVndPerUsd, minimumVnd, toUsd } = require("../services/floxyDeposit.service");
 
 // "/order/generate" is the DEPOSIT (payin) endpoint - payouts must go to the
 // dedicated Withdrawal Account API instead (see RameePay Integration Docs,
@@ -205,6 +206,38 @@ exports.createPayoutRequest = async (req, res) => {
             });
         }
 
+        // VND (Floxy bank payout): the client enters whole VND; the rate is
+        // locked now and its USD equivalent is what MT5 is debited. Everything
+        // here runs before the MT5 debit.
+        let vndQuote = null;
+        if (currency === "VND") {
+            const refuse = async (status, message) => {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(status).json({ success: false, message });
+            };
+            const bank = {
+                name: String(req.body.vndHolderName || "").trim(),
+                account: String(req.body.vndAccountNumber || "").trim(),
+                bankName: String(req.body.vndBankName || "").trim(),
+                routingCode: String(req.body.vndRoutingCode || "").trim(),
+            };
+            if (!Number.isSafeInteger(numericAmount)) return refuse(400, "Enter a whole VND amount.");
+            if (!bank.name || !bank.account || !bank.bankName) {
+                return refuse(400, "Account holder name, account number and bank name are required for VND withdrawals.");
+            }
+            if (bank.name.length > 100 || bank.bankName.length > 100 || bank.routingCode.length > 20 || !/^[A-Za-z0-9 -]{4,40}$/.test(bank.account)) {
+                return refuse(400, "Check the bank details: the account number may only contain letters, digits, spaces and dashes.");
+            }
+            let vndPerUsd;
+            try { vndPerUsd = await fetchVndPerUsd(); } catch {
+                return refuse(503, "The VND exchange rate is unavailable. Please try again shortly.");
+            }
+            const minVnd = minimumVnd(vndPerUsd);
+            if (numericAmount < minVnd) return refuse(400, `Minimum withdrawal amount is VND ${minVnd.toLocaleString("en-US")}.`);
+            vndQuote = { vndPerUsd, usd: toUsd(numericAmount, vndPerUsd), bank };
+        }
+
         // 2️⃣ Dynamic Currency Method Validation
         if (currency === "CRYPTO") {
             if (!walletAddress) {
@@ -324,6 +357,8 @@ exports.createPayoutRequest = async (req, res) => {
         let amountUSD;
         if (currency === "INR") {
             amountUSD = Number((numericAmount * usdRate).toFixed(2));
+        } else if (currency === "VND") {
+            amountUSD = vndQuote.usd;
         } else {
             amountUSD = Number(numericAmount.toFixed(2));
         }
@@ -353,12 +388,15 @@ exports.createPayoutRequest = async (req, res) => {
             amountUSD,
             note,
             status: "Pending",
-            account: account || "",
+            account: currency === "VND" ? vndQuote.bank.account : account || "",
             ifsc: ifsc || "",
             upiId: upiId || "",
-            name: resolvedName,
+            name: currency === "VND" ? vndQuote.bank.name : resolvedName,
             mobile: resolvedMobile,
-            bankName: bankName || "",
+            bankName: currency === "VND" ? vndQuote.bank.bankName : bankName || "",
+            ...(currency === "VND" ? { floxy: {
+                vndPerUsd: vndQuote.vndPerUsd, rateSource: "open.er-api.com", routingCode: vndQuote.bank.routingCode,
+            } } : {}),
             swiftCode: swiftCode || "",
             cryptoSymbol: cryptoSymbol || "USDT",
             walletAddress: walletAddress || "",
@@ -386,6 +424,13 @@ exports.createPayoutRequest = async (req, res) => {
         ${account ? `<li><strong>Bank Account:</strong> ${account}</li>` : ""}
         ${ifsc ? `<li><strong>IFSC Code:</strong> ${ifsc}</li>` : ""}
       `;
+        } else if (currency === "VND") {
+            paymentDetailsHTML = `
+        <li><strong>Account Holder:</strong> ${vndQuote.bank.name}</li>
+        <li><strong>Bank:</strong> ${vndQuote.bank.bankName}${vndQuote.bank.routingCode ? ` (${vndQuote.bank.routingCode})` : ""}</li>
+        <li><strong>Account Number:</strong> ${vndQuote.bank.account}</li>
+        <li><strong>Rate locked:</strong> 1 USD = VND ${Math.round(vndQuote.vndPerUsd).toLocaleString("en-US")}</li>
+      `;
         } else if (currency === "USD") {
             paymentDetailsHTML = `
         <li><strong>Bank Name:</strong> ${bankName}</li>
@@ -406,7 +451,7 @@ exports.createPayoutRequest = async (req, res) => {
           <ul>
             <li><strong>Order ID:</strong> ${orderid}</li>
             <li><strong>Source MT5 Account:</strong> ${accountNo}</li>
-            <li><strong>Requested Amount:</strong> $${numericAmount} (≈ $${amountUSD})</li>
+            <li><strong>Requested Amount:</strong> ${currency === "VND" ? `VND ${numericAmount.toLocaleString("en-US")}` : `$${numericAmount}`} (≈ $${amountUSD})</li>
             <li><strong>Payment Method:</strong> ${currency}</li>
             <li><strong>Note:</strong> ${note || "N/A"}</li>
           </ul>
@@ -473,8 +518,40 @@ exports.approvePayoutReq = async (req, res) => {
         // Standardize string comparison to lowercase
         const executionType = (
             processType ||
-            (withdrawal.isManual ? "manual" : currency === "CRYPTO" ? "cregis" : "rameepay")
+            (withdrawal.isManual ? "manual" : currency === "CRYPTO" ? "cregis" : currency === "VND" ? "floxy" : "rameepay")
         ).toLowerCase();
+
+        // VND requests are paid by Floxy (or transferred manually); the other
+        // gateways cannot pay a Vietnamese bank account, and Floxy only pays VND.
+        if ((currency === "VND") !== (executionType === "floxy") && executionType !== "manual") {
+            return res.status(400).json({
+                success: false,
+                message: currency === "VND"
+                    ? "VND withdrawals can only be processed with Floxy or as a manual transfer."
+                    : "Floxy only processes VND withdrawals.",
+            });
+        }
+
+        if (currency === "VND" && executionType === "manual" && withdrawal.floxy?.pendingKey) {
+            return res.status(409).json({
+                success: false,
+                message: "The last Floxy payout attempt was not confirmed. Approve with Floxy again (the same request is reused) before transferring manually.",
+            });
+        }
+
+        // =========================================================================
+        // FLOXY GATEWAY (VND bank payout) - paid only if the Floxy payout wallet
+        // holds enough VND; otherwise the request stays Pending.
+        // =========================================================================
+        if (executionType === "floxy") {
+            const result = await require("../services/floxyPayout.service").service().approve(withdrawal);
+            return res.status(result.ok ? 200 : result.status).json({
+                success: result.ok,
+                code: result.code,
+                message: result.message,
+                data: result.data,
+            });
+        }
 
         // =========================================================================
         // OPTION 1: MANUAL TRANSFER
@@ -858,6 +935,8 @@ exports.sendSuccessEmail = async (withdrawal) => {
         const formattedAmount =
             withdrawal.currency === "CRYPTO"
                 ? `${withdrawal.amount} ${withdrawal.cryptoSymbol || "USDT"}`
+                : withdrawal.currency === "VND"
+                ? `VND ${Number(withdrawal.amount).toLocaleString("en-US")}`
                 : withdrawal.currency === "INR"
                     ? `₹${withdrawal.amount}`
                     : `$${withdrawal.amount}`;
@@ -897,6 +976,15 @@ exports.rejectPayoutRequest = async (req, res) => {
             return res
                 .status(400)
                 .json({ success: false, message: `Withdrawal is already ${withdrawal.status}. Cannot reject.` });
+        }
+
+        // A Floxy payout attempt with an unconfirmed result may still pay out:
+        // refunding now could pay the client twice.
+        if (withdrawal.currency === "VND" && withdrawal.floxy?.pendingKey) {
+            return res.status(409).json({
+                success: false,
+                message: "The last Floxy payout attempt was not confirmed. Approve again (the same request is reused) or check it in the Floxy panel before rejecting.",
+            });
         }
 
         // Refund the amount that was actually deducted from MT5 when the request
@@ -945,7 +1033,7 @@ exports.rejectPayoutRequest = async (req, res) => {
           <p>Dear ${user.fullName || "Customer"},</p>
           <p>Your withdrawal request (Order ID: <b>${withdrawal.orderid
                     }</b>) has been <b>rejected</b> by the admin.</p>
-          <p>Amount Requested: ₹${withdrawal.amount}</p>
+          <p>Amount Requested: ${withdrawal.currency === "VND" ? `VND ${Number(withdrawal.amount).toLocaleString("en-US")}` : `₹${withdrawal.amount}`}</p>
           <p>The amount has been refunded to your account.</p>
           <br/>
           <p>Best Regards,<br/>Support Team</p>
