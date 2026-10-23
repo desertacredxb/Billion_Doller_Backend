@@ -11,11 +11,14 @@ const SIGNATURE_TOLERANCE_SECONDS = 300;
 const ID_PATTERN = /^[A-Za-z0-9_]{1,100}$/;
 
 class FloxyError extends Error {
-  constructor(message, { status, code } = {}) {
+  constructor(message, { status, code, detail } = {}) {
     super(message);
     this.name = "FloxyError";
     this.status = status;
     this.code = code;
+    // Floxy's human-readable explanation (e.g. which field is missing). For
+    // display and logs only - logic branches on `code`.
+    this.detail = detail;
   }
 }
 
@@ -76,7 +79,9 @@ function createClient({ env = process.env, http = axios } = {}) {
       let errorBody = error.response?.data;
       try { errorBody = unseal(errorBody, env); } catch { errorBody = undefined; }
       const code = errorBody?.error?.code;
-      throw new FloxyError(`Floxy ${method.toUpperCase()} ${path} failed${code ? `: ${code}` : status ? ` (HTTP ${status})` : ""}`, { status, code });
+      const param = errorBody?.error?.param;
+      const detail = [errorBody?.error?.message, param && `(param: ${param})`].filter(Boolean).join(" ").slice(0, 300) || undefined;
+      throw new FloxyError(`Floxy ${method.toUpperCase()} ${path} failed${code ? `: ${code}` : status ? ` (HTTP ${status})` : ""}`, { status, code, detail });
     }
     return unseal(response.data, env);
   }

@@ -167,11 +167,14 @@ function createFloxyPayout({ client, withdrawals, contactFor = async () => null,
       }
       const definitive = error.status >= 400 && error.status < 500 && ![408, 409, 429].includes(error.status);
       if (definitive) {
+        const reason = `${error.code || `HTTP ${error.status}`}${error.detail ? `: ${error.detail}` : ""}`;
+        logger.error(`Floxy refused payout for ${withdrawal.orderid}: ${reason}`);
         await withdrawals.updateOne({ _id: withdrawal._id }, { $set: {
           status: "Failed", "floxy.pendingKey": "", "floxy.failureCode": String(error.code || ""),
-          "floxy.lastMessage": `Floxy refused the payout${error.code ? `: ${error.code}` : ""}.`, response: { error: error.code || error.status },
+          "floxy.lastMessage": `Floxy refused the payout (${reason}).`,
+          response: { error: error.code || error.status, detail: error.detail || "" },
         } });
-        return { ok: false, status: 400, message: `Floxy refused the payout${error.code ? ` (${error.code})` : ""}. Funds stay held: fix and retry, or reject & refund.` };
+        return { ok: false, status: 400, message: `Floxy refused the payout (${reason}). Funds stay held: fix and retry, or reject & refund.` };
       }
       // Timeout, network error, 5xx: Floxy may or may not have created it.
       await withdrawals.updateOne({ _id: withdrawal._id }, { $set: { "floxy.lastMessage": "Floxy's answer could not be confirmed. Approve again: the same request is reused, never paid twice." } });
