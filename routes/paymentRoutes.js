@@ -14,7 +14,7 @@ const { handleTrustpay24Deposit, handleTrustpay24Callback } = require("../contro
 const { handleTruepay9Callback } = require("../controllers/payments/truepay9.controller");
 const { handleCregisCallback } = require("../controllers/payments/cregis.controller");
 const { handleManualPaymentRequest } = require("../controllers/payments/manualPayment.controller");
-const { getFloxyQuote, createFloxyDeposit } = require("../controllers/payments/floxy.controller");
+const { getFloxyQuote, createFloxyDeposit, getFloxyPayoutBalance, refreshFloxyPayout } = require("../controllers/payments/floxy.controller");
 
 const { createCregisCheckout } = require("../controllers/paymentOrder.controller");
 const { createPayoutRequest, approvePayoutReq, rejectPayoutRequest } = require("../controllers/payout.controller");
@@ -66,6 +66,8 @@ router.post("/request", access.accountOwner(), withdrawalLimiter, createPayoutRe
 router.post("/request_v2", access.accountOwner(), withdrawalLimiter, checkMargin, handleManualPaymentRequest);
 router.post("/approve/:id", access.admin, approvePayoutReq);
 router.post("/reject/:id", access.admin, rejectPayoutRequest);
+router.get("/floxy/payout-balance", access.admin, getFloxyPayoutBalance);
+router.post("/floxy/payouts/:id/refresh", access.admin, refreshFloxyPayout);
 
 // ---------------------------------------------------------------------------
 // Listing / query routes

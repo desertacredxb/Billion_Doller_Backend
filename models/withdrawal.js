@@ -9,7 +9,7 @@ const withdrawalSchema = new mongoose.Schema(
     // 🔹 Core Currency Selection
     currency: {
       type: String,
-      enum: ["INR", "USD", "CRYPTO"],
+      enum: ["INR", "USD", "CRYPTO", "VND"],
       required: true,
     },
 
@@ -57,6 +57,27 @@ const withdrawalSchema = new mongoose.Schema(
     transactionReference: { type: String, default: "" },
     // Cregis's own payout id (cid), stored for support/reconciliation lookups.
     cregisCid: { type: String, default: "" },
+
+    // Floxy VND bank payout bookkeeping. `amount` holds the VND paid out and
+    // `amountUSD` the USD debited from MT5 at the rate locked at request time;
+    // the bank details live in the shared name/account/bankName fields.
+    floxy: {
+      vndPerUsd: { type: Number },
+      rateSource: { type: String },
+      routingCode: { type: String, default: "" },
+      // Each approval attempt gets its own Idempotency-Key. pendingKey is set
+      // while an attempt's outcome is unknown, so approving again reuses it and
+      // Floxy returns the original payout instead of paying twice.
+      attempts: { type: Number, default: 0 },
+      pendingKey: { type: String, default: "" },
+      payoutId: { type: String, default: "" },
+      status: { type: String, default: "" },
+      needsReview: { type: Boolean, default: false },
+      fee: { type: Number },
+      failureCode: { type: String, default: "" },
+      networkDeclineCode: { type: String, default: "" },
+      lastMessage: { type: String, default: "" },
+    },
 
     gatewayOrderId: { type: String, default: null }, // Stores Cregis tx_id
     response: { type: Object, default: {} },          // Stores API/Webhook responses

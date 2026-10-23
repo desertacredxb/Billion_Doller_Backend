@@ -52,20 +52,56 @@ exports.createFloxyDeposit = async (req, res) => {
   }
 };
 
-// Placeholder for the Floxy "Payout Callback" URL. Withdrawals via Floxy are
-// not built yet, so no payouts exist to report on: verify and acknowledge only.
+const payoutService = () => require("../../services/floxyPayout.service").service();
+
+// Floxy "Payout Callback" URL (payout.paid / payout.failed). The guide does not
+// say whether payout callbacks use a separate secret, so a dedicated
+// FLOXY_PAYOUT_WEBHOOK_SECRET is accepted alongside the webhook secret.
 // Mounted with express.raw(): the signature covers the original bytes.
 exports.handleFloxyPayoutCallback = async (req, res) => {
   if (!isConfigured()) return res.status(503).json(UNAVAILABLE);
-  if (!verifySignature(req.body, req.get("floxy-signature"), process.env.FLOXY_WEBHOOK_SECRET)) {
+  const secrets = [process.env.FLOXY_PAYOUT_WEBHOOK_SECRET, process.env.FLOXY_WEBHOOK_SECRET].filter(Boolean);
+  if (!secrets.some(secret => verifySignature(req.body, req.get("floxy-signature"), secret))) {
     return res.status(401).json({ success: false, message: "Invalid signature" });
   }
   let event;
   try { event = unseal(JSON.parse(req.body.toString("utf8"))); } catch {
     return res.status(400).json({ success: false, message: "Invalid payload" });
   }
-  console.log(`Floxy payout callback received (not processed yet): ${event?.type || "unknown"} ${event?.id || ""}`);
-  return res.status(200).json({ received: true, handled: false });
+  try {
+    const outcome = await payoutService().handleEvent(event);
+    return res.status(200).json({ received: true, ...outcome });
+  } catch (error) {
+    // Floxy lookup or storage failed: let Floxy retry.
+    console.error(`Floxy payout callback ${event?.id || ""} failed:`, error.message);
+    return res.status(500).json({ received: false });
+  }
+};
+
+// Admin: the Floxy VND balance figures, shown before approving a VND payout.
+exports.getFloxyPayoutBalance = async (_req, res) => {
+  if (!isConfigured()) return res.status(503).json(UNAVAILABLE);
+  try {
+    const balance = await payoutService().payoutBalance();
+    return res.json({ success: true, currency: "VND", ...balance });
+  } catch (error) {
+    console.error("Floxy balance lookup failed:", error.message);
+    return res.status(502).json({ success: false, message: "Couldn't read the Floxy balance right now." });
+  }
+};
+
+// Admin: re-read a VND withdrawal's payout from Floxy (missed webhook, stuck processing).
+exports.refreshFloxyPayout = async (req, res) => {
+  if (!isConfigured()) return res.status(503).json(UNAVAILABLE);
+  try {
+    const withdrawal = await require("../../models/withdrawal").findById(req.params.id);
+    if (!withdrawal || withdrawal.currency !== "VND") return res.status(404).json({ success: false, message: "VND withdrawal not found." });
+    const result = await payoutService().refresh(withdrawal);
+    return res.status(result.ok ? 200 : result.status).json({ success: result.ok, message: result.message, data: result.data });
+  } catch (error) {
+    console.error("Floxy payout refresh failed:", error.message);
+    return res.status(502).json({ success: false, message: "Couldn't reach Floxy right now. Try again shortly." });
+  }
 };
 
 // Mounted with express.raw(): the signature covers the original bytes.
@@ -86,7 +122,10 @@ exports.handleFloxyCallback = async (req, res) => {
   }
 
   try {
-    const outcome = await service().handleEvent(event);
+    // Payout events registered on this endpoint are handled like the payout callback.
+    const outcome = String(event?.type || "").startsWith("payout.")
+      ? await payoutService().handleEvent(event)
+      : await service().handleEvent(event);
     return res.status(200).json({ received: true, ...outcome });
   } catch (error) {
     // Another worker holds the claim, or a credit is locked for manual review:
