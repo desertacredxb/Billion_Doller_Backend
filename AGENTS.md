@@ -6,9 +6,9 @@ Read `docs/approved-behavior.md` before changing an existing feature. That basel
 
 ## Client identity corrections (owner confirmed 22 October 2026)
 
-- Keep client **Edit name & resubmit → Save details → Resubmit verification** available for ordinary, unapproved review, provider resubmission and retryable failures.
+- Keep client **Edit name & resubmit → Save details → Resubmit verification** available for provider review, resubmission and failed attempts, including reason `501` and unknown reasons. Also allow fresh re-verification without changing the name.
 - Only full name is editable here. The owner removed the address option; do not reintroduce it. Address, email, mobile, nationality and residence changes go through support.
 - Saving a correction retires the old session correlation. A fresh signed Veriff check must approve the changed details; stale approvals cannot verify them.
-- Keep explicit owner reviews, security holds, UAE restrictions and duplicate-mobile checks. Approved clients must not silently lose verification.
+- Provider reason codes alone must not hide correction/resubmission. Keep explicit BDFX owner/security holds, UAE restrictions and duplicate-mobile checks. Approved clients must not silently lose verification.
 - Run `node --test test/veriff.test.js` and the full existing backend suite before publishing changes to this flow.
 - Preserve the confirmed policy accepting all document classes approved by the current live Veriff integration, with the existing signature/session/account checks.

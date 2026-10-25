@@ -45,15 +45,29 @@ test("streaming document storage preserves Multer metadata and fixed Cloudinary 
     assert.equal(cloud.removals.length, 0);
   });
 });
-test("Multer file limits remove an uploaded partial document and return the size-limit error", async () => {
+test("Multer file limits remove a stored partial document and return the size-limit error", async () => {
   const cloud = provider();
-  await withServer(createCloudinaryStorage(cloud, { maxBytes: 8 }), 8, async url => {
+  // Keep the storage cap higher here to exercise Multer's cleanup of an object
+  // that was stored before its size-limit rejection. Storage aborts are separate.
+  await withServer(createCloudinaryStorage(cloud, { maxBytes: 100 }), 8, async url => {
     const response = await fetch(url, { method: "POST", body: form("too-long-image") });
     assert.equal(response.status, 400); assert.equal((await response.json()).code, "LIMIT_FILE_SIZE");
     assert.ok(cloud.removals.length >= 1);
     assert.ok(cloud.removals.every(value => value.id.startsWith("Billio-dollar-FX/")));
-    assert.ok(Buffer.concat(cloud.uploads[0].chunks).length <= 8);
+    assert.ok(Buffer.concat(cloud.uploads[0].chunks).length < Buffer.byteLength("too-long-image"));
   });
+});
+test("the storage byte cap aborts an oversized stream before a cloud object is completed", async () => {
+  const cloud = provider(); let destination;
+  const upload = cloud.uploader.upload_stream;
+  cloud.uploader.upload_stream = (...args) => (destination = upload(...args));
+  const file = { stream: Readable.from([Buffer.from("too-long-image")]) };
+  await new Promise(resolve => createCloudinaryStorage(cloud, { maxBytes: 8 })._handleFile({}, file, error => {
+    assert.equal(error.code, "LIMIT_FILE_SIZE"); resolve();
+  }));
+  assert.equal(destination.destroyed, true);
+  assert.equal(cloud.uploads.length, 1);
+  assert.ok(Buffer.concat(cloud.uploads[0].chunks).length <= 8);
 });
 test("provider errors never expose upload details through the HTTP response", async () => {
   await withServer(createCloudinaryStorage(provider({ fail: true })), 100, async url => {
