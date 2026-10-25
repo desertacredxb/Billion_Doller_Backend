@@ -11,11 +11,14 @@ const SIGNATURE_TOLERANCE_SECONDS = 300;
 const ID_PATTERN = /^[A-Za-z0-9_]{1,100}$/;
 
 class FloxyError extends Error {
-  constructor(message, { status, code } = {}) {
+  constructor(message, { status, code, detail } = {}) {
     super(message);
     this.name = "FloxyError";
     this.status = status;
     this.code = code;
+    // Floxy's human-readable explanation (e.g. which field is missing). For
+    // display and logs only - logic branches on `code`.
+    this.detail = detail;
   }
 }
 
@@ -30,7 +33,7 @@ function sealKeys(env) {
   const key = Buffer.from(env.FLOXY_SECRET_KEY.trim(), "hex");
   const iv = Buffer.from(env.FLOXY_SECRET_IV.trim(), "hex");
   if (key.length !== 32 || iv.length !== 16) {
-    throw new FloxyError(`FLOXY_SECRET_KEY must be 64 hex chars and FLOXY_SECRET_IV 32 hex chars (got ${key.length} and ${iv.length} bytes)`);
+    throw new FloxyError(`FLOXY_SECRET_KEY must be 64 hex chars and FLOXY_SECRET_IV 32 hex chars (got ${key.length} and ${iv.length} bytes)`, { code: "floxy_config" });
   }
   return { key, iv };
 }
@@ -54,7 +57,7 @@ function unseal(body, env = process.env) {
 
 function seal(value, env = process.env) {
   const keys = sealKeys(env);
-  if (!keys) throw new FloxyError("FLOXY_SECRET_KEY / FLOXY_SECRET_IV are not set");
+  if (!keys) throw new FloxyError("FLOXY_SECRET_KEY / FLOXY_SECRET_IV are not set", { code: "floxy_config" });
   const cipher = crypto.createCipheriv("aes-256-cbc", keys.key, keys.iv);
   return { data: cipher.update(JSON.stringify(value), "utf8", "base64") + cipher.final("base64") };
 }
@@ -76,7 +79,9 @@ function createClient({ env = process.env, http = axios } = {}) {
       let errorBody = error.response?.data;
       try { errorBody = unseal(errorBody, env); } catch { errorBody = undefined; }
       const code = errorBody?.error?.code;
-      throw new FloxyError(`Floxy ${method.toUpperCase()} ${path} failed${code ? `: ${code}` : status ? ` (HTTP ${status})` : ""}`, { status, code });
+      const param = errorBody?.error?.param;
+      const detail = [errorBody?.error?.message, param && `(param: ${param})`].filter(Boolean).join(" ").slice(0, 300) || undefined;
+      throw new FloxyError(`Floxy ${method.toUpperCase()} ${path} failed${code ? `: ${code}` : status ? ` (HTTP ${status})` : ""}`, { status, code, detail });
     }
     return unseal(response.data, env);
   }
@@ -93,6 +98,13 @@ function createClient({ env = process.env, http = axios } = {}) {
     },
     getPaymentLink: linkId => call("get", `/v1/payment-links/${id(linkId)}`),
     getPayment: paymentId => call("get", `/v1/payments/${id(paymentId)}`),
+    // Money-moving: the account is encrypted-only, so the body goes as a sealed envelope.
+    createPayout: (body, idempotencyKey) => {
+      if (typeof idempotencyKey !== "string" || idempotencyKey.length < 8) throw new FloxyError("Idempotency-Key must be 8+ characters");
+      return call("post", "/v1/payouts", { body: seal(body, env), idempotencyKey });
+    },
+    getPayout: payoutId => call("get", `/v1/payouts/${id(payoutId)}`),
+    getBalances: () => call("get", "/v1/balances"),
   };
 }
 
