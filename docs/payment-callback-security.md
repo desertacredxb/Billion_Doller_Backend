@@ -23,3 +23,13 @@ For settlementAttempt states processing/submitting/review, compare the saved del
 Tests use mocked storage and MT5. They cover repeated callbacks, simultaneous callback/reconciliation, Cregis partial/top-up sequences, lost replies, failed post-credit saves, restarted workers, required unique indexes, invalid/account-mismatched balance calls and two credit attempts within one callback. Each retained callback controller is exercised twice and produces exactly one mocked credit. Closed gateway handlers return 410. No real payment, account, callback, withdrawal, refund or email was created by these tests.
 
 Other payment-authentication issues from the earlier review remain outside this narrowed duplicate-credit change. Do not describe this as a complete certification of all gateway security.
+
+## Crypto callback acknowledgements — 25 October 2026
+
+RameePay Crypto and Cregis deposit replies now wait for the shared guard's final majority/journaled settlement write. A lost MT5 reply, unsuccessful MT5 result, failed order save, unresolved claim or failed final write returns a non-success response. Pending/review claims remain locked; redelivery never automatically repeats an ambiguous balance adjustment. Reconciliation must establish the provider/MT5 outcome first. Cregis payout storage failures and malformed notifications no longer receive a success acknowledgement.
+
+Successful Cregis callbacks return HTTP 200 and exactly `success` as `text/plain`. Its Payment Engine documentation states that other responses fail the notification and can be manually retried from the portal; do not promise automatic redelivery. RameePay Crypto processing failures return HTTP 503 with success:false; its automatic retry cadence is not certified. RameePay INR, gateway configuration, conversion calculations, payout/refund decisions and sender-authentication contracts are unchanged.
+
+Source: https://developers.cregis.com/en/reference/payment-engine-api/orderCallback/
+
+Regression checks use isolated models and MT5 stubs, including response timing, timeout/rejection, repeated delivery, final-write failure and failed payout persistence. No live callback, payment, refund or historical replay is used to validate this change.

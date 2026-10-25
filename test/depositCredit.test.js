@@ -156,12 +156,114 @@ test("all three active callback handlers use the same guard and repeated notices
     let controller;
     try { controller = require(path); } finally { Module._load = original; }
     for (let i = 0; i < 2; i++) {
-      const res = { status(code) { this.code = code; return this; }, json(value) { this.value = value; return this; }, send(value) { this.value = value; return this; } };
+      const res = { status(code) { this.code = code; return this; }, type(value) { this.contentType = value; return this; }, json(value) { this.value = value; return this; }, send(value) { this.value = value; return this; } };
       await controller[handler]({ body: payload }, res);
       assert.equal(res.code, 200, file);
     }
     assert.equal(h.credits.length, 1, file); assert.equal(h.orders.record.creditedAmount, 100, file);
     assert.equal(h.orders.record.status, "SUCCESS", file);
   }
+});
+
+function callbackHarness(provider, options = {}) {
+  const h = harness({ ...options, patch: { provider: provider === "crypto" ? "CRYPTO" : "CREGIS", providerOrderId: "po123", ...options.patch } });
+  const Module = require("node:module"), original = Module._load;
+  const path = require.resolve(`../controllers/payments/${provider}.controller`);
+  delete require.cache[path];
+  Module._load = function(request, ...args) {
+    if (request === "../../services/depositCredit.service") return { runDeposit: h.guard.run, balanceWithClaim };
+    if (request === "../../models/Order") return h.orders;
+    if (request === "../../models/withdrawal") return { findOne: options.findWithdrawal || (async () => null) };
+    if (request === "../../models/account.model") return { findOne: () => ({ populate: async () => null }) };
+    if (request === "../../utils/rameeCrypto") return { decryptDataCrypto: () => ({ orderid: "ORD1", status: "SUCCESS", payAmount: "100" }) };
+    if (request === "../payout.controller") return { sendSuccessEmail: async () => {} };
+    if (request === "../../utils/sendEmail") return async () => {};
+    if (request === "./fetchRate") return async () => 1;
+    return original.call(this, request, ...args);
+  };
+  let controller;
+  try { controller = require(path); } finally { Module._load = original; }
+  h.deliver = async (body = provider === "crypto" ? { data: "test", agentCode: "test" } :
+    { event_type: "paid", data: { order_id: "ORD1", pay_amount: "100", pay_currency: "USDT" } }) => {
+    let sent = false;
+    const res = {
+      code: 200,
+      status(code) { assert.equal(sent, false); this.code = code; return this; },
+      type(value) { assert.equal(sent, false); this.contentType = value; return this; },
+      json(value) { return this.send(value); },
+      send(value) { assert.equal(sent, false); sent = true; this.value = value; this.stateAtReply = structuredClone(h.orders.record); return this; },
+    };
+    await controller[provider === "crypto" ? "handleCryptoCallback" : "handleCregisCallback"]({ body }, res);
+    assert.equal(sent, true);
+    return res;
+  };
+  return h;
+}
+
+for (const provider of ["crypto", "cregis"]) {
+  test(`${provider} acknowledges only after the durable credit is finalized`, async () => {
+    const h = callbackHarness(provider);
+    const res = await h.deliver();
+    assert.equal(res.code, 200);
+    assert.equal(res.stateAtReply.status, "SUCCESS");
+    assert.equal(res.stateAtReply.creditedAmount, 100);
+    assert.equal(res.stateAtReply.settlementAttempt, undefined);
+    if (provider === "cregis") { assert.equal(res.value, "success"); assert.equal(res.contentType, "text/plain"); }
+    await h.deliver(); assert.equal(h.credits.length, 1);
+  });
+  test(`${provider} lost MT5 replies return failure and retries cannot credit again`, async () => {
+    let calls = 0;
+    const h = callbackHarness(provider, { updateBalance: async () => { calls++; throw new Error("reply lost"); } });
+    for (let n = 0; n < 2; n++) {
+      const res = await h.deliver(); assert.equal(res.code, 503);
+      if (provider === "cregis") assert.equal(res.value, "failed");
+      else assert.equal(res.value.success, false);
+    }
+    assert.equal(h.orders.record.settlementAttempt.state, "review"); assert.equal(calls, 1);
+  });
+  test(`${provider} rejects an unsuccessful MT5 result and retains the credit claim`, async () => {
+    let calls = 0;
+    const h = callbackHarness(provider, { updateBalance: async () => { calls++; return { retcode: "10013" }; } });
+    assert.equal((await h.deliver()).code, 503);
+    assert.equal((await h.deliver()).code, 503);
+    assert.equal(calls, 1); assert.equal(h.orders.record.settlementAttempt.state, "review");
+  });
+  test(`${provider} never acknowledges when the final majority write fails`, async () => {
+    const h = callbackHarness(provider), write = h.orders.updateOne;
+    h.orders.updateOne = async (filter, update, opts) => {
+      if (update.$unset?.settlementAttempt && update.$set?.creditedAmount !== undefined) throw new Error("storage unavailable");
+      return write(filter, update, opts);
+    };
+    assert.equal((await h.deliver()).code, 503);
+    assert.equal((await h.deliver()).code, 503);
+    assert.equal(h.credits.length, 1);
+    assert.equal(h.orders.record.settlementAttempt.state, "submitting");
+  });
+  test(`${provider} an order save failure after MT5 success requires reconciliation`, async () => {
+    const h = callbackHarness(provider), read = h.orders.findOne;
+    h.orders.findOne = async filter => {
+      const doc = await read(filter);
+      if (doc && !filter["settlementAttempt.token"]) doc.save = async () => { throw new Error("save failed"); };
+      return doc;
+    };
+    assert.equal((await h.deliver()).code, 503);
+    assert.equal((await h.deliver()).code, 503);
+    assert.equal(h.credits.length, 1);
+    assert.equal(h.orders.record.settlementAttempt.state, "review");
+  });
+}
+
+test("Cregis invalid input and failed payout writes are never acknowledged as success", async () => {
+  const invalid = callbackHarness("cregis");
+  for (const body of [undefined, {}, { event_type: "paid", data: "{" }, { event_type: "paid", data: {} }]) {
+    const res = await invalid.deliver(body === undefined ? null : body);
+    assert.equal(res.code, 400); assert.equal(res.value, "failed");
+  }
+  const h = callbackHarness("cregis", { findWithdrawal: async () => ({
+    status: "Processing", save: async () => { throw new Error("database unavailable"); },
+  }) });
+  const res = await h.deliver({ third_party_id: "PAYOUT1", status: 6 });
+  assert.equal(res.code, 503); assert.equal(res.value, "failed");
+  assert.equal(h.credits.length, 0);
 });
 module.exports = { storage };
