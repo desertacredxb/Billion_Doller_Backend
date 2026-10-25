@@ -48,7 +48,8 @@ function createWorker({ env = process.env, now = Date.now, usage = createUsage()
         if (!safeAnswer(answer)) { warn("invalid_output"); return unavailable(); }
         return { status: 200, body: { answer: answer.trim(), language: data.language } };
       } catch (error) {
-        const category = stage !== "provider" ? stage : error.status === 401 ? "provider_auth" : error.status === 429 ? "provider_capacity" : error.name === "APIConnectionTimeoutError" ? "provider_timeout" : "provider_request";
+        const capacity = error.code === "insufficient_quota" ? "provider_quota" : error.code === "rate_limit_exceeded" ? "provider_rate_limit" : "provider_capacity";
+        const category = stage !== "provider" ? stage : error.status === 401 ? "provider_auth" : error.status === 429 ? capacity : error.name === "APIConnectionTimeoutError" ? "provider_timeout" : "provider_request";
         warn(category); return unavailable();
       }
     },
