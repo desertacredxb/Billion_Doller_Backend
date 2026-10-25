@@ -410,8 +410,8 @@ test("a failed provider verification can start a new check without granting KYC 
   const stale = response(); await controller.decisionWebhook(signedRequest(), stale);
   assert.equal(state.user.isKycVerified, false);
 });
-test("policy rejection and review cannot be bypassed by requesting another session", async () => {
-  for (const [status, message] of [["declined", "We don't accept UAE clients or UAE-issued identity documents."], ["review", "Your verification needs further review. Please contact support."], ["test_approved", "Test verification completed."]]) {
+test("policy rejection and explicit BDFX holds cannot be bypassed by requesting another session", async () => {
+  for (const [status, message] of [["declined", "We don't accept UAE clients or UAE-issued identity documents."], ["review", "This mobile number is already registered. Please contact support."], ["review", "Your account is on hold. Please contact support."], ["test_approved", "Test verification completed."]]) {
     const user = account(); Object.assign(user.veriff, { status, message });
     let calls = 0; const { controller } = controllerFor(user, { createSession: async () => { calls++; } });
     const res = response(); await controller.startSession({ user: { id: "user-1" }, body: { canRetry: true } }, res);
@@ -455,9 +455,39 @@ test("review and resubmission keep the client name-correction button and reject 
     assert.equal(state.user.isKycVerified, true);
   }
 });
-test("name correction does not reopen security, duplicate-mobile, owner-review or UAE holds", async () => {
+test("all provider failure reasons keep name correction and fresh re-verification without granting approval", async () => {
+  for (const status of ["declined", "review", "resubmission_requested"]) {
+    for (const reasonCode of [501, 999, 104, null]) {
+      for (const editName of [false, true]) {
+        const user = account(); user.fullName = "Original Name";
+        Object.assign(user.veriff, { status, reasonCode, message: decisionOutcome({ status }, user, config, false).message });
+        const { controller, state } = controllerFor(user, { createSession: async () => ({
+          id: "b8888888-8888-4888-8888-888888888888", url: "https://magic.veriff.me/fresh-session",
+        }) });
+        const before = response(); await controller.getStatus({ user: { id: "user-1" } }, before);
+        assert.equal(before.data.canEditDetails, true, `${status}/${reasonCode} keeps Edit name`);
+        if (status !== "resubmission_requested") assert.equal(before.data.canRetry, true);
+        if (editName) {
+          const saved = response(); await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Corrected Name" } }, saved);
+          assert.equal(saved.code, 200); assert.equal(saved.data.resubmissionRequired, true);
+          const refreshed = response(); await controller.getStatus({ user: { id: "user-1" } }, refreshed);
+          assert.equal(refreshed.data.resubmissionRequired, true);
+        }
+        const started = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, started);
+        assert.equal(started.code, 201); assert.equal(state.user.isKycVerified, false);
+        assert.notEqual(state.user.veriff.reference, reference);
+        assert.equal(state.user.fullName, editName ? "Corrected Name" : "Original Name");
+        const oldApproval = response(); await controller.decisionWebhook(signedRequest(), oldApproval);
+        assert.equal(oldApproval.data.ignored, true); assert.equal(state.user.isKycVerified, false);
+        await controller.decisionWebhook(signedRequest(fixture({ id: state.user.veriff.sessionId, vendorData: state.user.veriff.reference })), response());
+        assert.equal(state.user.isKycVerified, true);
+      }
+    }
+  }
+});
+test("name correction does not reopen explicit BDFX, duplicate-mobile, owner-review or UAE holds", async () => {
   for (const scenario of [
-    { reasonCode: 501 }, { reasonCode: 999 },
+    { message: "Your account is on hold. Please contact support." },
     { message: "This mobile number is already registered. Please contact support." },
     { manual: true }, { nationality: "UAE" }, { residenceCountry: "United Arab Emirates" },
   ]) {
@@ -492,6 +522,7 @@ test("an approval fetched before a concurrent name correction cannot approve the
 test("identity corrections are blocked for active, approved and policy-rejected accounts, including races", async () => {
   for (const status of ["created", "creating", "approved", "declined", "test_approved"]) {
     const user = account(); user.veriff.status = status; user.isKycVerified = status === "approved";
+    if (status === "declined") user.veriff.message = "We don't accept UAE clients or UAE-issued identity documents.";
     const { controller, state } = controllerFor(user); const res = response();
     await controller.updateDetails({ user: { id: "user-1" }, body: { fullName: "Changed" } }, res);
     assert.equal(res.code, 409); assert.equal(state.writes, 0);
@@ -507,9 +538,11 @@ test("signed webhook reason codes produce safe client guidance without exposing 
   await controller.decisionWebhook(signedRequest(fixture({ status: "declined", code: 9102, reasonCode: 501, reason: "PRIVATE PROVIDER TEXT" })), res);
   assert.equal(state.user.veriff.reasonCode, 501);
   const view = response(); await controller.getStatus({ user: { id: "user-1" } }, view);
-  assert.match(view.data.failureReason, /security review/); assert.equal(view.data.canRetry, false);
+  assert.match(view.data.failureReason, /security review/); assert.equal(view.data.canRetry, true);
+  assert.equal(view.data.canEditDetails, true);
   assert.ok(!JSON.stringify(view.data).includes("PRIVATE PROVIDER TEXT"));
-  const retry = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, retry); assert.equal(retry.code, 409);
+  const retry = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, retry);
+  assert.equal(retry.code, 201); assert.equal(state.user.isKycVerified, false);
 });
 test("legacy failures load authenticated reasons once and never change KYC approval", async () => {
   const user = account(); Object.assign(user.veriff, { status: "declined", message: "Your identity could not be verified. Please contact support." });
@@ -523,7 +556,7 @@ test("BDFX review without a provider rejection reason is not presented as a prov
   const { controller, state } = controllerFor(user);
   const res = response(); await controller.getStatus({ user: { id: "user-1" } }, res);
   assert.equal(res.data.status, "review"); assert.equal(res.data.approved, false);
-  assert.equal(res.data.canRetry, false);
+  assert.equal(res.data.canRetry, true);
   assert.match(res.data.failureReason, /BDFX review/);
   assert.doesNotMatch(res.data.failureReason, /provider has not supplied|unsuccessful/i);
   assert.equal(state.user.isKycVerified, false);
