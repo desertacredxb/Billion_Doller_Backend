@@ -81,6 +81,7 @@ const startServer = async () => {
   app.use("/api/ai", aiRoutes);
   app.use("/api/enquiries", enquiryRoutes);
   app.use("/api/support-chat", supportChatRoutes);
+  app.use("/api/support-chat/n8n", require("./routes/buddyN8nRoutes"));
   app.use("/api/operations", operationsRoutes);
   app.use("/api/staff", staffRoutes);
   app.use("/api/analytics", websiteAnalyticsRoutes);
