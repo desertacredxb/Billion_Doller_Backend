@@ -35,7 +35,7 @@ exports.receiveIbCommissionWebhook = async (req, res) => {
     await Deal.findOneAndUpdate(
       { order: String(order) },
       {
-        login: String(loginogin),
+        login: String(login),
         order: String(order),
         action: body.action !== undefined ? String(body.action) : undefined,
         entry: body.entry !== undefined ? String(body.entry) : undefined,
