@@ -59,6 +59,15 @@ test("consent/private details are checked before reserving capacity, and unsafe 
     assert.equal((await bad.worker.complete({ ticket: await bad.worker.issue(question) })).status, 503);
   }
 });
+test("provider diagnostics distinguish quota and rate limits without exposing provider text", async () => {
+  for (const [code, expected] of [["insufficient_quota", "provider_quota"], ["rate_limit_exceeded", "provider_rate_limit"], ["unrecognized-private-code", "provider_capacity"]]) {
+    const warnings = [];
+    const fixture = setup({ warn: value => warnings.push(value), generate: async () => { throw Object.assign(new Error("private provider text"), { status: 429, code }); } });
+    const result = await fixture.worker.complete({ ticket: await fixture.worker.issue(question) });
+    assert.deepEqual(result, { status: 503, body: { code: "ASSISTANT_UNAVAILABLE" } });
+    assert.deepEqual(warnings, [expected]);
+  }
+});
 test("usage collection stores only counters/nonces, reserves an atomic daily cap and fails closed", async () => {
   const calls = [], duplicate = Object.assign(new Error("duplicate"), { code: 11000 }); let full = false;
   const store = { createIndex: async (...args) => { calls.push(["index", ...args]); },
