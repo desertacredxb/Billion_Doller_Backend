@@ -119,7 +119,6 @@ exports.handleCryptoCallback = async (req, res) => {
 
     // 1. Decrypt RameePay Crypto response
     const txn = decryptDataCrypto(rawPayload);
-    console.log("🔓 Decrypted Crypto Webhook:", txn);
 
     // Crypto Spec: orderid, payAmount, status, hash
     const orderid = txn.merchantid || txn.orderid;
@@ -170,17 +169,15 @@ exports.handleCryptoCallback = async (req, res) => {
     // =========================================================================
     // CHECK 2: DEPOSIT / PAYIN PROCESSING
     // =========================================================================
-    return await runDeposit(orderid, async () => {
+    const result = await runDeposit(orderid, async () => {
     const order = await Order.findOne({ orderid });
     if (!order) {
       console.error("❌ Order/Withdrawal not found in DB:", orderid);
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
+      throw new Error("Order not found");
     }
 
     if (order.status === "SUCCESS") {
-      return res.json({ success: true, message: "Deposit already processed" });
+      return { success: true, message: "Deposit already processed" };
     }
 
     const accountno = order.accountNo;
@@ -254,14 +251,16 @@ exports.handleCryptoCallback = async (req, res) => {
           });
         }
       } catch (err) {
-        console.error("❌ MT5 Error:", err.message);
+        console.error("Crypto deposit processing requires reconciliation");
+        throw err;
       }
     }
 
-    return res.status(200).json({ success: true });
-    }, () => res.status(200).json({ success: true, message: "Already processed" }));
+    return { success: true };
+    }, () => ({ success: true, message: "Already processed" }), { requireDurableOutcome: true });
+    return res.status(200).json(result);
   } catch (error) {
-    console.error("❌ Callback Error:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error("Crypto callback was not completed");
+    return res.status(503).json({ success: false, status: "FAILED", message: "Processing was not confirmed. Reconciliation may be required." });
   }
 };

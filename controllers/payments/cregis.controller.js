@@ -17,7 +17,7 @@ async function handleCregisPayoutCallback(req, res) {
 
     if (!third_party_id) {
       console.error("Cregis payout callback: missing third_party_id");
-      return res.status(200).send("success");
+      return res.status(400).type("text/plain").send("failed");
     }
 
     const targetOrderId = String(third_party_id);
@@ -25,12 +25,12 @@ async function handleCregisPayoutCallback(req, res) {
 
     if (!withdrawal) {
       console.error("Cregis payout callback: withdrawal not found:", targetOrderId);
-      return res.status(200).send("success");
+      return res.status(404).type("text/plain").send("failed");
     }
 
     if (["Completed", "Failed", "Rejected"].includes(withdrawal.status)) {
       console.log("Cregis payout callback: withdrawal already finalized:", targetOrderId, withdrawal.status);
-      return res.status(200).send("success");
+      return res.status(200).type("text/plain").send("success");
     }
 
     const statusCode = Number(status);
@@ -58,35 +58,34 @@ async function handleCregisPayoutCallback(req, res) {
       console.log(`❌ Cregis Payout Failed (status ${statusCode}, awaiting admin action): ${targetOrderId}`);
     }
 
-    return res.status(200).send("success");
+    return res.status(200).type("text/plain").send("success");
   } catch (error) {
-    console.error("Cregis payout callback error:", error.message);
-    return res.status(200).send("success");
+    console.error("Cregis payout callback was not completed");
+    return res.status(503).type("text/plain").send("failed");
   }
 }
 
 exports.handleCregisCallback = async (req, res) => {
   try {
     console.log("========== CREGIS CALLBACK ==========");
-    console.log(JSON.stringify(req.body, null, 2));
 
     // Payout webhooks are flat (no event_type/data wrapper) and correlate via
     // third_party_id with a numeric status - detect and hand off before the
     // order/deposit-shaped validation below.
     if (
-      req.body.event_type === undefined &&
-      req.body.third_party_id !== undefined &&
-      req.body.status !== undefined
+      req.body?.event_type === undefined &&
+      req.body?.third_party_id !== undefined &&
+      req.body?.status !== undefined
     ) {
       return handleCregisPayoutCallback(req, res);
     }
 
-    const { event_type } = req.body;
-    let { data } = req.body;
+    const { event_type } = req.body || {};
+    let { data } = req.body || {};
 
     if (!event_type || !data) {
       console.error("Invalid Cregis callback payload format");
-      return res.status(200).send("success"); // Always return 200 to acknowledge webhook
+      return res.status(400).type("text/plain").send("failed");
     }
 
     // Cregis sends "data" as a JSON-encoded string, not a parsed object -
@@ -98,7 +97,7 @@ exports.handleCregisCallback = async (req, res) => {
         data = JSON.parse(data);
       } catch (parseErr) {
         console.error("Failed to parse Cregis callback data string:", parseErr.message);
-        return res.status(200).send("success");
+        return res.status(400).type("text/plain").send("failed");
       }
     }
 
@@ -114,7 +113,7 @@ exports.handleCregisCallback = async (req, res) => {
 
     if (!order_id) {
       console.error("Missing order_id in Cregis callback");
-      return res.status(200).send("success");
+      return res.status(400).type("text/plain").send("failed");
     }
 
     const targetOrderId = String(order_id);
@@ -122,12 +121,12 @@ exports.handleCregisCallback = async (req, res) => {
     // Withdrawal/payout webhooks never reach here (they're flat, no event_type/data,
     // and are routed to handleCregisPayoutCallback above) - this shape is always a
     // deposit/order callback.
-    return await runDeposit(targetOrderId, async () => {
+    await runDeposit(targetOrderId, async () => {
     const order = await Order.findOne({ orderid: targetOrderId });
 
     if (!order) {
       console.error("Neither Order nor Withdrawal found for ID:", targetOrderId);
-      return res.status(200).send("success");
+      throw new Error("Order not found");
     }
 
     if (!order.provider) order.provider = "CREGIS";
@@ -135,7 +134,7 @@ exports.handleCregisCallback = async (req, res) => {
 
     if (order.status === "SUCCESS") {
       console.log("Order already processed:", targetOrderId);
-      return res.status(200).send("success");
+      return;
     }
 
     switch (event_type) {
@@ -154,7 +153,7 @@ exports.handleCregisCallback = async (req, res) => {
         const accountno = order.accountNo;
         if (!accountno) {
           console.error("Account number missing for order:", targetOrderId);
-          return res.status(200).send("success");
+          throw new Error("Account number missing");
         }
 
         // Cregis reports the order's cumulative total on every callback, not a
@@ -184,7 +183,7 @@ exports.handleCregisCallback = async (req, res) => {
 
         if (!Number.isFinite(reportedTotal) || reportedTotal <= 0) {
           console.error("Invalid settlement amount reported by Cregis:", pay_amount, order_amount);
-          return res.status(200).send("success");
+          throw new Error("Invalid settlement amount");
         }
 
         const alreadyCredited = Number(order.creditedAmount || 0);
@@ -199,7 +198,7 @@ exports.handleCregisCallback = async (req, res) => {
             order.status = "SUCCESS";
             await order.save();
           }
-          return res.status(200).send("success");
+          return;
         }
 
         // Update MT5 Trading Account Balance in USD with just the new amount
@@ -270,6 +269,7 @@ exports.handleCregisCallback = async (req, res) => {
           // Don't lose track of a prior successful partial credit if this top-up attempt fails.
           order.status = alreadyCredited > 0 ? "PARTIALLY_PAID" : "PENDING";
           await order.save();
+          throw mt5Error;
         }
         break;
       }
@@ -289,10 +289,10 @@ exports.handleCregisCallback = async (req, res) => {
       }
     }
 
-    return res.status(200).send("success");
-    }, () => res.status(200).send("success"));
+    }, () => undefined, { requireDurableOutcome: true });
+    return res.status(200).type("text/plain").send("success");
   } catch (error) {
-    console.error("Cregis callback error:", error.message);
-    return res.status(200).send("success");
+    console.error("Cregis callback was not completed");
+    return res.status(503).type("text/plain").send("failed");
   }
 };

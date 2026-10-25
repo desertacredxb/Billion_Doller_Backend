@@ -21,7 +21,7 @@ function createGuard({ orders, updateBalance, now = () => new Date(), logger = c
     })().catch(error => { ready = undefined; throw error; });
     return ready;
   }
-  async function run(orderId, work, duplicate = () => undefined) {
+  async function run(orderId, work, duplicate = () => undefined, { requireDurableOutcome = false } = {}) {
     if (typeof orderId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(orderId)) throw new Error("Invalid deposit reference");
     await checkReadiness();
     const token = randomUUID();
@@ -31,7 +31,7 @@ function createGuard({ orders, updateBalance, now = () => new Date(), logger = c
     }, { $set: { settlementAttempt: { token, state: "processing", startedAt: now() } } }, { new: true, ...durable });
     if (!order) {
       const current = await orders.findOne({ orderid: orderId });
-      if (current?.status === "SUCCESS") return duplicate();
+      if (current?.status === "SUCCESS" && (!requireDurableOutcome || !current.settlementAttempt)) return duplicate();
       throw new Error("Deposit is being processed or requires reconciliation");
     }
     const claim = { _id: order._id, "settlementAttempt.token": token };
@@ -62,7 +62,8 @@ function createGuard({ orders, updateBalance, now = () => new Date(), logger = c
     } finally {
       try {
         if (!context.attempted) {
-          await orders.updateOne(claim, { $unset: { settlementAttempt: 1 } }, durable);
+          const released = await orders.updateOne(claim, { $unset: { settlementAttempt: 1 } }, durable);
+          if (requireDurableOutcome && released.modifiedCount !== 1) throw new Error("Deposit claim was not released");
         } else {
           const current = await orders.findOne(claim);
           const committed = context.succeeded && current && (
@@ -70,21 +71,24 @@ function createGuard({ orders, updateBalance, now = () => new Date(), logger = c
             (current.status === "PARTIALLY_PAID" && moneyCents(current.creditedAmount || 0) === context.target)
           );
           if (committed) {
-            await orders.updateOne(claim, { $set: {
+            const finalized = await orders.updateOne(claim, { $set: {
               status: current.status, creditedAmount: context.target / 100, lastSettlementTicket: context.ticket,
             }, $unset: { settlementAttempt: 1 } }, durable);
+            if (requireDurableOutcome && finalized.modifiedCount !== 1) throw new Error("Deposit outcome was not committed");
           } else {
             await orders.updateOne(claim, { $set: {
               "settlementAttempt.state": "review",
               comment: "Deposit credit requires MT5/provider reconciliation. Do not clear the claim or retry before checking deal history.",
             } }, durable);
             logger.error("Deposit credit requires manual reconciliation");
+            if (requireDurableOutcome) throw new Error("Deposit requires reconciliation");
           }
         }
       } catch {
         // A persisted processing/submitting claim continues to block another
         // credit after storage failure or restart. Never auto-expire it.
         logger.error("Deposit processing claim requires manual reconciliation");
+        if (requireDurableOutcome) throw new Error("Deposit requires reconciliation");
       }
     }
   }
