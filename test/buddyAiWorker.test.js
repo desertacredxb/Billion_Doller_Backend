@@ -60,7 +60,7 @@ test("consent/private details are checked before reserving capacity, and unsafe 
   }
 });
 test("provider diagnostics distinguish quota and rate limits without exposing provider text", async () => {
-  for (const [code, expected] of [["insufficient_quota", "provider_quota"], ["rate_limit_exceeded", "provider_rate_limit"], ["unrecognized-private-code", "provider_capacity"]]) {
+  for (const [code, expected] of [["insufficient_quota", "provider_quota"], ["rate_limit_exceeded", "provider_rate_limit_exceeded"], ["credit_balance_exhausted", "provider_credit_balance_exhausted"], ["project_spend_limit_exceeded", "provider_project_spend_limit_exceeded"], ["organization_spend_limit_exceeded", "provider_organization_spend_limit_exceeded"], ["organization_usage_limit_exceeded", "provider_organization_usage_limit_exceeded"], ["usage_limit_exceeded", "provider_usage_limit_exceeded"], ["slow_down", "provider_slow_down"], ["unrecognized-private-code", "provider_capacity"]]) {
     const warnings = [];
     const fixture = setup({ warn: value => warnings.push(value), generate: async () => { throw Object.assign(new Error("private provider text"), { status: 429, code }); } });
     const result = await fixture.worker.complete({ ticket: await fixture.worker.issue(question) });
