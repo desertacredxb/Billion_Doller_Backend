@@ -13,7 +13,12 @@ function validWebhook(value) {
 function reportAuthorized(value, expected) {
   return configuredToken(expected) && typeof value === "string" && value.length <= 200 && timingSafeEqual(digest(value), digest(expected));
 }
-function createBuddyService({ env = process.env, post = axios.post, worker = require("./buddyAiWorker.service").createWorker({ env }) } = {}) {
+function validReply(data, language) {
+  return data && typeof data.answer === "string" && data.answer.trim() && data.answer.length <= 2400 &&
+    data.language === language && safeAnswer(data.answer);
+}
+function createBuddyService({ env = process.env, post = axios.post, worker = require("./buddyAiWorker.service").createWorker({ env }), now = Date.now,
+  warn = category => console.warn("Buddy bridge:", category) } = {}) {
   function available() {
     return env.BDFX_BUDDY_N8N_ENABLED === "true" && validWebhook(env.BDFX_BUDDY_N8N_WEBHOOK_URL) &&
       (env.BDFX_BUDDY_N8N_TRANSPORT === "ticket" ? worker.configured() : configuredToken(env.BDFX_BUDDY_N8N_TOKEN));
@@ -27,19 +32,35 @@ function createBuddyService({ env = process.env, post = axios.post, worker = req
       }
       const message = body.message.trim();
       if (containsPrivateDetails(message)) return { status: 400, body: { code: "REMOVE_PRIVATE_DETAILS" } };
+      const startedAt = now();
+      let ticket;
       try {
         const ticketMode = env.BDFX_BUDDY_N8N_TRANSPORT === "ticket";
-        const payload = ticketMode ? { ticket: await worker.issue(body) } : {
+        if (ticketMode) ticket = await worker.issue(body);
+        const payload = ticketMode ? { ticket } : {
           requestId: randomUUID(), language: body.language, message, contextQuestion: body.contextQuestion ?? null,
         };
         const response = await post(env.BDFX_BUDDY_N8N_WEBHOOK_URL, payload,
           { headers: ticketMode ? { "Content-Type": "application/json" } : { "X-BDFX-Buddy-Key": env.BDFX_BUDDY_N8N_TOKEN }, timeout: 10000,
           maxRedirects: 0, maxBodyLength: 6000, maxContentLength: 16000, responseType: "json" });
         const data = response.data;
-        if (!data || typeof data.answer !== "string" || !data.answer.trim() || data.answer.length > 2400 || data.language !== body.language ||
-          !safeAnswer(data.answer)) throw new Error("Invalid assistant response");
+        if (!validReply(data, body.language)) throw new Error("Invalid assistant response");
         return { status: 200, body: { answer: data.answer.trim(), language: body.language } };
-      } catch { return { status: 503, body: { code: "ASSISTANT_UNAVAILABLE" } }; }
+      } catch {
+        // Reuse the reserved capability, so a late or already-running n8n
+        // callback cannot start a second model call. Keep the 13s UI budget.
+        if (ticket && now() - startedAt <= 2000) {
+          try {
+            const local = await worker.complete({ ticket });
+            if (local.status === 200 && validReply(local.body, body.language)) {
+              warn("local_ticket_fallback");
+              return { status: 200, body: { answer: local.body.answer.trim(), language: body.language } };
+            }
+          } catch { /* Public errors never contain transport or provider data. */ }
+          warn("local_reply_unavailable");
+        }
+        return { status: 503, body: { code: "ASSISTANT_UNAVAILABLE" } };
+      }
     },
   };
 }
