@@ -4,7 +4,8 @@ const { createBuddyService, reportAuthorized } = require("../services/buddyN8n.s
 const { createReportService } = require("../services/buddyReport.service");
 const { createWorker } = require("../services/buddyAiWorker.service");
 const { createDailyReportService } = require("../services/bdfxDailyReport.service");
-function createRouter({ env = process.env, worker = createWorker({ env }), buddy = createBuddyService({ env, worker }), report = createReportService(), dailyReport = createDailyReportService() } = {}) {
+const { createTelegramQueryService, TOPICS } = require("../services/bdfxTelegramQuery.service");
+function createRouter({ env = process.env, worker = createWorker({ env }), buddy = createBuddyService({ env, worker }), report = createReportService(), dailyReport = createDailyReportService(), telegramQuery = createTelegramQueryService({ dailyReport }) } = {}) {
   const router = express.Router();
   router.use((_req, res, next) => { res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" }); next(); });
   const limit = maximum => rateLimit({ windowMs: 900000, limit: maximum, standardHeaders: "draft-7", legacyHeaders: false,
@@ -27,6 +28,15 @@ function createRouter({ env = process.env, worker = createWorker({ env }), buddy
     if ([env.BDFX_BUDDY_N8N_TOKEN, env.BDFX_N8N_REPORT_TOKEN].includes(expected) || !reportAuthorized(req.get("X-BDFX-Business-Report-Key"), expected)) return res.status(401).json({ code: "REPORT_AUTH_REQUIRED" });
     if (Object.keys(req.query).length) return res.status(400).json({ code: "INVALID_REPORT_PERIOD" });
     try { res.json(await dailyReport()); }
+    catch { res.status(503).json({ code: "REPORT_UNAVAILABLE" }); }
+  });
+  router.get("/business-query", limit(120), async (req, res) => {
+    const expected = env.BDFX_N8N_BUSINESS_REPORT_TOKEN;
+    if ([env.BDFX_BUDDY_N8N_TOKEN, env.BDFX_N8N_REPORT_TOKEN].includes(expected) || !reportAuthorized(req.get("X-BDFX-Business-Report-Key"), expected)) return res.status(401).json({ code: "REPORT_AUTH_REQUIRED" });
+    if (Object.keys(req.query).some(key => !["topic", "page"].includes(key)) || !TOPICS.includes(req.query.topic)
+      || (req.query.page != null && (typeof req.query.page !== "string" || !/^[1-9]\d{0,2}$/.test(req.query.page)))
+      || (req.query.topic !== "pending_withdrawals" && req.query.page != null && req.query.page !== "1")) return res.status(400).json({ code: "INVALID_BUSINESS_QUERY" });
+    try { res.json(await telegramQuery(req.query.topic, Number(req.query.page || "1"))); }
     catch { res.status(503).json({ code: "REPORT_UNAVAILABLE" }); }
   });
   return router;
