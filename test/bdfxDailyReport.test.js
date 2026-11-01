@@ -44,7 +44,7 @@ async function withServer(env, dailyReport, run) {
   const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
   try{await run(`http://127.0.0.1:${server.address().port}/n8n`);}finally{await new Promise(resolve=>server.close(resolve));}
 }
-test('business report credential authorizes only the aggregate GET route and legacy/chat keys cannot read it',async()=>{
+test('business report credential protects the aggregate GET route and legacy/chat keys cannot read it',async()=>{
   const token='b'.repeat(64),env={BDFX_N8N_BUSINESS_REPORT_TOKEN:token,BDFX_N8N_REPORT_TOKEN:'c'.repeat(64),BDFX_BUDDY_N8N_TOKEN:'d'.repeat(64)};let calls=0;
   await withServer(env,async()=>{calls++;return {version:1};},async base=>{
     for(const key of ['',env.BDFX_N8N_REPORT_TOKEN,env.BDFX_BUDDY_N8N_TOKEN,'x'.repeat(64)]) assert.equal((await fetch(base+'/business-report',{headers:{'X-BDFX-Business-Report-Key':key}})).status,401);
