@@ -3,7 +3,8 @@ const { rateLimit } = require("express-rate-limit");
 const { createBuddyService, reportAuthorized } = require("../services/buddyN8n.service");
 const { createReportService } = require("../services/buddyReport.service");
 const { createWorker } = require("../services/buddyAiWorker.service");
-function createRouter({ env = process.env, worker = createWorker({ env }), buddy = createBuddyService({ env, worker }), report = createReportService() } = {}) {
+const { createDailyReportService } = require("../services/bdfxDailyReport.service");
+function createRouter({ env = process.env, worker = createWorker({ env }), buddy = createBuddyService({ env, worker }), report = createReportService(), dailyReport = createDailyReportService() } = {}) {
   const router = express.Router();
   router.use((_req, res, next) => { res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" }); next(); });
   const limit = maximum => rateLimit({ windowMs: 900000, limit: maximum, standardHeaders: "draft-7", legacyHeaders: false,
@@ -19,6 +20,13 @@ function createRouter({ env = process.env, worker = createWorker({ env }), buddy
     if (env.BDFX_N8N_REPORT_TOKEN === env.BDFX_BUDDY_N8N_TOKEN || !reportAuthorized(req.get("X-BDFX-Report-Key"), env.BDFX_N8N_REPORT_TOKEN)) return res.status(401).json({ code: "REPORT_AUTH_REQUIRED" });
     if (Object.keys(req.query).some(key => key !== "days") || (req.query.days != null && !["1", "7", "30"].includes(req.query.days))) return res.status(400).json({ code: "INVALID_REPORT_PERIOD" });
     try { res.json(await report(req.query.days || "7")); }
+    catch { res.status(503).json({ code: "REPORT_UNAVAILABLE" }); }
+  });
+  router.get("/business-report", limit(60), async (req, res) => {
+    const expected = env.BDFX_N8N_BUSINESS_REPORT_TOKEN;
+    if ([env.BDFX_BUDDY_N8N_TOKEN, env.BDFX_N8N_REPORT_TOKEN].includes(expected) || !reportAuthorized(req.get("X-BDFX-Business-Report-Key"), expected)) return res.status(401).json({ code: "REPORT_AUTH_REQUIRED" });
+    if (Object.keys(req.query).length) return res.status(400).json({ code: "INVALID_REPORT_PERIOD" });
+    try { res.json(await dailyReport()); }
     catch { res.status(503).json({ code: "REPORT_UNAVAILABLE" }); }
   });
   return router;
