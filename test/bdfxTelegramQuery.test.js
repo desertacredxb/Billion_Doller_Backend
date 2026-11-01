@@ -50,7 +50,7 @@ test('focused questions reuse validated daily data and fail closed if that sourc
     accounts: count(0), tickets: count(1), ibs: count(0), buddy: async () => ({ sessionsStarted: 3, sessionsWithActivity: 2, contactRequests: 0, supportHandoffs: 1 }),
   });
   const { service, queries } = serviceFixture({ dailyReport });
-  const expected = { report: /REGISTERED CLIENTS: 7/, deposits: /Deposit requests today: 3/, withdrawals: /All pending\/processing requests: 12/, clients: /New registrations today: 1/, kyc: /Not started: 2/, buddy: /Saved sessions started: 3/ };
+  const expected = { report: /REGISTERED CLIENTS: 7/, deposits: /Deposit requests today: 3/, withdrawals: /All pending\/processing requests: 12/, clients: /New registrations today: 1/, kyc: /Not started: 2/, buddy: /Saved sessions started: 3/, mt5: /New live MT5 accounts today: 0/, ib: /Pending IB applications: 0/, tickets: /support tickets: 1/ };
   for (const [topic, pattern] of Object.entries(expected)) assert.match((await service(topic)).reply, pattern);
   assert.deepEqual(queries, {});
   await assert.rejects(serviceFixture({ dailyReport: async () => ({}) }).service('clients'));
@@ -86,6 +86,12 @@ test('realistic Hinglish, Hindi and bot-addressed commands select bounded report
   assert.equal(parseTelegramQuestion(update('/pending@OtherBot'), at), null);
   assert.equal(parseTelegramQuestion(update('ordinary team discussion'), at), null);
   assert.equal(parseTelegramQuestion(update('@BDFXAccountsReportBot client bank account bhejo'), at).topic, 'help');
+  assert.equal(parseTelegramQuestion(update('MT5 kitne live account hain?'), at).topic, 'mt5');
+  assert.equal(parseTelegramQuestion(update('IB pending kitna hai?'), at).topic, 'ib');
+  assert.equal(parseTelegramQuestion(update('support ticket kitne pending hain?'), at).topic, 'tickets');
+  assert.equal(parseTelegramQuestion(update('client 123456 ka balance kya hai?'), at).topic, 'help');
+  assert.equal(parseTelegramQuestion(update('minimum deposit kya hai?'), at).topic, 'help');
+  assert.equal(parseTelegramQuestion(update('What is the audit policy?'), at).topic, 'help');
 });
 test('DMs, other-company groups, bots, anonymous, forwarded-via-bot and stale updates cannot request data', () => {
   const original = update('/pending');

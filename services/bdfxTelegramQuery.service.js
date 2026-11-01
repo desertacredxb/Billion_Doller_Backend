@@ -2,14 +2,14 @@ const Withdrawal = require('../models/withdrawal');
 const { createDailyReportService } = require('./bdfxDailyReport.service');
 const { formatBdfxDailyReport } = require('../integrations/n8n/bdfx-report-format');
 
-const TOPICS = ['help', 'pending_withdrawals', 'report', 'deposits', 'withdrawals', 'clients', 'kyc', 'buddy'];
+const TOPICS = ['help', 'pending_withdrawals', 'report', 'deposits', 'withdrawals', 'clients', 'kyc', 'buddy', 'mt5', 'ib', 'tickets'];
 const PAGE_SIZE = 10;
 const clean = (value, size = 60) => typeof value === 'string'
   ? value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, size) : '';
 const dubaiTime = value => new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Dubai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
 }).format(value);
-const help = 'BDFX REPORTS • HELP\n\nAsk: payout pending kiska hai?\n/pending — pending/processing withdrawal details\n/pending 2 — next page\n/report — full daily report\n/deposits — today’s deposit counts\n/withdrawals — today’s withdrawal counts\n/clients — registrations and KYC counts\n/kyc — current KYC queue\n/buddy — saved Buddy activity\n\nQuestions work in this BDFX Reports group. You can also reply to the bot’s message. This bot reads reports; it cannot approve or execute payments. Bank details, wallet addresses, contact details and passwords are not shared.';
+const help = 'BDFX REPORTS • HELP\n\nThese are the connected reporting details I can currently show.\nAsk: payout pending kiska hai?\n/pending — pending/processing withdrawal details\n/pending 2 — next page\n/report — full daily report\n/deposits — today’s deposit counts\n/withdrawals — today’s withdrawal counts\n/clients — registrations and KYC counts\n/kyc — current KYC queue counts\n/mt5 — new live accounts today\n/ib — pending IB applications count\n/tickets — open/pending support ticket count\n/buddy — saved Buddy activity\n\nFor an unsupported question, use a command above; unavailable details are not guessed. Questions work in this BDFX Reports group, or as a reply to the bot. This bot reads reports; it cannot approve or execute payments. Bank details, wallet addresses, contact details and passwords are not shared.';
 
 function createTelegramQueryService({ withdrawals = Withdrawal, dailyReport = createDailyReportService(), now = () => new Date() } = {}) {
   return async function telegramQuery(topic, page = 1) {
@@ -74,6 +74,12 @@ function createTelegramQueryService({ withdrawals = Withdrawal, dailyReport = cr
         } else if (topic === 'kyc') {
           const d = report.registeredClients;
           lines.push(`KYC approved: ${d.kycApproved} | Not approved: ${d.kycNotApproved}`, `Not started: ${d.byKycStatus.not_started} | In progress: ${d.byKycStatus.in_progress}`, `Review: ${d.byKycStatus.review} | Resubmit: ${d.byKycStatus.resubmission_requested}`, `Declined: ${d.byKycStatus.declined} | Other unapproved: ${d.byKycStatus.other_non_approved}`, '', 'Current KYC snapshot. Non-approved does not mean rejected.');
+        } else if (topic === 'mt5') {
+          lines.push(`New live MT5 accounts today: ${report.newLiveAccounts}`, '', 'This source counts new live accounts; balances, positions and trading P&L are not connected.');
+        } else if (topic === 'ib') {
+          lines.push(`Pending IB applications: ${report.queues.pendingIbApplications}`, '', 'Current queue count. Individual IB commission statements are not connected.');
+        } else if (topic === 'tickets') {
+          lines.push(`Open/pending support tickets: ${report.queues.openTickets}`, '', 'Current queue count. Ticket conversations are not shared in Telegram.');
         } else {
           const d = report.buddy;
           lines.push(`Saved sessions started: ${d.sessionsStarted}`, `With activity: ${d.sessionsWithActivity}`, `Contact requests: ${d.contactRequests} | Support handoffs: ${d.supportHandoffs}`, '', 'Consented saved sessions only; not every site visit.');

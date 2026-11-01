@@ -11,22 +11,27 @@ function parseTelegramQuestion(update, now = new Date()) {
   const command = text.match(/^\/([a-z_]+)(?:@([a-z0-9_]+))?(?:\s+(.*))?$/);
   if (command?.[2] && command[2] !== BOT_USERNAME) return null;
   const direct = text.includes('@' + BOT_USERNAME) || m.reply_to_message?.from?.username?.toLowerCase() === BOT_USERNAME;
+  const asked = direct || /[?？]|\b(kitna|kitne|kiska|kiski|kya|kaise|kab|batao|bata|who|what|why|how|which|where)\b|कितन|किस|क्या|कैसे|कब/.test(text);
   text = text.replace('@' + BOT_USERNAME, '').trim();
-  const commands = { start: 'help', help: 'help', pending: 'pending_withdrawals', payouts: 'pending_withdrawals', report: 'report', summary: 'report', deposits: 'deposits', deposit: 'deposits', withdrawals: 'withdrawals', clients: 'clients', registrations: 'clients', kyc: 'kyc', buddy: 'buddy' };
+  const commands = { start: 'help', help: 'help', pending: 'pending_withdrawals', payouts: 'pending_withdrawals', report: 'report', summary: 'report', deposits: 'deposits', deposit: 'deposits', withdrawals: 'withdrawals', clients: 'clients', registrations: 'clients', kyc: 'kyc', buddy: 'buddy', mt5: 'mt5', ib: 'ib', tickets: 'tickets' };
   let topic = command ? (commands[command[1]] || 'help') : null;
   let page = 1;
   if (command && topic === 'pending_withdrawals' && command[3]) {
     if (/^[1-9]\d{0,2}$/.test(command[3])) page = Number(command[3]); else topic = 'help';
   } else if (command?.[3]) topic = 'help';
   if (!command) {
-    if (/\b(otp|password|token|bank|wallet|ifsc|upi|phone|mobile|email|approve|reject|transfer|delete)\b/.test(text)) topic = direct ? 'help' : null;
+    if (/\b(otp|password|token|bank|wallet|ifsc|upi|phone|mobile|email|approve|reject|transfer|delete|minimum|maximum|bonus|balance|positions?|pnl)\b/.test(text)
+      || (/\b\d{4,12}\b/.test(text) && /client|account|mt5/.test(text))) topic = asked ? 'help' : null;
     else if (/withdraw|withdr|payout|निकासी|विड्र|विथड्र/.test(text)) topic = /today|aaj|आज|complete|success|total/.test(text) && !/pending|processing|kiska|kiski|whose|किस|पेंडिंग/.test(text) ? 'withdrawals' : 'pending_withdrawals';
     else if (/deposit|depost|जमा|डिपॉजिट/.test(text)) topic = 'deposits';
     else if (/kyc|verification|वेरिफ|केवाईसी/.test(text)) topic = 'kyc';
     else if (/registration|register|clients?|user|रजिस्ट्र|क्लाइंट/.test(text)) topic = 'clients';
     else if (/buddy|chatbot/.test(text)) topic = 'buddy';
+    else if (/mt5|metatrader|live account/.test(text)) topic = 'mt5';
+    else if (/\bib\b|broker|commission/.test(text)) topic = 'ib';
+    else if (/ticket|support queue/.test(text)) topic = 'tickets';
     else if (/report|summary|रिपोर्ट/.test(text)) topic = 'report';
-    else if (direct || /^(help|hello|hi|start|मदद)[!?\s]*$/.test(text)) topic = 'help';
+    else if (asked || /^(help|hello|hi|start|मदद)[!?\s]*$/.test(text)) topic = 'help';
   }
   if (!topic) return null;
   return { chatId: GROUP_ID, senderId: m.from.id, replyMessageId: m.message_id, updateId: update.update_id, topic, page, runMode: 'question' };
