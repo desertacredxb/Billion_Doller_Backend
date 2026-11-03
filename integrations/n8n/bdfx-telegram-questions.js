@@ -39,11 +39,11 @@ function parseTelegramQuestion(update, now = new Date(), { enableAI = false, ena
   return { chatId: GROUP_ID, senderId: m.from.id, replyMessageId: m.message_id, updateId: update.update_id, topic, page, runMode: 'question',
     ...(topic === 'assistant' ? { question: m.text.trim(), replyContext: m.reply_to_message?.from?.username?.toLowerCase() === BOT_USERNAME ? String(m.reply_to_message.text || '').slice(0, 1500) : '' } : {}) };
 }
-function verifyTelegramMember(meta, response) {
+function verifyTelegramMember(meta, response, now = new Date()) {
   const member = response?.result ?? response;
   if (response?.ok === false || !meta || meta.chatId !== GROUP_ID || member?.user?.id !== meta.senderId || member.user.is_bot !== false
     || !(['creator', 'administrator', 'member'].includes(member.status) || (member.status === 'restricted' && member.is_member === true))) return null;
-  return { ...meta, memberVerified: true };
+  return { ...meta, memberVerified: true, accessContext: { groupId: GROUP_ID, senderId: meta.senderId, role: member.status, checkedAt: now.toISOString() } };
 }
 function formatTelegramAnswer(response, meta, now = new Date()) {
   const body = response?.body ?? response;
