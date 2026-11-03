@@ -43,7 +43,7 @@ test('private credentials and invalid input are rejected before usage, source re
 });
 test('provider configuration and errors are metadata only; no keys, provider payloads or private request text leak', async () => {
   const missing = fixture({ env: {} }); assert.equal(missing.service.status().configured, false); assert.equal((await missing.service.reply({ message: 'report' })).body.category, 'not_configured');
-  for (const [error, category] of [[{ status: 401 }, 'provider_auth'], [{ status: 429 }, 'provider_quota'], [{ status: 404 }, 'provider_model']]) {
+  for (const [error, category] of [[{ status: 401 }, 'provider_auth'], [{ status: 429, code: 'insufficient_quota' }, 'provider_quota'], [{ status: 429, code: 'rate_limit_exceeded' }, 'provider_rate_limit'], [{ status: 429, code: 'slow_down' }, 'provider_rate_limit'], [{ status: 429 }, 'provider_capacity'], [{ status: 404 }, 'provider_model']]) {
     const f = fixture({ generate: async () => { throw { ...error, message: 'PRIVATE-PROVIDER-CONTENT' }; } }); const result = await f.service.reply({ message: 'report' });
     assert.equal(result.body.category, category); assert.equal(JSON.stringify(result).includes('PRIVATE-'), false); assert.equal(JSON.stringify(f.service.status()).includes('TEST-KEY'), false);
   }
