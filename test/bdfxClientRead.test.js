@@ -101,6 +101,8 @@ test('verified admin AI answers consume matching fresh account evidence rather t
     assert.equal(JSON.parse(request.input.at(-1).output).balance, 42.5); return { output: [], output_text: 'MT5 123456 balance is 42.5 in recorded account currency USD.' };
   } });
   const result = await service.reply({ message: 'MT5 account 123456 balance?', accessContext: admin }); assert.equal(result.status, 200); assert.equal(reads, 1); assert.deepEqual(result.body.usedTopics, ['client_balance']);
+  assert.deepEqual(service.status().privateReporting.lastCheck, { section: 'balance', available: true, checkedAt: at.toISOString() });
+  const receipt = JSON.stringify(service.status().privateReporting.lastCheck); assert.equal(receipt.includes('123456'), false); assert.equal(receipt.includes('42.5'), false);
 });
 test('only trusted admin context advertises private AI tools, and unavailable MT5 evidence stays unavailable', async () => {
   const tool = { output: [{ type: 'function_call', call_id: 'test-call', name: 'read_bdfx_client_account', arguments: JSON.stringify({ login: '123456', section: 'balance', page: 1 }) }] };
@@ -116,4 +118,5 @@ test('only trusted admin context advertises private AI tools, and unavailable MT
     return { output: [], output_text: 'MT5 data is unavailable for this account.' };
   } });
   const result = await service.reply({ message: 'BDFX account 123456 balance?', accessContext: admin }); assert.equal(result.status, 200); assert.deepEqual(result.body.usedTopics, ['client_balance']); assert.match(result.body.reply, /unavailable/);
+  assert.deepEqual(service.status().privateReporting.lastCheck, { section: 'balance', available: false, checkedAt: at.toISOString() });
 });

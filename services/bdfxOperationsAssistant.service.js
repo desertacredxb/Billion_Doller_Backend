@@ -31,7 +31,10 @@ function createOperationsAssistant({ env = process.env, query, clientRead = crea
   const key = () => env.BDFX_TELEGRAM_GROQ_API_KEY || env.GROQ_API_KEY;
   const model = () => env.BDFX_TELEGRAM_GROQ_MODEL || MODEL;
   const validKey = () => typeof key() === 'string' && /^gsk_[A-Za-z0-9_-]{16,4092}$/.test(key());
-  const status = () => ({ provider: 'groq', apiBaseUrl: GROQ_BASE_URL, configured: validKey() && env.BDFX_TELEGRAM_AI_ENABLED !== 'false', model: model(), readOnly: true, apiBillingVerified: false, dailyRequestLimit: 60, privateReporting: { requiresCurrentTelegramAdmin: true, sections: SECTIONS } });
+  // A single in-memory availability receipt supports checks while production
+  // execution payload logging remains disabled. No client identifiers or values.
+  let lastPrivateRead = null;
+  const status = () => ({ provider: 'groq', apiBaseUrl: GROQ_BASE_URL, configured: validKey() && env.BDFX_TELEGRAM_AI_ENABLED !== 'false', model: model(), readOnly: true, apiBillingVerified: false, dailyRequestLimit: 60, privateReporting: { requiresCurrentTelegramAdmin: true, sections: SECTIONS, lastCheck: lastPrivateRead ? { ...lastPrivateRead } : null } });
   const providerCodes = ['insufficient_quota', 'credit_balance_exhausted', 'project_spend_limit_exceeded', 'organization_spend_limit_exceeded', 'organization_usage_limit_exceeded', 'rate_limit_exceeded', 'rate_limit_reached', 'too_many_requests', 'slow_down'];
   const failure = (category, providerCode) => ({ status: 503, body: { code: 'OPERATIONS_AI_UNAVAILABLE', category, ...(providerCodes.includes(providerCode) ? { providerCode } : {}) } });
   return { status, async reply(body) {
@@ -77,9 +80,11 @@ function createOperationsAssistant({ env = process.env, query, clientRead = crea
             data = call.name === 'list_bdfx_client_accounts' ? await clientRead.list(args.page, body.accessContext) : await clientRead.read(args, body.accessContext);
             const at = new Date(data?.generatedAt);
             if (data?.version !== 1 || data.source !== 'BDFX private client reporting' || data.page !== args.page || !Number.isFinite(at.getTime()) || Math.abs(now() - at) > 120000 || (call.name === 'read_bdfx_client_account' && (data.login !== args.login || data.section !== args.section))) return failure('source');
+            lastPrivateRead = { section: call.name === 'list_bdfx_client_accounts' ? 'accounts' : args.section, available: true, checkedAt: now().toISOString() };
           } catch (error) {
             const codes = ['BDFX_ADMIN_REQUIRED', 'BDFX_ACCOUNT_NOT_FOUND', 'MT5_READ_UNAVAILABLE', 'MT5_AUTH_UNAVAILABLE', 'MT5_NOT_CONFIGURED', 'MT5_READ_BUSY', 'MT5_READ_TIMEOUT', 'MT5_ACCOUNT_MISMATCH', 'MT5_SCHEMA_UNVERIFIED'];
             data = { available: false, code: codes.includes(error?.code) ? error.code : 'CLIENT_SOURCE_UNAVAILABLE', generatedAt: now().toISOString(), instruction: 'The requested data is unavailable. Do not report a zero or infer an outage.' };
+            lastPrivateRead = { section: call.name === 'list_bdfx_client_accounts' ? 'accounts' : args.section, available: false, checkedAt: now().toISOString() };
           }
           usedTopics.push(call.name === 'list_bdfx_client_accounts' ? 'client_accounts' : 'client_' + args.section);
         } else return failure('invalid_tool');
