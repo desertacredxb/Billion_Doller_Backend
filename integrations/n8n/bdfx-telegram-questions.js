@@ -1,6 +1,6 @@
 const GROUP_ID = '-1003981563127';
 const BOT_USERNAME = 'bdfxaccountsreportbot';
-function parseTelegramQuestion(update, now = new Date(), { enableOpenAI = false } = {}) {
+function parseTelegramQuestion(update, now = new Date(), { enableAI = false, enableOpenAI = false } = {}) {
   const m = update?.message;
   if (!m || String(m.chat?.id) !== GROUP_ID || !['group', 'supergroup'].includes(m.chat.type)
     || !Number.isSafeInteger(m.from?.id) || m.from.id <= 0 || m.from.is_bot !== false || m.sender_chat || m.via_bot
@@ -34,7 +34,7 @@ function parseTelegramQuestion(update, now = new Date(), { enableOpenAI = false 
     else if (/report|summary|रिपोर्ट/.test(text)) topic = 'report';
     else if (asked || /^(help|hello|hi|start|मदद)[!?\s]*$/.test(text)) topic = 'help';
   }
-  if (enableOpenAI && !command && (topic || asked || /bdfx|billion dollar/.test(text))) topic = 'assistant';
+  if ((enableAI || enableOpenAI) && !command && (topic || asked || /bdfx|billion dollar/.test(text))) topic = 'assistant';
   if (!topic) return null;
   return { chatId: GROUP_ID, senderId: m.from.id, replyMessageId: m.message_id, updateId: update.update_id, topic, page, runMode: 'question',
     ...(topic === 'assistant' ? { question: m.text.trim(), replyContext: m.reply_to_message?.from?.username?.toLowerCase() === BOT_USERNAME ? String(m.reply_to_message.text || '').slice(0, 1500) : '' } : {}) };
@@ -52,7 +52,7 @@ function formatTelegramAnswer(response, meta, now = new Date()) {
     && body.topic === meta.topic && body.page === meta.page && Number.isFinite(generated.getTime())
     && now - generated <= 120000 && generated - now <= 30000 && typeof body.reply === 'string' && body.reply.length > 0 && body.reply.length <= 3500;
   const summary = sourceVerified ? body.reply : meta.topic === 'assistant' && body?.code === 'OPERATIONS_AI_UNAVAILABLE'
-    ? 'OpenAI chat is unavailable right now. Existing BDFX reports can still be read using /report, /pending or /seo. This does not confirm a website or database outage.'
+    ? 'BDFX AI chat is unavailable right now. Existing BDFX reports can still be read using /report, /pending or /seo. This does not confirm a website or database outage.'
     : 'BDFX live reporting source is unavailable or unverified right now. No client or payment details can be confirmed. Please try again shortly.';
   return { ...meta, sourceVerified, provider: sourceVerified ? body.provider || 'direct' : null, summary, html: summary.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') };
 }
