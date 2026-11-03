@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const PROPERTY_ID = "559982387";
 const ANALYTICS_URL = "https://analytics.google.com/analytics/web/#/a412813918p559982387/realtime/overview";
 const SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
-const PUBLIC_PATHS = ["/", "/about", "/accounts", "/platform", "/contact", "/help-centre", "/ib-broker", "/education", "/analytical-tools", "/economic-calendar", "/currency-converter", "/currency-calculator", "/forex", "/metals", "/indices", "/commodities", "/crypto", "/oil", "/blogs", "/news", "/cashback", "/career"];
+const PUBLIC_PATHS = ["/", "/about", "/accounts", "/platform", "/contact", "/help-centre", "/ib-broker", "/education", "/analytical-tools", "/economic-calendar", "/currency-converter", "/currency-calculator", "/forex", "/metals", "/indices", "/commodities", "/crypto", "/oil", "/blogs", "/news", "/cashback", "/career", "/learn", "/learn/india/en", "/learn/india/hi", "/learn/pakistan/en", "/learn/pakistan/ur", "/learn/vietnam/en", "/learn/vietnam/vi"];
 function period(days, now) {
   const to = new Date(now.getTime() + 4 * 3600000).toISOString().slice(0, 10);
   const from = new Date(Date.parse(`${to}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);

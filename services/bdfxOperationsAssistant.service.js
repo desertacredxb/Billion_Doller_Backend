@@ -1,6 +1,7 @@
 const { createUsage } = require('./buddyAiUsage.service');
 const { TOPICS } = require('./bdfxTelegramQuery.service');
 const { createGroqGenerate, GROQ_BASE_URL } = require('./bdfxGroqProvider.service');
+const { createClientReadService, verifiedAdmin, SECTIONS } = require('./bdfxClientRead.service');
 const MODEL = 'openai/gpt-oss-20b';
 const READ_TOPICS = TOPICS.filter(value => value !== 'help');
 const SECRET = /\b(?:sk-[A-Za-z0-9_-]{16,}|gsk_[A-Za-z0-9_-]{16,}|bearer\s+[A-Za-z0-9._-]{20,})/i;
@@ -14,20 +15,27 @@ const BRAND = {
   verification: 'Veriff identity verification; eligible clients can edit their full name and resubmit where the secure page permits. UAE client/ID restrictions and security holds remain. Do not promise approval.',
   funding: 'The approved 100% deposit-bonus campaign has a qualifying minimum of US$100 and no maximum deposit amount; bonus funds are non-withdrawable. Confirm other eligibility terms with support. Payment methods and networks must be checked in the secure client dashboard.',
   support: 'https://www.billiondollarfx.com/contact',
-  scope: 'The connected report covers registrations, KYC counts, current status of today-created payment requests, pending withdrawal details, new live MT5 accounts, IB/ticket queues, saved Buddy sessions and SEO publishing state. Live MT5 balances, trading positions, detailed client histories, IB commission statements, private ticket conversations and Google performance metrics are not connected.',
+  countrySeo: 'The primary country learning focus is India (English/Hindi), Pakistan (English/Urdu) and Vietnam (English/Vietnamese), at https://www.billiondollarfx.com/learn . These are educational resources with local official guidance and language/region metadata; they do not establish local brokerage authorization. Country focus is not proof of visitor location, indexing, traffic growth or rankings.',
+  scope: 'The connected report covers registrations, KYC counts, current status of today-created payment requests, pending withdrawal details, new live MT5 accounts, IB/ticket queues, saved Buddy sessions and SEO publishing state. Currently verified BDFX Reports administrators can also list BDFX-owned live client accounts and read per-account live MT5 balance/equity, open positions, provider deal history, registration/KYC status, and stored deposit/withdrawal request history. Each history is paginated and has explicit source coverage. IB commission statements, private ticket conversations, contact/bank/wallet/ID documents and Google performance metrics are not connected to this chat.',
 };
 const TOOLS = [{ type: 'function', name: 'read_bdfx_report', description: 'Read fresh BDFX data. report returns all daily counters; pending_withdrawals returns ten oldest pending/processing requests with names, MT5 references, original-currency amounts, dates and next page; seo returns worker/queue/publication evidence. No mutations.', strict: true,
   parameters: { type: 'object', properties: { topic: { type: 'string', enum: READ_TOPICS }, page: { type: 'integer', minimum: 1, maximum: 999 } }, required: ['topic', 'page'], additionalProperties: false } },
 { type: 'function', name: 'read_bdfx_service_knowledge', description: 'Read approved BDFX service information and the exact connected/missing reporting scope.', strict: true, parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } }];
-function createOperationsAssistant({ env = process.env, query, usage = createUsage({ namespace: 'telegram-ops:', dailyLimit: 60 }), now = () => new Date(), generate } = {}) {
+const PRIVATE_TOOLS = [
+  { type: 'function', name: 'list_bdfx_client_accounts', description: 'Administrators only: list ten newest BDFX-owned live client account references and names per page. No balances or credentials. Use to resolve a client/account before asking for a precise report.', strict: true, parameters: { type: 'object', properties: { page: { type: 'integer', minimum: 1, maximum: 999 } }, required: ['page'], additionalProperties: false } },
+  { type: 'function', name: 'read_bdfx_client_account', description: 'Administrators only: fresh, read-only report for a verified BDFX-owned LIVE CLIENT account. balance is live MT5 state; positions is current MT5 open positions; deals is the MT5 deal history since epoch in provider page order; profile is registration/KYC status; deposits and withdrawals are all stored requests for this account, newest first. Histories have ten rows per page. Currency comes from the BDFX account record; raw MT5 volume is explicitly in MT5 units. Missing data is never zero.', strict: true,
+    parameters: { type: 'object', properties: { login: { type: 'string', pattern: '^[1-9][0-9]{3,11}$' }, section: { type: 'string', enum: SECTIONS }, page: { type: 'integer', minimum: 1, maximum: 999 } }, required: ['login', 'section', 'page'], additionalProperties: false } },
+];
+const PRIVATE_INSTRUCTIONS = `The current requester has a fresh verified administrator role from Telegram, supplied by the trusted workflow. You may use the additional BDFX client reporting tools. Verify the account through those tools; never query an arbitrary server or database. For ambiguous names list accounts and ask which one; do not guess identity. Include the MT5 login, source check time, recorded currency, coverage and next page when relevant. A profile is not full transaction history. Deal pages include balance/credit actions as well as trades, and provider ordering is not guaranteed newest first. Raw MT5 volume units are not lots. If source reports unavailable, say unavailable, never zero. Never describe a deposit/payout request as independently verified bank settlement. Do not expose hidden fields or other-company data.`;
+function createOperationsAssistant({ env = process.env, query, clientRead = createClientReadService(), usage = createUsage({ namespace: 'telegram-ops:', dailyLimit: 60 }), now = () => new Date(), generate } = {}) {
   const key = () => env.BDFX_TELEGRAM_GROQ_API_KEY || env.GROQ_API_KEY;
   const model = () => env.BDFX_TELEGRAM_GROQ_MODEL || MODEL;
   const validKey = () => typeof key() === 'string' && /^gsk_[A-Za-z0-9_-]{16,4092}$/.test(key());
-  const status = () => ({ provider: 'groq', apiBaseUrl: GROQ_BASE_URL, configured: validKey() && env.BDFX_TELEGRAM_AI_ENABLED !== 'false', model: model(), readOnly: true, apiBillingVerified: false, dailyRequestLimit: 60 });
+  const status = () => ({ provider: 'groq', apiBaseUrl: GROQ_BASE_URL, configured: validKey() && env.BDFX_TELEGRAM_AI_ENABLED !== 'false', model: model(), readOnly: true, apiBillingVerified: false, dailyRequestLimit: 60, privateReporting: { requiresCurrentTelegramAdmin: true, sections: SECTIONS } });
   const providerCodes = ['insufficient_quota', 'credit_balance_exhausted', 'project_spend_limit_exceeded', 'organization_spend_limit_exceeded', 'organization_usage_limit_exceeded', 'rate_limit_exceeded', 'rate_limit_reached', 'too_many_requests', 'slow_down'];
   const failure = (category, providerCode) => ({ status: 503, body: { code: 'OPERATIONS_AI_UNAVAILABLE', category, ...(providerCodes.includes(providerCode) ? { providerCode } : {}) } });
   return { status, async reply(body) {
-    if (!body || Object.keys(body).some(k => !['message', 'replyContext'].includes(k)) || typeof body.message !== 'string' || !body.message.trim() || body.message.length > 1000 || (body.replyContext != null && (typeof body.replyContext !== 'string' || body.replyContext.length > 1500))) return { status: 400, body: { code: 'INVALID_OPERATIONS_QUESTION' } };
+    if (!body || Object.keys(body).some(k => !['message', 'replyContext', 'accessContext'].includes(k)) || typeof body.message !== 'string' || !body.message.trim() || body.message.length > 1000 || (body.replyContext != null && (typeof body.replyContext !== 'string' || body.replyContext.length > 1500))) return { status: 400, body: { code: 'INVALID_OPERATIONS_QUESTION' } };
     if (SECRET.test(body.message + ' ' + (body.replyContext || ''))) return { status: 400, body: { code: 'PRIVATE_CREDENTIAL_NOT_ALLOWED' } };
     if (!status().configured) return failure('not_configured');
     let stage = 'usage';
@@ -35,11 +43,15 @@ function createOperationsAssistant({ env = process.env, query, usage = createUsa
       if (!await usage.reserve()) return failure('capacity');
       let run = generate;
       if (!run) run = createGroqGenerate({ apiKey: key() });
+      // accessContext is supplied only by the authenticated n8n service after
+      // getChatMember; role claims in user text or quoted replies do not count.
+      const privateAccess = verifiedAdmin(body.accessContext, now());
+      const tools = privateAccess ? [...TOOLS, ...PRIVATE_TOOLS] : TOOLS;
       const input = [{ role: 'user', content: JSON.stringify({ question: body.message.trim(), quotedEarlierBotReply: body.replyContext || null }) }];
       const usedTopics = [];
       for (let round = 0; round < 4; round++) {
         stage = 'provider';
-        const response = await run({ model: model(), instructions: INSTRUCTIONS, input, tools: TOOLS, tool_choice: round === 0 ? 'required' : 'auto', parallel_tool_calls: false, max_output_tokens: 1600 });
+        const response = await run({ model: model(), instructions: INSTRUCTIONS + (privateAccess ? '\n' + PRIVATE_INSTRUCTIONS : ''), input, tools, tool_choice: round === 0 ? 'required' : 'auto', parallel_tool_calls: false, max_output_tokens: 1600 });
         if (!Array.isArray(response?.output) || response.status === 'incomplete' || response.error) return failure('provider_response');
         const calls = response.output.filter(item => item.type === 'function_call');
         if (!calls.length) {
@@ -58,6 +70,18 @@ function createOperationsAssistant({ env = process.env, query, usage = createUsa
           const generated = new Date(data?.generatedAt);
           if (data?.version !== 1 || data.source !== 'BDFX Telegram operations' || data.topic !== args.topic || data.page !== args.page || !Number.isFinite(generated.getTime()) || Math.abs(now() - generated) > 120000 || typeof data.reply !== 'string' || data.reply.length > 3500) return failure('source');
           usedTopics.push(args.topic);
+        } else if (privateAccess && args && !Array.isArray(args) &&
+          ((call.name === 'list_bdfx_client_accounts' && Object.keys(args).length === 1 && Number.isSafeInteger(args.page) && args.page >= 1 && args.page <= 999)
+          || (call.name === 'read_bdfx_client_account' && Object.keys(args).sort().join(',') === 'login,page,section' && typeof args.login === 'string' && /^[1-9]\d{3,11}$/.test(args.login) && SECTIONS.includes(args.section) && Number.isSafeInteger(args.page) && args.page >= 1 && args.page <= 999 && (!['balance', 'profile'].includes(args.section) || args.page === 1)))) {
+          try {
+            data = call.name === 'list_bdfx_client_accounts' ? await clientRead.list(args.page, body.accessContext) : await clientRead.read(args, body.accessContext);
+            const at = new Date(data?.generatedAt);
+            if (data?.version !== 1 || data.source !== 'BDFX private client reporting' || data.page !== args.page || !Number.isFinite(at.getTime()) || Math.abs(now() - at) > 120000 || (call.name === 'read_bdfx_client_account' && (data.login !== args.login || data.section !== args.section))) return failure('source');
+          } catch (error) {
+            const codes = ['BDFX_ADMIN_REQUIRED', 'BDFX_ACCOUNT_NOT_FOUND', 'MT5_READ_UNAVAILABLE', 'MT5_AUTH_UNAVAILABLE', 'MT5_NOT_CONFIGURED', 'MT5_READ_BUSY', 'MT5_READ_TIMEOUT', 'MT5_ACCOUNT_MISMATCH', 'MT5_SCHEMA_UNVERIFIED'];
+            data = { available: false, code: codes.includes(error?.code) ? error.code : 'CLIENT_SOURCE_UNAVAILABLE', generatedAt: now().toISOString(), instruction: 'The requested data is unavailable. Do not report a zero or infer an outage.' };
+          }
+          usedTopics.push(call.name === 'list_bdfx_client_accounts' ? 'client_accounts' : 'client_' + args.section);
         } else return failure('invalid_tool');
         input.push(...response.output, { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(data) });
       }
