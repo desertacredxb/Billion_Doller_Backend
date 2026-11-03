@@ -22,7 +22,8 @@ function createOperationsAssistant({ env = process.env, query, usage = createUsa
   const key = () => env.BDFX_TELEGRAM_OPENAI_API_KEY || env.OPENAI_API_KEY;
   const model = () => env.BDFX_TELEGRAM_OPENAI_MODEL || MODEL;
   const status = () => ({ provider: 'openai', configured: !!key() && env.BDFX_TELEGRAM_AI_ENABLED !== 'false', model: model(), readOnly: true, apiBillingVerified: false, dailyRequestLimit: 60 });
-  const failure = category => ({ status: 503, body: { code: 'OPERATIONS_AI_UNAVAILABLE', category } });
+  const providerCodes = ['insufficient_quota', 'credit_balance_exhausted', 'project_spend_limit_exceeded', 'organization_spend_limit_exceeded', 'organization_usage_limit_exceeded', 'rate_limit_exceeded', 'rate_limit_reached', 'too_many_requests', 'slow_down'];
+  const failure = (category, providerCode) => ({ status: 503, body: { code: 'OPERATIONS_AI_UNAVAILABLE', category, ...(providerCodes.includes(providerCode) ? { providerCode } : {}) } });
   return { status, async reply(body) {
     if (!body || Object.keys(body).some(k => !['message', 'replyContext'].includes(k)) || typeof body.message !== 'string' || !body.message.trim() || body.message.length > 1000 || (body.replyContext != null && (typeof body.replyContext !== 'string' || body.replyContext.length > 1500))) return { status: 400, body: { code: 'INVALID_OPERATIONS_QUESTION' } };
     if (SECRET.test(body.message + ' ' + (body.replyContext || ''))) return { status: 400, body: { code: 'PRIVATE_CREDENTIAL_NOT_ALLOWED' } };
@@ -60,8 +61,11 @@ function createOperationsAssistant({ env = process.env, query, usage = createUsa
       }
       return failure('tool_limit');
     } catch (error) {
-      const category = stage === 'source' ? 'source' : stage === 'usage' ? 'capacity' : error?.status === 401 ? 'provider_auth' : error?.status === 429 ? 'provider_quota' : error?.status === 404 ? 'provider_model' : /Timeout/.test(error?.name || '') ? 'provider_timeout' : 'provider_request';
-      return failure(category);
+      const code = error?.code || error?.error?.code, type = error?.type || error?.error?.type;
+      const quota = ['insufficient_quota', 'credit_balance_exhausted', 'project_spend_limit_exceeded', 'organization_spend_limit_exceeded', 'organization_usage_limit_exceeded'].includes(code) || type === 'insufficient_quota';
+      const rateLimited = ['rate_limit_exceeded', 'rate_limit_reached', 'too_many_requests', 'slow_down'].includes(code);
+      const category = stage === 'source' ? 'source' : stage === 'usage' ? 'capacity' : error?.status === 401 ? 'provider_auth' : error?.status === 429 ? (quota ? 'provider_quota' : rateLimited ? 'provider_rate_limit' : 'provider_capacity') : error?.status === 404 ? 'provider_model' : /Timeout/.test(error?.name || '') ? 'provider_timeout' : 'provider_request';
+      return failure(category, code);
     }
   } };
 }
