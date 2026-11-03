@@ -18,7 +18,7 @@ function fixture(overrides = {}) {
 }
 test('Groq gets only fixed read-only tools and fresh report evidence, with no provider key in prompts', async () => {
   const { service, requests, reads } = fixture(); const result = await service.reply({ message: 'BDFX mein payout pending kiska hai?' });
-  assert.equal(result.status, 200); assert.equal(result.body.provider, 'groq'); assert.match(result.body.reply, /Groq.*23:30/); assert.deepEqual(result.body.usedTopics, ['pending_withdrawals']);
+  assert.equal(result.status, 200); assert.equal(result.body.provider, 'groq'); assert.match(result.body.reply, /BDFX AI.*23:30/); assert.deepEqual(result.body.usedTopics, ['pending_withdrawals']);
   assert.deepEqual(reads, [{ topic: 'pending_withdrawals', page: 1 }]); assert.equal(requests[0].tool_choice, 'required');
   assert.equal(requests[0].parallel_tool_calls, false); assert.equal(requests[0].model, 'openai/gpt-oss-20b');
   assert.equal(requests[0].tools.every(t => t.strict && t.parameters.additionalProperties === false), true);
