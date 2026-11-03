@@ -2,7 +2,7 @@ const Withdrawal = require('../models/withdrawal');
 const { createDailyReportService } = require('./bdfxDailyReport.service');
 const { formatBdfxDailyReport } = require('../integrations/n8n/bdfx-report-format');
 
-const TOPICS = ['help', 'pending_withdrawals', 'report', 'deposits', 'withdrawals', 'clients', 'kyc', 'buddy', 'mt5', 'ib', 'tickets'];
+const TOPICS = ['help', 'pending_withdrawals', 'report', 'deposits', 'withdrawals', 'clients', 'kyc', 'buddy', 'mt5', 'ib', 'tickets', 'seo'];
 const PAGE_SIZE = 10;
 const clean = (value, size = 60) => typeof value === 'string'
   ? value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, size) : '';
@@ -11,12 +11,26 @@ const dubaiTime = value => new Intl.DateTimeFormat('en-GB', {
 }).format(value);
 const help = 'BDFX REPORTS • HELP\n\nThese are the connected reporting details I can currently show.\nAsk: payout pending kiska hai?\n/pending — pending/processing withdrawal details\n/pending 2 — next page\n/report — full daily report\n/deposits — today’s deposit counts\n/withdrawals — today’s withdrawal counts\n/clients — registrations and KYC counts\n/kyc — current KYC queue counts\n/mt5 — new live accounts today\n/ib — pending IB applications count\n/tickets — open/pending support ticket count\n/buddy — saved Buddy activity\n\nFor an unsupported question, use a command above; unavailable details are not guessed. Questions work in this BDFX Reports group, or as a reply to the bot. This bot reads reports; it cannot approve or execute payments. Bank details, wallet addresses, contact details and passwords are not shared.';
 
-function createTelegramQueryService({ withdrawals = Withdrawal, dailyReport = createDailyReportService(), now = () => new Date() } = {}) {
+function createTelegramQueryService({ withdrawals = Withdrawal, dailyReport = createDailyReportService(), seoStatus = () => require('./blogAutomation.service').status(), now = () => new Date() } = {}) {
   return async function telegramQuery(topic, page = 1) {
     if (!TOPICS.includes(topic) || !Number.isSafeInteger(page) || page < 1 || page > 999 || (topic !== 'pending_withdrawals' && page !== 1)) throw new Error('INVALID_BUSINESS_QUERY');
     const at = now();
     let reply;
-    if (topic === 'help') reply = help;
+    if (topic === 'help') reply = help.replace('/buddy — saved Buddy activity', '/buddy — saved Buddy activity\n/seo — automatic SEO publishing status');
+    else if (topic === 'seo') {
+      const status = await seoStatus();
+      if (typeof status?.enabled !== 'boolean' || !Array.isArray(status.queued) || !Array.isArray(status.recent) || status.cadenceDays !== 7 || !Number.isSafeInteger(status.starterArticles) || status.starterArticles < 0) throw new Error('SEO_STATUS_UNAVAILABLE');
+      const last = new Date(status.lastRunAt);
+      const observed = !!status.lastRunAt && Number.isFinite(last.getTime());
+      const freshness = !status.enabled ? 'Paused' : !observed ? 'Worker has not been observed' : last - at > 30000 ? 'Worker timestamp is unverified' : at - last > 900000 ? 'Worker check is stale; publication needs investigation' : 'Worker check is recent';
+      const time = value => value && Number.isFinite(new Date(value).getTime()) ? `${dubaiTime(new Date(value))} Dubai` : 'not recorded';
+      const lines = ['BDFX • AUTO SEO / BLOG PUBLISHING', `Checked: ${dubaiTime(at)} Dubai`, `Publishing enabled: ${status.enabled ? 'Yes' : 'No'}`, `Worker: ${freshness}`, `Last check: ${time(status.lastRunAt)}`, `Last outcome: ${clean(status.lastOutcome, 40) || 'unrecorded'}`, `Last error: ${status.lastError ? (/^[a-z0-9_]+$/.test(status.lastError) ? status.lastError : 'redacted publication error') : 'none reported'}`, `Cadence: every ${status.cadenceDays} days`, `Starter library: ${status.starterArticles} articles`, `Queued drafts: ${status.queued.length}${status.queued.length === 12 ? '+ (preview limit)' : ''}`, `Next earliest publication: ${time(status.nextPublishAt)}`, '', 'Recent automatic publications:'];
+      for (const article of status.recent.slice(0, 8)) lines.push(`${clean(article.title, 100)} | ${article.status === 'published' ? 'Published' : 'Currently not published'} | ${time(article.lastAutoPublishedAt)}`, `Slug: ${clean(article.slug, 110)}`);
+      if (!status.recent.length) lines.push('No automatic publication recorded.');
+      if (status.queued[0]) lines.push('', `Next queued guide: ${clean(status.queued[0].title, 110)}`);
+      lines.push('', 'This is a finite educational starter series. Existing editorial SEO fields are preserved; empty metadata fields are completed on save. Publication does not prove Google indexing, rankings or traffic. Search Console/GA4 performance is not connected to this report.');
+      reply = lines.join('\n');
+    }
     else if (topic === 'pending_withdrawals') {
       const query = withdrawals.aggregate([
         { $match: { status: { $in: ['Pending', 'Processing'] } } },
