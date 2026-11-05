@@ -1,0 +1,39 @@
+{
+  "status": "draft_not_submitted_or_approved",
+  "business": "Billion Dollar FX",
+  "sender": "441157911131",
+  "tenantId": "358063",
+  "language": "en",
+  "proposedCategory": "UTILITY",
+  "templates": [
+    {
+      "name": "bdfx_account_welcome_v1",
+      "trigger": "A new account was successfully created; ongoing account-update consent and phone verification are confirmed.",
+      "body": "Your Billion Dollar FX account has been created. Sign in to continue your account setup. If you need help, contact BDFX support. Reply STOP to stop WhatsApp account updates.",
+      "buttonLabel": "View account",
+      "buttonUrl": "https://www.billiondollarfx.com/login"
+    },
+    {
+      "name": "bdfx_verification_reminder_v1",
+      "trigger": "The consenting account holder has incomplete verification at dispatch time; no reminder has already been accepted for this verification attempt.",
+      "body": "Identity verification for your Billion Dollar FX account still needs to be completed. Sign in to continue or view your current status. If you have already submitted your details, check your account for an update. Reply STOP to stop WhatsApp account updates.",
+      "buttonLabel": "View account",
+      "buttonUrl": "https://www.billiondollarfx.com/login"
+    },
+    {
+      "name": "bdfx_verification_update_v1",
+      "trigger": "The persisted verification state actually changed after a verified provider decision or an authorised existing review action; one event per account and state version.",
+      "body": "There is an update to identity verification for your Billion Dollar FX account. Sign in to view the latest status and any action required. Reply STOP to stop WhatsApp account updates.",
+      "buttonLabel": "View account",
+      "buttonUrl": "https://www.billiondollarfx.com/login"
+    }
+  ],
+  "activationRequirements": [
+    "Verify the WATI business, tenant and exact BDFX +44 sender before submitting.",
+    "Obtain actual provider approval for each exact template and language. This manifest is not an API request or evidence of approval.",
+    "Implement and persist separate, optional ongoing WhatsApp account-update consent. OTP consent and email marketing consent do not establish it.",
+    "Implement a durable, idempotent outbox, recheck consent and verified phone immediately before dispatch, and hold ambiguous sends.",
+    "Implement STOP withdrawal and suppress pending messages before enabling these templates.",
+    "Verify acceptance and actual delivery using a consenting test recipient before enabling customer delivery."
+  ]
+}
