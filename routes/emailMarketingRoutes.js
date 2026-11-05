@@ -2,7 +2,8 @@ const express = require("express");
 const auth = require("../middleware/authMiddleware");
 const access = require("../middleware/accessControl");
 const service = require("../services/emailMarketing.service");
-function createRouter({ authentication = auth, principal = access.principal, owner = access.owner, campaign = service } = {}) {
+const ownerTest = require("../services/ownerEmailTest.service");
+function createRouter({ authentication = auth, principal = access.principal, owner = access.owner, campaign = service, deliveryTest = ownerTest } = {}) {
   const router = express.Router();
   router.use((_req, res, next) => { res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow" }); next(); });
   // GET never changes consent: mail security scanners routinely follow links.
@@ -18,6 +19,17 @@ function createRouter({ authentication = auth, principal = access.principal, own
   });
   router.get("/report", authentication, principal, owner, async (_req, res) => {
     try { res.json(await campaign.status()); } catch { res.status(503).json({ message: "Email marketing status is temporarily unavailable." }); }
+  });
+  router.get("/delivery-test", authentication, principal, owner, async (req, res) => {
+    try { res.json(await deliveryTest.status(req.principal)); }
+    catch { res.status(503).json({ message: "Delivery test status is temporarily unavailable." }); }
+  });
+  router.post("/delivery-test", authentication, principal, owner, async (req, res) => {
+    if (!req.body || Object.keys(req.body).length !== 1 || typeof req.body.requestId !== "string" || !ownerTest.UUID.test(req.body.requestId)) {
+      return res.status(400).json({ message: "A valid delivery test reference is required." });
+    }
+    try { res.json(await deliveryTest.sendTest(req.principal, req.body.requestId)); }
+    catch { res.status(503).json({ message: "Delivery test could not be confirmed. Refresh its status before trying again." }); }
   });
   router.patch("/state", authentication, principal, owner, async (req, res) => {
     if (typeof req.body?.paused !== "boolean" || Object.keys(req.body).some(k => k !== "paused")) return res.status(400).json({ message: "Choose pause or resume." });
