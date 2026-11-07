@@ -105,6 +105,7 @@ const startServer = async () => {
   // Durable weekly queue. Failure is isolated from authentication/payments.
   require("./services/blogAutomation.service").start();
   require("./services/emailMarketing.service").start();
+  require("./controllers/veriffController").startApprovalReconciliation();
 };
 
 startServer();
