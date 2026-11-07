@@ -6,6 +6,7 @@ const { isUae, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision
 
 const { reasonMessage } = require("../utils/veriffReasons");
 const PRIVATE_FIELDS = "+veriff.reference +veriff.sessionUrl +veriff.integrationKeyHash +kycManualReview";
+const APPROVAL_BATCH_SIZE = 12;
 const ownerId = req => req.user?.id || req.user?.userId;
 // Provider failure codes must not hide client correction/reverification actions.
 // A new attempt still needs its own signed approval; explicit BDFX holds remain.
@@ -45,10 +46,10 @@ const publicStatus = (user, enabled) => ({
   } : {}),
 });
 
-function createController({ users = User, veriff = provider, syncIB = ibApproval.syncUser } = {}) {
+function createController({ users = User, veriff = provider, syncIB = ibApproval.syncUser, logger = console } = {}) {
   const reasonLookups = new Map();
   const decisionLookups = new Map();
-  async function withLatestApproval(user, force = false) {
+  async function withLatestApproval(user, { force = false, onFailure } = {}) {
     const current = user.veriff;
     if (user.isKycVerified || user.kycProvider !== "veriff" || !current?.sessionId ||
         user.kycManualReview?.sessionId === current.sessionId) return user;
@@ -68,8 +69,10 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       const outcome = decisionOutcome(decision, user, config, duplicate);
       // Refreshing a signed approval never manufactures a review decision or overrides an owner review.
       if (!outcome.approved) return user;
-      const updated = await users.findOneAndUpdate({ _id: user._id, isKycVerified: false,
+      const updated = await users.findOneAndUpdate({ _id: user._id, isKycVerified: false, isVerified: true, kycProvider: "veriff",
+        phone: user.phone, nationality: user.nationality ?? null, residenceCountry: user.residenceCountry,
         "veriff.reference": current.reference, "veriff.sessionId": current.sessionId, "veriff.revision": current.revision,
+        "veriff.mode": current.mode, "veriff.integrationKeyHash": current.integrationKeyHash,
       }, { $set: { "veriff.status": outcome.status, "veriff.message": outcome.message,
         "veriff.reasonCode": decision.reasonCode, "veriff.decisionAt": new Date(decision.timestamp),
         isKycVerified: true, hasSubmittedDocuments: true,
@@ -78,7 +81,60 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       // An IB transaction is separate; a failure must not misreport committed identity approval.
       try { await syncIB(updated._id); } catch { /* A provider retry or IB action can reconcile this. */ }
       return updated;
-    } catch (error) { if (force) throw error; return user; }
+    } catch (error) {
+      if (force) throw error;
+      onFailure?.();
+      return user;
+    }
+  }
+
+  async function reconcilePendingApprovals(afterId = null) {
+    const config = veriff.getConfig();
+    if (config.mode !== "live") return { scanned: 0, applied: 0, unavailable: 0, afterId: null };
+    const candidates = await users.find({
+      ...(afterId ? { _id: { $lt: afterId } } : {}),
+      kycProvider: "veriff", isVerified: true, isKycVerified: false, kycManualReview: null,
+      "veriff.mode": "live", "veriff.integrationKeyHash": config.keyHash,
+      "veriff.status": { $in: ["created", "review", "resubmission_requested", "declined"] },
+      "veriff.sessionId": { $type: "string", $ne: "" },
+      "veriff.reference": { $type: "string", $ne: "" },
+    }).select(PRIVATE_FIELDS).sort({ _id: -1 }).limit(APPROVAL_BATCH_SIZE + 1);
+    const batch = candidates.slice(0, APPROVAL_BATCH_SIZE);
+    let unavailable = 0;
+    const eligible = batch.filter(user => user.veriff.status === "created" || canEditDetails(user));
+    const results = await Promise.all(eligible.map(user => withLatestApproval(user, {
+      onFailure: () => { unavailable++; },
+    })));
+    return {
+      scanned: batch.length,
+      applied: results.filter(user => user.isKycVerified).length,
+      unavailable,
+      // Visit the next accounts even when the newest batch still awaits Veriff.
+      afterId: candidates.length > APPROVAL_BATCH_SIZE ? batch.at(-1)._id : null,
+    };
+  }
+
+  function startApprovalReconciliation() {
+    if (!veriff.isEnabled()) return;
+    let afterId = null, running = false, previous;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const result = await reconcilePendingApprovals(afterId);
+        afterId = result.afterId;
+        const outcome = `scanned=${result.scanned}, applied=${result.applied}, unavailable=${result.unavailable}`;
+        if (outcome !== previous || result.applied) logger.info(`Veriff approval recovery: ${outcome}`);
+        previous = outcome;
+      } catch {
+        if (previous !== "unavailable") logger.warn("Veriff approval recovery unavailable.");
+        previous = "unavailable";
+      } finally { running = false; }
+    };
+    const timer = setInterval(tick, 60000);
+    timer.unref();
+    void tick();
+    return timer;
   }
   async function withReason(user) {
     const current = user.veriff;
@@ -123,7 +179,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       if (found.kycProvider !== "veriff" || found.veriff?.sessionId !== req.body.sessionId || found.veriff?.revision !== req.body.expectedRevision) {
         return res.status(409).json({ message: "Verification session changed. Refresh the client record." });
       }
-      const user = await withLatestApproval(found, true);
+      const user = await withLatestApproval(found, { force: true });
       if (user.isKycVerified && !found.isKycVerified) { req.auditEvent = "kyc:provider-synced"; req.auditTargetId = String(user._id); }
       return res.json({ approved: !!user.isKycVerified,
         message: user.isKycVerified ? "Identity verified from the current signed Veriff approval." : "No eligible Veriff approval was applied. The existing review or verification status is unchanged.",
@@ -249,7 +305,8 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
   async function decisionWebhook(req, res) {
     try {
       const config = veriff.getConfig();
-      if (!veriff.authenticateWebhook(req.body, req.headers, config)) {
+      if (!veriff.authenticateWebhook(req.body, req.headers, config,
+        reason => logger.warn(`Veriff decision webhook authentication rejected: ${reason}`))) {
         return res.status(401).json({ message: "Invalid webhook authentication" });
       }
       let payload;
@@ -294,7 +351,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       return res.status(error.status === 503 ? 503 : 500).json({ message: "Unable to process verification decision" });
     }
   }
-  return { getStatus, syncStatus, updateDetails, startSession, decisionWebhook };
+  return { getStatus, syncStatus, updateDetails, startSession, decisionWebhook, reconcilePendingApprovals, startApprovalReconciliation };
 }
 
 module.exports = { ...createController(), createController };

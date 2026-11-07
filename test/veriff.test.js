@@ -140,6 +140,52 @@ test("status refresh reconciles an existing review from the same authenticated l
   assert.equal(state.user.isKycVerified, true); assert.equal(state.writes, 1);
 });
 
+test("background recovery applies a signed current decision after the webhook is rejected", async () => {
+  const axios = require("axios"), original = axios.get;
+  let lookups = 0;
+  const setup = controllerFor(account(), {
+    config: { apiUrl: "https://example.veriff.com/v1/sessions" },
+    getDecision: service.getDecision,
+    syncIB: async () => {},
+  });
+  setup.model.find = () => ({ select() { return this; }, sort() { return this; },
+    limit: async () => setup.state.user.isKycVerified ? [] : [structuredClone(setup.state.user)] });
+  axios.get = async (url, options) => {
+    lookups++;
+    assert.equal(url, `https://example.veriff.com/v1/sessions/${sessionId}/decision`);
+    assert.equal(options.headers["X-AUTH-CLIENT"], config.apiKey);
+    const data = JSON.stringify(fixture());
+    return { data, headers: { "x-auth-client": config.apiKey,
+      "x-hmac-signature": crypto.createHmac("sha256", config.sharedSecret).update(data).digest("hex") } };
+  };
+  try {
+    const badWebhook = signedRequest(); badWebhook.headers["x-hmac-signature"] = "0".repeat(64);
+    const rejected = response(); await setup.controller.decisionWebhook(badWebhook, rejected);
+    assert.equal(rejected.code, 401); assert.equal(setup.state.writes, 0);
+    assert.deepEqual(await setup.controller.reconcilePendingApprovals(), { scanned: 1, applied: 1, unavailable: 0, afterId: null });
+    assert.equal(setup.state.user.isKycVerified, true);
+    assert.deepEqual(await setup.controller.reconcilePendingApprovals(), { scanned: 0, applied: 0, unavailable: 0, afterId: null });
+    assert.equal(lookups, 1); assert.equal(setup.state.writes, 1);
+  } finally { axios.get = original; }
+});
+
+test("background recovery skips a BDFX hold and advances beyond a full batch", async () => {
+  let lookups = 0, filter;
+  const setup = controllerFor(account(), { getDecision: async () => { lookups++; return null; } });
+  const rows = Array.from({ length: 13 }, (_, i) => ({ ...account(), _id: String(20 - i) }));
+  Object.assign(rows[0].veriff, { status: "review", message: "BDFX security hold" });
+  setup.model.find = query => {
+    filter = query;
+    return { select() { return this; }, sort() { return this; }, limit: async size => rows.slice(0, size) };
+  };
+  const first = await setup.controller.reconcilePendingApprovals();
+  assert.equal(first.scanned, 12); assert.equal(first.afterId, "9");
+  assert.equal(lookups, 11); assert.equal(setup.state.writes, 0);
+  assert.equal(filter.kycManualReview, null);
+  await setup.controller.reconcilePendingApprovals(first.afterId);
+  assert.deepEqual(filter._id, { $lt: "9" });
+});
+
 test("approval refresh preserves manual decisions, session ownership, country and duplicate-phone checks", async () => {
   const approved = normalizeDecision(fixture(), "decision");
   const cases = [

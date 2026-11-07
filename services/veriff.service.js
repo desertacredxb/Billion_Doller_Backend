@@ -54,13 +54,19 @@ function constantEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function authenticateWebhook(rawBody, headers, config) {
-  if (!Buffer.isBuffer(rawBody) ||
-      !constantEqual(headers["x-auth-client"], config.apiKey) ||
-      typeof headers["x-hmac-signature"] !== "string" ||
-      !/^[a-f0-9]{64}$/i.test(headers["x-hmac-signature"])) return false;
-  const expected = crypto.createHmac("sha256", config.sharedSecret).update(rawBody).digest("hex");
-  return constantEqual(expected, headers["x-hmac-signature"].toLowerCase());
+function authenticateWebhook(rawBody, headers, config, onReject) {
+  const signature = headers["x-hmac-signature"];
+  let reason;
+  if (!Buffer.isBuffer(rawBody)) reason = "raw_body_unavailable";
+  else if (!constantEqual(headers["x-auth-client"], config.apiKey)) reason = "integration_key_mismatch";
+  else if (typeof signature !== "string" || !/^[a-f0-9]{64}$/i.test(signature)) reason = "invalid_signature_header";
+  else {
+    const expected = crypto.createHmac("sha256", config.sharedSecret).update(rawBody).digest("hex");
+    if (constantEqual(expected, signature.toLowerCase())) return true;
+    reason = "signature_mismatch";
+  }
+  onReject?.(reason);
+  return false;
 }
 
 async function createSession(reference, config) {
