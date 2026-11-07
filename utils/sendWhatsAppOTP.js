@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { profileFor, releaseEnabled, inspectWatiReadiness } = require("../services/watiOtpReadiness.service");
 
 function configuration(env = process.env) {
   return {
@@ -10,9 +11,7 @@ function configuration(env = process.env) {
 }
 function isConfigured(env = process.env) {
   if (env.WHATSAPP_OTP_PROVIDER === "wati") {
-    return typeof env.WATI_API_TOKEN === "string" && !!env.WATI_API_TOKEN.trim()
-      && env.WATI_OTP_TEMPLATE_NAME === "bdfx_registration_otp"
-      && env.WATI_TENANT_ID === "358063" && env.WATI_CHANNEL_NUMBER === "441157911131";
+    return releaseEnabled(profileFor(env), env);
   }
   if (env.WHATSAPP_OTP_PROVIDER && env.WHATSAPP_OTP_PROVIDER !== "teleobi") return false;
   return Object.values(configuration(env)).every(value => typeof value === "string" && value.trim());
@@ -22,10 +21,14 @@ function createSender({ http = axios, env = process.env } = {}) {
     if (!isConfigured(env) || !/^\+[1-9]\d{6,14}$/.test(phone) || !/^\d{6}$/.test(code)) return { success: false };
     if (env.WHATSAPP_OTP_PROVIDER === "wati") {
       try {
+        const profile = profileFor(env);
+        // The new sender stays gated off by default. Recheck its own WABA/template
+        // before every send; a default-account approval must never unlock it.
+        if (profile.staged && !(await inspectWatiReadiness({ http, env })).canSend) return { success: false };
         const response = await http.post("https://live-mt-server.wati.io/358063/api/v1/sendTemplateMessage", {
           template_name: env.WATI_OTP_TEMPLATE_NAME,
           broadcast_name: "bdfx_registration_otp",
-          channel_number: "441157911131",
+          channel_number: profile.channel,
           parameters: [{ name: "1", value: code }],
         }, {
           params: { whatsappNumber: phone.slice(1) },
@@ -48,4 +51,4 @@ function createSender({ http = axios, env = process.env } = {}) {
     } catch { return { success: false }; }
   };
 }
-module.exports = Object.assign(createSender(), { isConfigured, createSender });
+module.exports = Object.assign(createSender(), { isConfigured, createSender, inspectWatiReadiness });

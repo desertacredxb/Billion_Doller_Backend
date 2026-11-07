@@ -1,5 +1,57 @@
 # Email and WhatsApp registration verification
 
+## Prepared +1236 sender profile — 27 October 2026
+
+The owner requested backend preparation for registration OTP from **+12363059090**,
+with the next activation instructions to follow. This is a staged addition; it
+does not replace the working UK sender, change production secrets/enforcement,
+or activate client greetings/activity reports.
+
+Current source evidence: WATI's exact +1236 template list shows
+`bdfx_registration_otp` (English, Authentication, Copy code, five-minute expiry)
+as **Draft**. Submission from that selected number failed with:
+"Cannot Create Message Template! This WhatsApp business account does not have
+permission to create message template". An approval in the default UK account
+does not approve the +1236 copy. The separate `account_registration_otp_v1`
+API submission is also not evidence of approval for +1236; it is not selected
+by this adapter. WATI/Meta must resolve the exact account's eligibility or
+permission before activation. No approval time is promised.
+
+The staged profile is in `config/whatsapp-otp-plus1236.env.example` with its
+activation switches off. It is not a production environment replacement. A
+new `WATI_PLUS1236_OTP_ENABLED=true` release gate is required in addition to
+the existing registration-enforcement setting. The existing UK profile keeps
+its current behavior. Only these two exact sender numbers, tenant `358063`
+and `bdfx_registration_otp` are accepted; arbitrary request-body routing is
+not supported.
+
+Before every +1236 send, the adapter reads the actual enabled phone inventory
+and the template inventory filtered to that exact sender. It requires WABA
+`1446367963604978`, an approved English Authentication template and the
+expected single-code, security-disclaimer and five-minute Copy code contract.
+Missing/ambiguous data, HTTP/auth failures, Draft/Pending/rejected templates,
+wrong routing or changed template fields prevent a send. It does not fall
+back to the UK/default sender, session text, another template or SMS. Reads
+and sends use bounded timeouts and no redirects; errors expose no provider
+payload, OTP or bearer token. No new token or permissions are created.
+
+With the intended environment supplied securely on the existing host, run
+`node scripts/checkWhatsAppOtpReadiness.js` for a **read-only** readiness
+result. It prints only fixed status fields and the configured sender/template;
+it never sends an OTP or registers a client. `readyForActivation` means the
+observed source prerequisites passed; `canSend` additionally requires the
+release gate. Neither proves actual message delivery. Existing token access
+must permit the sender/template reads and template sending; if those reads
+are forbidden, resolve only the missing access instead of bypassing checks.
+
+The existing email-first registration, hashed codes, five-minute expiry,
+15-minute session, three-send/five-attempt limits, cooldown, duplicate identity
+protection and matching-code activation remain unchanged. WATI acceptance
+only records `accepted`; only the client's matching code proves phone access.
+Tests use synthetic recipients/codes and mocked provider data. Real +1236
+delivery and a full registration test remain pending until approval and the
+owner's activation instruction.
+
 ## WATI migration checkpoint — 21 October 2026
 
 The owner selected WATI tenant 358063 and confirmed +441157911131 for BDFX OTP; Master Trader is separate. `bdfx_registration_otp` (English, Authentication, five-minute expiry, Copy code) was submitted through WATI and showed Pending. Submission is not approval or delivery.
