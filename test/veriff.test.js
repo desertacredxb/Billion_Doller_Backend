@@ -169,21 +169,30 @@ test("background recovery applies a signed current decision after the webhook is
   } finally { axios.get = original; }
 });
 
-test("background recovery skips a BDFX hold and advances beyond a full batch", async () => {
+test("background recovery leaves completed decisions and BDFX holds outside the sweep", async () => {
   let lookups = 0, filter;
   const setup = controllerFor(account(), { getDecision: async () => { lookups++; return null; } });
   const rows = Array.from({ length: 13 }, (_, i) => ({ ...account(), _id: String(20 - i) }));
   Object.assign(rows[0].veriff, { status: "review", message: "BDFX security hold" });
+  const approved = { ...account(), _id: "22", isKycVerified: true };
+  approved.veriff.status = "approved";
+  const declined = { ...account(), _id: "21" };
+  declined.veriff.status = "declined";
+  rows.unshift(approved, declined);
   setup.model.find = query => {
     filter = query;
-    return { select() { return this; }, sort() { return this; }, limit: async size => rows.slice(0, size) };
+    return { select() { return this; }, sort() { return this; }, limit: async size => rows.filter(user =>
+      user.isKycVerified === query.isKycVerified && query["veriff.status"].$in.includes(user.veriff.status) &&
+      (!query._id || Number(user._id) < Number(query._id.$lt))).slice(0, size) };
   };
   const first = await setup.controller.reconcilePendingApprovals();
   assert.equal(first.scanned, 12); assert.equal(first.afterId, "9");
   assert.equal(lookups, 11); assert.equal(setup.state.writes, 0);
   assert.equal(filter.kycManualReview, null);
-  await setup.controller.reconcilePendingApprovals(first.afterId);
+  const second = await setup.controller.reconcilePendingApprovals(first.afterId);
   assert.deepEqual(filter._id, { $lt: "9" });
+  assert.deepEqual(second, { scanned: 1, applied: 0, unavailable: 0, afterId: null });
+  assert.equal(lookups, 12); assert.equal(setup.state.writes, 0);
 });
 
 test("approval refresh preserves manual decisions, session ownership, country and duplicate-phone checks", async () => {

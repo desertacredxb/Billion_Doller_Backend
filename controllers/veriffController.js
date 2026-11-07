@@ -95,7 +95,7 @@ function createController({ users = User, veriff = provider, syncIB = ibApproval
       ...(afterId ? { _id: { $lt: afterId } } : {}),
       kycProvider: "veriff", isVerified: true, isKycVerified: false, kycManualReview: null,
       "veriff.mode": "live", "veriff.integrationKeyHash": config.keyHash,
-      "veriff.status": { $in: ["created", "review", "resubmission_requested", "declined"] },
+      "veriff.status": { $in: ["created", "review", "resubmission_requested"] },
       "veriff.sessionId": { $type: "string", $ne: "" },
       "veriff.reference": { $type: "string", $ne: "" },
     }).select(PRIVATE_FIELDS).sort({ _id: -1 }).limit(APPROVAL_BATCH_SIZE + 1);
