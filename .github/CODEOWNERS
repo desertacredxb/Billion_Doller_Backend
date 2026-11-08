@@ -1,0 +1,14 @@
+# BDFX KYC lock and approval files
+/.github/CODEOWNERS @desertacredxb
+/.github/bdfx-kyc-lock.cjs @desertacredxb
+/.github/workflows/ @desertacredxb
+/controllers/manualKycController.js @desertacredxb
+/controllers/veriffController.js @desertacredxb
+/models/KycReview.js @desertacredxb
+/models/schemas/veriff.schema.js @desertacredxb
+/routes/veriffRoutes.js @desertacredxb
+/services/ibAutoApproval.service.js @desertacredxb
+/services/veriff.service.js @desertacredxb
+/services/veriffReadiness.service.js @desertacredxb
+/utils/veriffPolicy.js @desertacredxb
+/utils/veriffReasons.js @desertacredxb

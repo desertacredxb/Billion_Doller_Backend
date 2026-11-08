@@ -21,6 +21,20 @@ jobs:
         with:
           node-version: '22.x'
           cache: npm
+      - name: Enforce owner-approved BDFX KYC lock
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          lock=.github/bdfx-kyc-lock.cjs
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            if git cat-file -e "$BASE_SHA:$lock" 2>/dev/null; then
+              git diff --exit-code --name-only "$BASE_SHA" HEAD -- "$lock" .github/CODEOWNERS .github/workflows/security-checks.yml
+              git show "$BASE_SHA:$lock" > "$RUNNER_TEMP/bdfx-kyc-lock.cjs"
+              lock="$RUNNER_TEMP/bdfx-kyc-lock.cjs"
+            fi
+          fi
+          node "$lock"
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm test
       - run: npm audit --audit-level=moderate
