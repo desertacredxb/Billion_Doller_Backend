@@ -1,10 +1,12 @@
 # Owner manual KYC review
 
-Owners can record a manual approval or rejection for a submitted live Veriff session from Users. They must review the documents and provider result, confirm that review, and enter a reason. Managers cannot use this endpoint. After the owner review commits, an existing Veriff-managed IB application is automatically rechecked. Approval explicitly reconsiders an earlier rejection and grants IB access only if the normal eligibility checks pass. Rejection synchronizes IB access without reconsidering earlier rejections. No IB application is created by KYC review, and no financial transaction is initiated.
+In Users, owners can record an independent approval after checking an original photo ID and matching it to the client. The review records the document issuing country, internal evidence reference, reviewer, date and reason. This source works before a Veriff session or decision exists. The owner can also record a rejection of a previous independent approval. The verified account, residence, UAE restrictions and unique-mobile checks apply to approval.
+
+Owners can also review a submitted live Veriff case using the submitted documents and provider result. Veriff-based approval still reconsiders an existing IB application under the established eligibility rules. Independent approval applies to client KYC. The existing opt-in live identity check remains available for an IB application.
 
 The user flag and permanent KycReview record commit in one MongoDB transaction. The record includes the reviewer, reason, timestamp and original provider outcome. Review details are not exposed in client profile responses. The current provider session revision prevents stale reviews from overwriting concurrent decisions.
 
-Veriff's original outcome stays intact. A later webhook for the same session preserves the owner's explicit decision. Manually rejected clients cannot discard the review by starting another verification. UAE eligibility exclusions, email verification, duplicate-mobile checks and live submitted-document requirements remain enforced.
+The review source and any linked Veriff outcome are stored separately. A later signed callback preserves an active owner decision. Manually rejected clients must contact support for further review. For independent review, the client ID and reviewed account timestamp protect against stale submissions.
 
 No customer was approved during implementation or testing. Tests use synthetic records, a fake mail transport and rollback simulation. Production transaction availability and collection creation must succeed before a real review is committed; storage errors return a failure without confirming approval.
 

@@ -652,16 +652,35 @@ test("decision refresh validates the response signature, approval code and saved
   } finally { axios.get = original; }
 });
 
-test("a provider webhook retains the owner's recorded manual decision for the reviewed session", async () => {
-  for (const approved of [true, false]) {
-    const user = account(); user.kycManualReview = { sessionId, approved };
-    const { controller, state } = controllerFor(user); const res = response();
-    await controller.decisionWebhook(signedRequest(fixture({ status: approved ? "declined" : "approved", reasonCode: approved ? 501 : null })), res);
-    assert.equal(res.code, 200); assert.equal(state.user.isKycVerified, approved); assert.equal(state.user.veriff.status, approved ? "declined" : "approved");
+test("a provider webhook records its outcome and retains the owner's active decision", async () => {
+  for (const review of [{ sessionId }, { source: "owner_documents" }]) {
+    for (const approved of [true, false]) {
+      const user = account(); user.kycManualReview = { ...review, approved };
+      const { controller, state } = controllerFor(user); const res = response();
+      await controller.decisionWebhook(signedRequest(fixture({ status: approved ? "declined" : "approved", reasonCode: approved ? 501 : null })), res);
+      assert.equal(res.code, 200); assert.equal(state.user.isKycVerified, approved); assert.equal(state.user.veriff.status, approved ? "declined" : "approved");
+    }
   }
 });
 test("a manually rejected client cannot restart verification to discard the owner's decision", async () => {
   const user = account(); user.kycManualReview = { sessionId, approved: false };
   const { controller } = controllerFor(user); const res = response(); await controller.startSession({ user: { id: "user-1" }, body: {} }, res); assert.equal(res.code, 409);
   const view = response(); await controller.getStatus({ user: { id: "user-1" } }, view); assert.equal(view.data.status, "manual_rejected"); assert.equal(view.data.canRetry, false);
+});
+
+test("independent KYC stays verified until the client explicitly starts a fresh IB check", async t => {
+  t.mock.method(require("../services/ibAutoApproval.service"), "isEnabled", () => true);
+  const user = account();
+  user.isKycVerified = true;
+  user.kycManualReview = { source: "owner_documents", approved: true };
+  user.veriff.status = "declined";
+  const { controller, state } = controllerFor(user, { config: { callbackUrl: "https://www.billiondollarfx.com/verify-identity" } });
+  const client = { id: user._id };
+  const view = response(); await controller.getStatus({ user: client }, view);
+  assert.equal(view.data.approved, true); assert.equal(view.data.managedByVeriff, false);
+  const current = response(); await controller.startSession({ user: client, body: {} }, current);
+  assert.equal(current.data.approved, true); assert.equal(state.writes, 0);
+  const started = response(); await controller.startSession({ user: client, body: { purpose: "ib" } }, started);
+  assert.equal(started.code, 201); assert.equal(started.data.approved, false);
+  assert.notEqual(state.user.veriff.reference, reference);
 });
