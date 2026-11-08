@@ -2,12 +2,12 @@ const { randomBytes } = require("node:crypto");
 const User = require("../models/User");
 const IB = require("../models/Broker.model");
 const provider = require("./veriff.service");
-const { isUae, phonePattern } = require("../utils/veriffPolicy");
+const { activeManualReview, isUae, phonePattern } = require("../utils/veriffPolicy");
 
 const isEnabled = () => provider.isEnabled() && process.env.VERIFF_IB_AUTO_APPROVAL === "true";
 
 function verifiedForIB(user, config, duplicateMobile) {
-  const manualIdentityApproved = user.kycManualReview?.approved === true &&
+  const manualIdentityApproved = user.kycManualReview?.approved === true && user.kycManualReview.source !== "owner_documents" &&
     user.kycManualReview.sessionId === user.veriff?.sessionId && user.kycManualReview.reviewId &&
     user.kycManualReview.reviewerId && user.kycManualReview.reviewedAt;
   return !!(user.isVerified && user.isKycVerified && user.kycProvider === "veriff" &&
@@ -24,9 +24,11 @@ function eligibilityReason(user, config, duplicateMobile) {
   if (!phonePattern(user.phone)) return { reasonCode: "phone_invalid", statusReason: "Add a valid mobile number with its country code in your profile." };
   if (duplicateMobile) return { reasonCode: "phone_duplicate", statusReason: "This mobile number is already registered on another account. Contact WhatsApp support to resolve it." };
   if (verifiedForIB(user, config, false)) return null;
-  if (user.kycManualReview?.approved === false && user.kycManualReview.sessionId === user.veriff?.sessionId) return { reasonCode: "identity_manual_review", statusReason: "Your identity was not approved during the support review. Check the identity verification page for the review reason and contact WhatsApp support." };
-  if (user.veriff?.status === "declined") return { reasonCode: "identity_declined", statusReason: require("../utils/veriffReasons").reasonMessage(user.veriff.reasonCode) };
-  if (user.veriff?.mode === "test" || config.mode !== "live") return { reasonCode: "identity_test", statusReason: "Live identity verification is required; a test verification cannot approve an IB application." };
+  const review = activeManualReview(user);
+  if (review?.approved === false) return { reasonCode: "identity_manual_review", statusReason: "Your identity was not approved during the support review. Check the identity verification page for the review reason and contact WhatsApp support." };
+  const independentlyApproved = user.isKycVerified && review?.source === "owner_documents";
+  if (!independentlyApproved && user.veriff?.status === "declined") return { reasonCode: "identity_declined", statusReason: require("../utils/veriffReasons").reasonMessage(user.veriff.reasonCode) };
+  if ((!independentlyApproved && user.veriff?.mode === "test") || config.mode !== "live") return { reasonCode: "identity_test", statusReason: "Live identity verification is required; a test verification cannot approve an IB application." };
   return { reasonCode: "identity_required", statusReason: "Complete live identity verification, or ask support to review your submitted ID. Then apply again to have your eligibility checked automatically." };
 }
 
@@ -59,7 +61,8 @@ function createService({ users = User, brokers = IB, enabled = isEnabled,
       const reason = eligibilityReason(user, config, duplicateMobile);
       const eligible = !reason;
       if (!eligible) {
-        const rejected = user.veriff?.status === "declined" || reason.reasonCode === "identity_manual_review" || isUae(user.residenceCountry) || isUae(user.nationality);
+        const rejected = (user.veriff?.status === "declined" && reason.reasonCode !== "identity_required")
+          || reason.reasonCode === "identity_manual_review" || isUae(user.residenceCountry) || isUae(user.nationality);
         const status = rejected ? "rejected" : "pending";
         if (broker.status !== status || broker.referralCode || broker.statusReason !== reason.statusReason) {
           await brokers.updateOne({ _id: broker._id, approvalProvider: "veriff" }, {

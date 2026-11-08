@@ -1,6 +1,12 @@
 const DECISIONS = new Set(["approved", "declined", "resubmission_requested", "review", "expired", "abandoned"]);
 const TERMINAL = new Set(["approved", "test_approved", "declined", "expired", "abandoned"]);
 
+function activeManualReview(user) {
+  const review = user.kycManualReview;
+  return review && (review.source === "owner_documents" ||
+    (review.sessionId && review.sessionId === user.veriff?.sessionId)) ? review : null;
+}
+
 function isUae(value) {
   const normalized = typeof value === "string" ? value.toUpperCase().replace(/[^A-Z]/g, "") : "";
   return ["AE", "ARE", "UAE", "UNITEDARABEMIRATES"].includes(normalized);
@@ -77,4 +83,4 @@ function isStaleDecision(decision, current) {
   return TERMINAL.has(current?.status) && !TERMINAL.has(decision.status);
 }
 
-module.exports = { isUae, normalizePhone, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision };
+module.exports = { activeManualReview, isUae, normalizePhone, phonePattern, normalizeDecision, decisionOutcome, isStaleDecision };

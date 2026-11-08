@@ -12,8 +12,11 @@ function fixture({ duplicate = false, failLog = false, failIB = false, patch = {
   let entries = [], sent = 0, ibCalls = [];
   const query = value => ({ select() { return this; }, session: async () => value });
   const users = { findOne: () => query(structuredClone(user)), exists: () => query(duplicate), findOneAndUpdate: async (filter, update) => {
-    assert.equal(filter["veriff.revision"], user.veriff.revision);
-    Object.assign(user, update.$set); user.veriff.revision += update.$inc["veriff.revision"]; return structuredClone(user);
+    if (Object.hasOwn(filter, "updatedAt")) assert.deepEqual(filter.updatedAt, user.updatedAt ?? null);
+    else assert.equal(filter["veriff.revision"], user.veriff.revision);
+    Object.assign(user, update.$set);
+    if (update.$inc) user.veriff.revision += update.$inc["veriff.revision"];
+    return structuredClone(user);
   } };
   const controller = createController({ users, reviews: { create: async records => { if (failLog) throw Error("private db error"); entries.push(...records); } },
     transaction: async work => { const snapshot = structuredClone(user), old = [...entries]; try { return await work({}); } catch (error) { user = snapshot; entries = old; throw error; } },
@@ -72,4 +75,61 @@ test("a separate IB update failure preserves the saved KYC decision and clearly 
 test("an owner rejection synchronizes IB without allowing automatic reconsideration of rejected applications", async () => {
   const f = fixture(); const res = await f.call({ ...body, approved: false });
   assert.equal(res.data.ibStatus, "rejected"); assert.equal(f.ibCalls()[0].options.reconsiderRejected, false);
+});
+
+const independentBody = {
+  source: "owner_documents", approved: true, reviewedDocuments: true, reason: body.reason,
+  expectedUserId: "640000000000000000000001", expectedUpdatedAt: null,
+  documentCountry: "IN", evidenceReference: "KYC-1042",
+};
+const unsubmitted = { _id: independentBody.expectedUserId, hasSubmittedDocuments: false, veriff: undefined };
+
+test("an independent owner review commits with no Veriff session and records the actual evidence source", async () => {
+  const f = fixture({ patch: unsubmitted });
+  assert.equal((await f.call(independentBody, { ...owner, adminRole: "manager" })).code, 403);
+  const result = await f.call(independentBody);
+  assert.equal(result.code, 200); assert.equal(result.data.approved, true);
+  assert.equal(f.user().isKycVerified, true);
+  assert.equal(f.user().hasSubmittedDocuments, false);
+  assert.equal(f.user().veriff, undefined);
+  assert.equal(f.user().kycManualReview.source, "owner_documents");
+  assert.equal(f.entries()[0].providerSessionId, undefined);
+  assert.equal(f.entries()[0].evidenceReference, "KYC-1042");
+  assert.equal(f.entries()[0].documentCountry, "IN");
+  assert.equal(f.ibCalls().length, 0);
+  assert.equal(f.sent(), 1);
+  assert.equal((await f.call(independentBody)).code, 409);
+  assert.equal(f.entries().length, 1);
+});
+
+test("independent review rejects missing evidence, stale accounts and ineligible identity details", async () => {
+  const cases = [
+    { input: { evidenceReference: "" }, code: 400 },
+    { input: { documentCountry: "ZZ" }, code: 400 },
+    { input: { documentCountry: "AE" }, code: 409 },
+    { input: { reviewedDocuments: false }, code: 400 },
+    { input: { expectedUserId: "640000000000000000000002" }, code: 409 },
+    { input: { expectedUpdatedAt: "2026-11-08T00:00:00.000Z" }, code: 409 },
+    { patch: { isVerified: false }, code: 409 },
+    { patch: { residenceCountry: "" }, code: 409 },
+    { patch: { nationality: "UAE" }, code: 409 },
+    { duplicate: true, code: 409 },
+    { failLog: true, code: 503 },
+  ];
+  for (const { input, patch, duplicate, failLog, code } of cases) {
+    const f = fixture({ patch: { ...unsubmitted, ...patch }, duplicate, failLog });
+    assert.equal((await f.call({ ...independentBody, ...input })).code, code);
+    assert.equal(f.user().isKycVerified, false);
+    assert.equal(f.entries().length, 0); assert.equal(f.sent(), 0);
+  }
+});
+
+test("an owner can record a rejection of a prior independent approval without a provider session", async () => {
+  const f = fixture({ patch: { ...unsubmitted, isKycVerified: true,
+    kycManualReview: { source: "owner_documents", approved: true } } });
+  const result = await f.call({ ...independentBody, approved: false });
+  assert.equal(result.code, 200); assert.equal(result.data.approved, false);
+  assert.equal(f.user().kycManualReview.source, "owner_documents");
+  assert.equal(f.entries()[0].approved, false);
+  assert.equal(f.ibCalls()[0].options.reconsiderRejected, false);
 });

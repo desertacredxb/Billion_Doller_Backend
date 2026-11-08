@@ -80,7 +80,8 @@ const userSchema = new mongoose.Schema(
     idProof2: { type: idProofSchema, default: () => ({}) },
     hasSubmittedDocuments: { type: Boolean, default: false },
     isKycVerified: { type: Boolean, default: false },
-    kycManualReview: { type: new mongoose.Schema({ reviewId: String, approved: Boolean, reviewerId: String, reviewedAt: Date, sessionId: String }, { _id: false }), select: false, default: undefined },
+    kycManualReview: { type: new mongoose.Schema({ reviewId: String, approved: Boolean, reviewerId: String, reviewedAt: Date, sessionId: String,
+      source: { type: String, enum: ["veriff", "owner_documents"] } }, { _id: false }), select: false, default: undefined },
 
     createdAt: { type: Date, default: Date.now },
   },

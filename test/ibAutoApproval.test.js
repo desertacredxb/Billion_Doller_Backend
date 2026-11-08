@@ -139,6 +139,14 @@ test("an owner-reviewed live identity qualifies for an existing IB application w
   const { state, service } = fixture({ user }); const result = await service.syncUser(user._id);
   assert.equal(result.status, "approved"); assert.equal(state.user.isApprovedIB, true); assert.equal(state.user.veriff.status, "declined");
 });
+test("independent owner KYC leaves an IB application eligible to request its own live check", async () => {
+  const user = userFixture(); user.veriff.status = "declined";
+  user.kycManualReview = { source: "owner_documents", approved: true, reviewId: "review1", reviewerId: "owner1", reviewedAt: new Date() };
+  const { state, service } = fixture({ user });
+  const result = await service.syncUser(user._id);
+  assert.equal(result.status, "pending"); assert.equal(result.verificationRequired, true);
+  assert.equal(state.user.isKycVerified, true); assert.equal(state.user.isApprovedIB, false);
+});
 test("a rejected IB requires explicit owner reconsideration even when identity is now approved", async () => {
   const user = userFixture(); user.veriff.status = "declined";
   user.kycManualReview = { approved: true, sessionId: user.veriff.sessionId, reviewId: "review1", reviewerId: "owner1", reviewedAt: new Date() };
