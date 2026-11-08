@@ -4,6 +4,10 @@ Keep owner-approved flows unchanged during unrelated fixes. If a requested chang
 
 Read `docs/approved-behavior.md` before changing an existing feature. That baseline covers the owner's two-day review. Verify affected dependent flows as well as the changed endpoint. Existing tests and CI are regression checks, not a claim that branch protection or a permanent repository write lock is configured.
 
+## Locked BDFX KYC baseline
+
+The owner finalized the manual KYC review and automatic Veriff flows on 8 November 2026. The approved production source is `0c8a8c1824eb641b684f4aad8e25a4813646ae6d`. The required `verify` workflow checks the frozen files and KYC sections listed in `.github/bdfx-kyc-lock.cjs`. Obtain an explicit owner instruction to unlock before editing covered behavior or its lock controls.
+
 ## Client identity corrections (owner confirmed 22 October 2026)
 
 - Keep client **Edit name & resubmit → Save details → Resubmit verification** available for provider review, resubmission and failed attempts, including reason `501` and unknown reasons. Also allow fresh re-verification without changing the name.
