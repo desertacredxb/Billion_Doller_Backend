@@ -19,14 +19,20 @@ function fakeClient({ fail = false } = {}) {
     else if (dims[0] === "date") rows = [{ dimensions: ["20261021"], values: [9] }];
     else if (dims[0] === "eventName") rows = [{ dimensions: ["generate_lead"], values: [3] }];
     else if (dims[0] === "pagePath") rows = [{ dimensions: ["/"], values: [24] }, { dimensions: ["/dashboard?email=private@example.invalid"], values: [99] }];
+    else if (dims[0] === "countryId") rows = names.length === 2
+      ? [{ dimensions: ["IN"], values: [4, 5] }, { dimensions: ["VN"], values: [3, 3] }]
+      : [{ dimensions: ["IN"], values: [2] }];
     else rows = [{ dimensions: ["Organic Search"], values: [7] }];
     return [{ metricHeaders: names.map(name => ({ name })), dimensionHeaders: dims.map(name => ({ name })), rows: rows.map(r => ({ dimensionValues: r.dimensions.map(value => ({ value })), metricValues: r.values.map(value => ({ value: String(value) })) })) }];
   };
   return { calls, runReport: result, runRealtimeReport: result };
 }
 test("analytics periods include complete Dubai dates across UTC midnight", () => {
-  const r = period(7, new Date("2026-10-20T22:00:00Z"));
+  const now = new Date("2026-10-20T22:00:00Z");
+  const r = period(7, now);
   assert.deepEqual(r, { from: "2026-10-15", to: "2026-10-21", days: 7, timezone: "Asia/Dubai" });
+  assert.deepEqual(period("today", now), { from: "2026-10-21", to: "2026-10-21", days: 1, timezone: "Asia/Dubai" });
+  assert.deepEqual(period("yesterday", now), { from: "2026-10-20", to: "2026-10-20", days: 1, timezone: "Asia/Dubai" });
 });
 test("missing reporting credentials returns a connection state, never fabricated zero metrics", async () => {
   const report = await createService({ clientProvider: () => null }).report(7);
@@ -38,31 +44,56 @@ test("reports use only the fixed BDFX property, distinct-period totals, bounded 
   const client = fakeClient();
   const service = createService({ clientProvider: () => client, now: () => new Date("2026-10-21T12:00:00Z") });
   const report = await service.report(7);
-  assert.equal(client.calls.length, 6);
+  assert.equal(client.calls.length, 8);
   assert.ok(client.calls.every(c => c.request.property === `properties/${PROPERTY_ID}` && c.options.timeout === 8000));
   assert.deepEqual(report.totals, { users: 17, sessions: 21, views: 32, leads: 3, signups: 0, activeUsers30Minutes: 2 });
   assert.equal(report.daily.length, 7); assert.equal(report.daily.at(-1).views, 9);
   assert.deepEqual(report.pages, [{ path: "/", views: 24 }]);
+  assert.deepEqual(report.countries, [
+    { country: "India", users: 4, sessions: 5, paidMetaSessions: 2 },
+    { country: "Pakistan", users: 0, sessions: 0, paidMetaSessions: 0 },
+    { country: "Vietnam", users: 3, sessions: 3, paidMetaSessions: 0 },
+  ]);
+  const paid = client.calls.find(({ request }) => request.dimensions?.[0]?.name === "countryId" && request.metrics.length === 1);
+  const filters = paid.request.dimensionFilter.andGroup.expressions.map(({ filter }) => filter);
+  assert.deepEqual(filters.map(filter => filter.fieldName), ["countryId", "sessionSource", "sessionMedium"]);
+  assert.deepEqual(filters[0].inListFilter.values, ["IN", "PK", "VN"]);
+  assert.ok(filters[1].inListFilter.values.includes("fb"));
+  assert.ok(filters[2].inListFilter.values.includes("paid_social"));
+  assert.equal(filters[2].inListFilter.values.includes("referral"), false);
   assert.equal(JSON.stringify(report).includes("private@example.invalid"), false);
   const events = client.calls.find(c => c.request.dimensions?.[0]?.name === "eventName");
   assert.deepEqual(events.request.dimensionFilter.filter.inListFilter.values, ["generate_lead", "sign_up"]);
+});
+test("a country missing from a thresholded report is displayed as withheld", async () => {
+  const client = fakeClient(), runReport = client.runReport;
+  client.runReport = async (request, options) => {
+    const response = await runReport(request, options);
+    if (request.dimensions?.[0]?.name === "countryId" && request.metrics.length === 1) response[0].metadata = { subjectToThresholding: true };
+    return response;
+  };
+  const service = createService({ clientProvider: () => client, now: () => new Date("2026-10-21T12:00:00Z") });
+  const report = await service.report("today");
+  assert.deepEqual(report.daily, [{ date: "2026-10-21", views: 9 }]);
+  assert.deepEqual(report.countries[1], { country: "Pakistan", users: 0, sessions: 0, paidMetaSessions: null });
+  assert.equal(report.thresholded, true);
 });
 test("concurrent refreshes coalesce and refresh only after expiry; failures never become cached zeros", async () => {
   let time = Date.parse("2026-10-21T12:00:00Z"); const client = fakeClient();
   const service = createService({ clientProvider: () => client, now: () => new Date(time) });
   const [first, second] = await Promise.all([service.report(7), service.report(7)]);
-  assert.deepEqual(first, second); assert.equal(client.calls.length, 6);
-  await service.report(7); assert.equal(client.calls.length, 6);
-  time += 60001; await service.report(7); assert.equal(client.calls.length, 12);
+  assert.deepEqual(first, second); assert.equal(client.calls.length, 8);
+  await service.report(7); assert.equal(client.calls.length, 8);
+  time += 60001; await service.report(7); assert.equal(client.calls.length, 16);
   const broken = fakeClient({ fail: true }); const failing = createService({ clientProvider: () => broken });
-  await assert.rejects(() => failing.report(7)); await assert.rejects(() => failing.report(7)); assert.equal(broken.calls.length, 12);
+  await assert.rejects(() => failing.report(7)); await assert.rejects(() => failing.report(7)); assert.equal(broken.calls.length, 16);
 });
 test("the actual HTTP route blocks anonymous, client, manager and stale sessions before reports; owner responses are no-store", async () => {
   process.env.JWT_SECRET = "synthetic-analytics-test-key";
   process.env.ADMIN_OWNER_EMAILS = "owner@example.invalid";
   const access = createAccessControl({ admins: { findOne: async f => f.authVersion === 1 ? { _id: f._id, email: f.email, enabled: true, role: "manager", permissions: ["reports"], invitedBy: "owner" } : null }, users: { findById: () => ({ select: async () => ({ _id: "client", email: "client@example.invalid", isVerified: true }) }) } });
-  let calls = 0;
-  const app = express(); app.use("/api/analytics", createRouter({ principal: access.principal, owner: access.owner, controller: createController({ service: { report: async () => { calls++; return { connected: false }; } } }) }));
+  const calls = [];
+  const app = express(); app.use("/api/analytics", createRouter({ principal: access.principal, owner: access.owner, controller: createController({ service: { report: async days => { calls.push(days); return { connected: false }; } } }) }));
   const server = app.listen(0, "127.0.0.1"); await new Promise(resolve => server.once("listening", resolve));
   const url = `http://127.0.0.1:${server.address().port}/api/analytics/report`;
   const token = (email, version = 1) => jwt.sign({ kind: "admin", sub: "owner-id", email, version, iss: "bdfx-auth", aud: "bdfx-admin" }, process.env.JWT_SECRET);
@@ -71,11 +102,17 @@ test("the actual HTTP route blocks anonymous, client, manager and stale sessions
     for (const [auth, status] of [[null, 401], [client, 403], [token("manager@example.invalid"), 403], [token("owner@example.invalid", 2), 401]]) {
       const r = await fetch(url, { headers: auth ? { Authorization: `Bearer ${auth}` } : {} }); assert.equal(r.status, status); assert.equal(r.headers.get("cache-control"), "no-store");
     }
-    assert.equal(calls, 0);
+    assert.equal(calls.length, 0);
     const headers = { Authorization: `Bearer ${token("owner@example.invalid")}` };
     for (const query of ["?days=365", "?days=7&propertyId=123", "?days[]=7"]) assert.equal((await fetch(url + query, { headers })).status, 400);
-    assert.equal(calls, 0);
-    const r = await fetch(url + "?days=28", { headers }); assert.equal(r.status, 200); assert.equal(r.headers.get("cache-control"), "no-store"); assert.deepEqual(await r.json(), { connected: false }); assert.equal(calls, 1);
+    assert.equal(calls.length, 0);
+    for (const days of ["28", "today", "yesterday"]) {
+      const r = await fetch(url + "?days=" + days, { headers });
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get("cache-control"), "no-store");
+      assert.deepEqual(await r.json(), { connected: false });
+    }
+    assert.deepEqual(calls, [28, "today", "yesterday"]);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 test("provider errors are redacted and not converted into misleading success cards", async () => {
