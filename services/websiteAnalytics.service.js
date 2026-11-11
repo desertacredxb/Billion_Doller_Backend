@@ -1,11 +1,16 @@
 const { BetaAnalyticsDataClient } = require("@google-analytics/data");
 const crypto = require("node:crypto");
+const { reportingFailure } = require("./websiteAnalyticsErrors");
 const PROPERTY_ID = "559982387";
 const ANALYTICS_URL = "https://analytics.google.com/analytics/web/#/a412813918p559982387/realtime/overview";
 const SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
+const REPORT_DAYS = [1, 7, 28, 90];
+const COUNTRIES = ["India", "Pakistan", "Vietnam"];
+const META_EVENTS = ["bdfx_meta_paid_landing", "bdfx_meta_landing"];
+const META_TRACKING_START = "2026-11-12";
 const PUBLIC_PATHS = ["/", "/about", "/accounts", "/platform", "/contact", "/help-centre", "/ib-broker", "/education", "/analytical-tools", "/economic-calendar", "/currency-converter", "/currency-calculator", "/forex", "/metals", "/indices", "/commodities", "/crypto", "/oil", "/blogs", "/news", "/cashback", "/career", "/learn", "/learn/india/en", "/learn/india/hi", "/learn/pakistan/en", "/learn/pakistan/ur", "/learn/vietnam/en", "/learn/vietnam/vi"];
-function period(days, now) {
-  const to = new Date(now.getTime() + 4 * 3600000).toISOString().slice(0, 10);
+function period(days, now, daysAgo = 0) {
+  const to = new Date(now.getTime() + 4 * 3600000 - daysAgo * 86400000).toISOString().slice(0, 10);
   const from = new Date(Date.parse(`${to}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
   return { from, to, days, timezone: "Asia/Dubai" };
 }
@@ -27,7 +32,7 @@ function createClientProvider(env = process.env) {
     return client;
   };
 }
-const REPORT_HEADERS = new Set(["totalUsers", "sessions", "screenPageViews", "eventCount", "activeUsers", "date", "eventName", "pagePath", "sessionDefaultChannelGroup"]);
+const REPORT_HEADERS = new Set(["totalUsers", "sessions", "screenPageViews", "eventCount", "activeUsers", "date", "eventName", "pagePath", "sessionDefaultChannelGroup", "country"]);
 function invalidResponse(report, stage, problem) {
   const names = headers => Array.isArray(headers) ? headers.map(h => REPORT_HEADERS.has(h?.name) ? h.name : "other").join(",") || "empty" : "missing";
   return Object.assign(new Error("Reporting response invalid"), { reportingDiagnostic: {
@@ -49,28 +54,70 @@ function parseRows(report, dimensions, metrics, stage) {
     return { dimensions: dimensions.map((_, i) => String(row.dimensionValues?.[i]?.value || "")), values };
   });
 }
+
+async function readCountryTraffic(standard, range) {
+  const countryFilter = { filter: { fieldName: "country", inListFilter: { values: COUNTRIES } } };
+  const read = async (dimensions, metrics, options, stage) => {
+    try {
+      const report = await standard(dimensions, metrics, options);
+      const empty = report?.rowCount === 0 &&
+        [report.rows, report.metricHeaders, report.dimensionHeaders].every(value => Array.isArray(value) && !value.length);
+      return {
+        rows: empty ? [] : parseRows(report, dimensions, metrics, stage),
+        missing: report.metadata?.subjectToThresholding || report.metadata?.dataLossFromOtherRow ? null : 0,
+      };
+    } catch (error) {
+      console.error(`[website-analytics] ${stage} ${reportingFailure(error).code}`);
+      return null;
+    }
+  };
+  const [traffic, meta] = await Promise.all([
+    read(["country"], ["activeUsers", "sessions"], { dimensionFilter: countryFilter, limit: COUNTRIES.length }, "countries"),
+    range.to < META_TRACKING_START ? null : read(["country", "eventName"], ["eventCount"], {
+      dateRanges: [{ startDate: range.from < META_TRACKING_START ? META_TRACKING_START : range.from, endDate: range.to }],
+      dimensionFilter: { andGroup: { expressions: [countryFilter, {
+        filter: { fieldName: "eventName", inListFilter: { values: META_EVENTS } },
+      }] } },
+      limit: COUNTRIES.length * META_EVENTS.length,
+    }, "meta-landings"),
+  ]);
+  const rows = COUNTRIES.map(country => {
+    const visits = traffic?.rows.find(row => row.dimensions[0] === country)?.values;
+    const metaCount = event => meta?.rows.find(row => row.dimensions[0] === country && row.dimensions[1] === event)?.values[0] ?? meta?.missing ?? null;
+    return {
+      country,
+      users: visits?.[0] ?? traffic?.missing ?? null,
+      sessions: visits?.[1] ?? traffic?.missing ?? null,
+      paidMetaLandings: metaCount(META_EVENTS[0]),
+      otherMetaLandings: metaCount(META_EVENTS[1]),
+    };
+  });
+  return { metaTrackingStart: META_TRACKING_START, rows };
+}
+
 function createService({ clientProvider = createClientProvider(), now = () => new Date() } = {}) {
   const cache = new Map(), pending = new Map();
   let lastClient;
   return {
-    async report(days) {
-      if (![7, 28, 90].includes(days)) throw new Error("Invalid report period");
+    async report(days, daysAgo = 0) {
+      if (!REPORT_DAYS.includes(days) || (daysAgo !== 0 && (daysAgo !== 1 || days !== 1))) throw new Error("Invalid report period");
       const client = clientProvider();
       if (!client) { cache.clear(); return { connected: false, analyticsUrl: ANALYTICS_URL }; }
       if (client !== lastClient) { cache.clear(); pending.clear(); lastClient = client; }
-      const range = period(days, now()), key = `${range.from}:${range.to}`;
+      const range = period(days, now(), daysAgo), key = `${range.from}:${range.to}`;
       const saved = cache.get(key);
       if (saved && now().getTime() - saved.at < 60000) return saved.report;
       if (pending.has(key)) return pending.get(key);
       const operation = (async () => {
         const standard = (dimensions, metrics, extra = {}) => client.runReport({ property: `properties/${PROPERTY_ID}`, dateRanges: [{ startDate: range.from, endDate: range.to }], dimensions: dimensions.map(name => ({ name })), metrics: metrics.map(name => ({ name })), ...extra }, { timeout: 8000 }).then(([r]) => r);
-        const [summary, daily, events, pages, channels, realtime] = await Promise.all([
+        const [summary, daily, events, pages, channels, realtime, countryTraffic] = await Promise.all([
           standard([], ["totalUsers", "sessions", "screenPageViews"]),
           standard(["date"], ["screenPageViews"], { limit: 90, orderBys: [{ dimension: { dimensionName: "date" } }] }),
           standard(["eventName"], ["eventCount"], { dimensionFilter: { filter: { fieldName: "eventName", inListFilter: { values: ["generate_lead", "sign_up"] } } }, limit: 2 }),
           standard(["pagePath"], ["screenPageViews"], { dimensionFilter: { filter: { fieldName: "pagePath", inListFilter: { values: PUBLIC_PATHS } } }, orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }], limit: 10 }),
           standard(["sessionDefaultChannelGroup"], ["sessions"], { orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 8 }),
           client.runRealtimeReport({ property: `properties/${PROPERTY_ID}`, metrics: [{ name: "activeUsers" }] }, { timeout: 8000 }).then(([r]) => r),
+          readCountryTraffic(standard, range),
         ]);
         const totals = parseRows(summary, [], ["totalUsers", "sessions", "screenPageViews"], "summary")[0]?.values || [0, 0, 0];
         const conversionRows = parseRows(events, ["eventName"], ["eventCount"], "events");
@@ -85,6 +132,7 @@ function createService({ clientProvider = createClientProvider(), now = () => ne
           daily: dailyRows,
           pages: parseRows(pages, ["pagePath"], ["screenPageViews"], "pages").filter(r => PUBLIC_PATHS.includes(r.dimensions[0])).map(r => ({ path: r.dimensions[0], views: r.values[0] })),
           channels: parseRows(channels, ["sessionDefaultChannelGroup"], ["sessions"], "channels").map(r => ({ channel: r.dimensions[0].slice(0, 100), sessions: r.values[0] })),
+          countryTraffic,
           thresholded: [summary, daily, events, pages, channels, realtime].some(r => r.metadata?.subjectToThresholding === true),
         };
         // Never combine a failed request with stale or invented zero-valued cards.
@@ -96,4 +144,4 @@ function createService({ clientProvider = createClientProvider(), now = () => ne
     },
   };
 }
-module.exports = { createService, createClientProvider, period, PROPERTY_ID };
+module.exports = { createService, createClientProvider, period, PROPERTY_ID, REPORT_DAYS };
