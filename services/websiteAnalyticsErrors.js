@@ -30,7 +30,7 @@ function reportingLog(error, failure) {
   let line = `[website-analytics] ${failure.code}`;
   const diagnostic = error?.reportingDiagnostic;
   if (failure.code === "GA4_RESPONSE_INVALID" && diagnostic) {
-    const allowed = /^(summary|events|daily|realtime|pages|channels|missing_report|metric_headers|dimension_headers|metric_values|totalUsers|sessions|screenPageViews|eventCount|activeUsers|date|eventName|pagePath|sessionDefaultChannelGroup|other|empty|missing|present|zero|nonzero)$/;
+    const allowed = /^(summary|events|daily|realtime|pages|channels|countries|meta|missing_report|metric_headers|dimension_headers|metric_values|totalUsers|sessions|screenPageViews|eventCount|activeUsers|date|eventName|pagePath|sessionDefaultChannelGroup|countryId|other|empty|missing|present|zero|nonzero)$/;
     for (const key of ["stage", "problem", "metrics", "dimensions", "rows", "rowCount"]) {
       const value = diagnostic[key];
       if (typeof value === "string" && value.split(",").every(part => allowed.test(part))) line += ` ${key}=${value}`;
