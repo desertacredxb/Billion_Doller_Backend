@@ -1,5 +1,5 @@
 const normalizeEmail = value => typeof value === "string" ? value.trim().toLowerCase() : "";
-const PERMISSIONS = ["clients", "partners", "finance", "support", "enquiries", "content", "reports"];
+const PERMISSIONS = ["clients", "partners", "finance", "support", "enquiries", "content", "reports", "crm"];
 const ownerEmails = () => String(process.env.ADMIN_OWNER_EMAILS || process.env.ADMIN_EMAILS || "").split(",").map(normalizeEmail).filter(Boolean);
 function roleFor(admin) {
   if (!admin || admin.enabled === false) return null;
@@ -13,6 +13,6 @@ function permissionForRequest(req) {
   if (path.startsWith("/api/staff") || path === "/api/operations/audit") return "owner";
   const module = path.split("/")[2];
   if (module === "auth") return /bank/i.test(path) ? "finance" : "clients";
-  return { mt5: "finance", moneyplant: "finance", payment: "finance", ib: "partners", brokers: "partners", deals: "reports", tickets: "support", "support-chat": "support", blogs: "content", enquiries: "enquiries", operations: "reports", analytics: "owner", ai: "clients" }[module] || "owner";
+  return { mt5: "finance", moneyplant: "finance", payment: "finance", ib: "partners", brokers: "partners", deals: "reports", tickets: "support", "support-chat": "support", blogs: "content", enquiries: "enquiries", operations: "reports", analytics: "owner", ai: "clients", crm: "crm" }[module] || "owner";
 }
 module.exports = { normalizeEmail, PERMISSIONS, ownerEmails, roleFor, permissionForRequest };
