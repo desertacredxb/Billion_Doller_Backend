@@ -24,6 +24,7 @@ const supportChatRoutes = require("./routes/supportChatRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const operationsRoutes = require("./routes/operationsRoutes");
 const staffRoutes = require("./routes/staffRoutes");
+const crmRoutes = require("./routes/crmRoutes");
 const websiteAnalyticsRoutes = require("./routes/websiteAnalyticsRoutes");
 const { createAudit } = require("./middleware/adminAudit");
 const enquiryNotifications = require("./services/enquiryNotifications.service");
@@ -84,6 +85,7 @@ const startServer = async () => {
   app.use("/api/support-chat/n8n", require("./routes/buddyN8nRoutes"));
   app.use("/api/operations", operationsRoutes);
   app.use("/api/staff", staffRoutes);
+  app.use("/api/crm", crmRoutes);
   app.use("/api/analytics", websiteAnalyticsRoutes);
   app.use("/api/email-marketing", require("./routes/emailMarketingRoutes"));
 

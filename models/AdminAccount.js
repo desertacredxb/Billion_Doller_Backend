@@ -7,6 +7,7 @@ const schema = new mongoose.Schema({
   role: { type: String, enum: ["owner", "manager"], default: "manager" },
   enabled: { type: Boolean, default: true },
   permissions: [{ type: String, enum: PERMISSIONS }],
+  crmHashmiAgentId: { type: String, trim: true, unique: true, sparse: true },
   invitedBy: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount" },
   disabledAt: Date,
   lastLoginAt: Date,
