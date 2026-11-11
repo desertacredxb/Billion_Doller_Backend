@@ -54,6 +54,48 @@ test("manager creation records the inviting owner and returns no password or cod
   assert.equal(req.auditEvent, "staff.created"); assert.equal(req.auditTargetId, managerId);
 });
 
+test("staging Hashmi agents saves only drafts and skips existing mappings", async () => {
+  const batches = [];
+  const controller = createController({
+    admins: { distinct: async () => ["1002"], create: () => assert.fail("draft created a login") },
+    drafts: { bulkWrite: async changes => batches.push(changes) },
+  });
+  const next = error => { throw error; };
+  const agents = [{ fullName: "Agent A", hashmiId: "1001", email: "unused@example.invalid" }, { fullName: "Agent B", hashmiId: "1002" }];
+  const req = { body: { agents } }, res = response();
+  await controller.stageCrmDrafts(req, res, next);
+  assert.deepEqual(batches, [[{ updateOne: { filter: { _id: "1001" }, update: { $set: { fullName: "Agent A" } }, upsert: true } }]]);
+  assert.deepEqual(res.data, { staged: 1, alreadyMapped: 1 });
+  const invalid = response();
+  await controller.stageCrmDrafts({ body: { agents: [agents[0], agents[0]] } }, invalid, next);
+  assert.equal(invalid.code, 400);
+  assert.equal(batches.length, 1);
+});
+
+test("adding a real email to a pending agent creates only CRM access and carries the verified mapping", async () => {
+  let saved;
+  const controller = createController({
+    admins: { exists: async () => saved, create: async value => (saved = { _id: managerId, ...value }) },
+    drafts: { findById: () => ({ lean: async () => ({ _id: "1001", fullName: "Agent A" }) }) },
+  });
+  const next = error => { throw error; };
+  const req = { principal: { id: ownerId }, body: { crmDraftId: "1001", email: "AGENT@example.invalid", fullName: "Different name", permissions: ["finance"] } };
+  const missingEmail = response();
+  await controller.create({ ...req, body: { crmDraftId: "1001" } }, missingEmail, next);
+  assert.equal(missingEmail.code, 400);
+  assert.equal(saved, undefined);
+  const res = response();
+  await controller.create(req, res, next);
+  assert.equal(res.code, 201);
+  assert.equal(saved.email, "agent@example.invalid");
+  assert.equal(saved.fullName, "Agent A");
+  assert.equal(saved.crmHashmiAgentId, "1001");
+  assert.deepEqual(saved.permissions, ["crm"]);
+  const duplicate = response();
+  await controller.create(req, duplicate, next);
+  assert.equal(duplicate.code, 409);
+});
+
 test("changing manager access clears pending challenges and invalidates existing sessions", async () => {
   let update;
   const controller = createController({ admins: { findById: () => ({ lean: async () => manager() }), findOneAndUpdate: (_filter, value) => { update = value; return { select: async () => ({ ...manager(), enabled: false }) }; } } });

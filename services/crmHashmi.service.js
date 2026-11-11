@@ -164,4 +164,4 @@ async function recordReport(payload) {
   return true;
 }
 
-module.exports = { connectionState, setAgent, dial, authorizedReport, recordReport, parseReport, buildCallParameters };
+module.exports = { agentPattern, connectionState, setAgent, dial, authorizedReport, recordReport, parseReport, buildCallParameters };
