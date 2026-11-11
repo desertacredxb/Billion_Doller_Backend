@@ -19,6 +19,11 @@ function fakeClient({ fail = false } = {}) {
     else if (dims[0] === "date") rows = [{ dimensions: ["20261021"], values: [9] }];
     else if (dims[0] === "eventName") rows = [{ dimensions: ["generate_lead"], values: [3] }];
     else if (dims[0] === "pagePath") rows = [{ dimensions: ["/"], values: [24] }, { dimensions: ["/dashboard?email=private@example.invalid"], values: [99] }];
+    else if (dims.length === 2 && dims[0] === "country") rows = [
+      { dimensions: ["India", "bdfx_meta_paid_landing"], values: [2] },
+      { dimensions: ["Pakistan", "bdfx_meta_landing"], values: [1] },
+    ];
+    else if (dims[0] === "country") rows = [{ dimensions: ["India"], values: [5, 11] }, { dimensions: ["Pakistan"], values: [1, 1] }];
     else rows = [{ dimensions: ["Organic Search"], values: [7] }];
     return [{ metricHeaders: names.map(name => ({ name })), dimensionHeaders: dims.map(name => ({ name })), rows: rows.map(r => ({ dimensionValues: r.dimensions.map(value => ({ value })), metricValues: r.values.map(value => ({ value: String(value) })) })) }];
   };
@@ -27,6 +32,8 @@ function fakeClient({ fail = false } = {}) {
 test("analytics periods include complete Dubai dates across UTC midnight", () => {
   const r = period(7, new Date("2026-10-20T22:00:00Z"));
   assert.deepEqual(r, { from: "2026-10-15", to: "2026-10-21", days: 7, timezone: "Asia/Dubai" });
+  assert.deepEqual(period(1, new Date("2026-11-11T20:05:00Z"), 1),
+    { from: "2026-11-11", to: "2026-11-11", days: 1, timezone: "Asia/Dubai" });
 });
 test("missing reporting credentials returns a connection state, never fabricated zero metrics", async () => {
   const report = await createService({ clientProvider: () => null }).report(7);
@@ -38,7 +45,7 @@ test("reports use only the fixed BDFX property, distinct-period totals, bounded 
   const client = fakeClient();
   const service = createService({ clientProvider: () => client, now: () => new Date("2026-10-21T12:00:00Z") });
   const report = await service.report(7);
-  assert.equal(client.calls.length, 6);
+  assert.equal(client.calls.length, 7);
   assert.ok(client.calls.every(c => c.request.property === `properties/${PROPERTY_ID}` && c.options.timeout === 8000));
   assert.deepEqual(report.totals, { users: 17, sessions: 21, views: 32, leads: 3, signups: 0, activeUsers30Minutes: 2 });
   assert.equal(report.daily.length, 7); assert.equal(report.daily.at(-1).views, 9);
@@ -46,16 +53,47 @@ test("reports use only the fixed BDFX property, distinct-period totals, bounded 
   assert.equal(JSON.stringify(report).includes("private@example.invalid"), false);
   const events = client.calls.find(c => c.request.dimensions?.[0]?.name === "eventName");
   assert.deepEqual(events.request.dimensionFilter.filter.inListFilter.values, ["generate_lead", "sign_up"]);
+  assert.deepEqual(report.countryTraffic.rows[0], {
+    country: "India", users: 5, sessions: 11, paidMetaLandings: null, otherMetaLandings: null,
+  });
+});
+test("country reporting bounds both GA4 queries and separates tagged paid landings from other Meta arrivals", async () => {
+  const client = fakeClient();
+  const service = createService({ clientProvider: () => client, now: () => new Date("2026-11-12T09:00:00Z") });
+  const report = await service.report(7);
+  assert.deepEqual(report.countryTraffic.rows, [
+    { country: "India", users: 5, sessions: 11, paidMetaLandings: 2, otherMetaLandings: 0 },
+    { country: "Pakistan", users: 1, sessions: 1, paidMetaLandings: 0, otherMetaLandings: 1 },
+    { country: "Vietnam", users: 0, sessions: 0, paidMetaLandings: 0, otherMetaLandings: 0 },
+  ]);
+  const { request } = client.calls.find(c => c.request.dimensions?.[1]?.name === "eventName");
+  assert.equal(request.limit, 6);
+  assert.deepEqual(request.dateRanges, [{ startDate: "2026-11-12", endDate: "2026-11-12" }]);
+  assert.deepEqual(request.dimensionFilter.andGroup.expressions[0].filter.inListFilter.values, ["India", "Pakistan", "Vietnam"]);
+});
+test("suppressed country rows are unavailable and a complete empty Meta report is zero", async () => {
+  const client = fakeClient(), runReport = client.runReport;
+  client.runReport = async (request, options) => {
+    if (request.dimensions?.[1]?.name === "eventName") return [{ metricHeaders: [], dimensionHeaders: [], rows: [], rowCount: 0 }];
+    const [report] = await runReport(request, options);
+    if (request.dimensions?.[0]?.name === "country") report.metadata = { subjectToThresholding: true };
+    return [report];
+  };
+  const service = createService({ clientProvider: () => client, now: () => new Date("2026-11-12T09:00:00Z") });
+  const report = await service.report(1);
+  assert.deepEqual(report.countryTraffic.rows[2], {
+    country: "Vietnam", users: null, sessions: null, paidMetaLandings: 0, otherMetaLandings: 0,
+  });
 });
 test("concurrent refreshes coalesce and refresh only after expiry; failures never become cached zeros", async () => {
   let time = Date.parse("2026-10-21T12:00:00Z"); const client = fakeClient();
   const service = createService({ clientProvider: () => client, now: () => new Date(time) });
   const [first, second] = await Promise.all([service.report(7), service.report(7)]);
-  assert.deepEqual(first, second); assert.equal(client.calls.length, 6);
-  await service.report(7); assert.equal(client.calls.length, 6);
-  time += 60001; await service.report(7); assert.equal(client.calls.length, 12);
-  const broken = fakeClient({ fail: true }); const failing = createService({ clientProvider: () => broken });
-  await assert.rejects(() => failing.report(7)); await assert.rejects(() => failing.report(7)); assert.equal(broken.calls.length, 12);
+  assert.deepEqual(first, second); assert.equal(client.calls.length, 7);
+  await service.report(7); assert.equal(client.calls.length, 7);
+  time += 60001; await service.report(7); assert.equal(client.calls.length, 14);
+  const broken = fakeClient({ fail: true }); const failing = createService({ clientProvider: () => broken, now: () => new Date(time) });
+  await assert.rejects(() => failing.report(7)); await assert.rejects(() => failing.report(7)); assert.equal(broken.calls.length, 14);
 });
 test("the actual HTTP route blocks anonymous, client, manager and stale sessions before reports; owner responses are no-store", async () => {
   process.env.JWT_SECRET = "synthetic-analytics-test-key";
