@@ -177,6 +177,15 @@ test("Google's explicit zero-row realtime report keeps historical totals visible
   assert.equal(report.connected, true);
   assert.deepEqual(report.totals, { users: 17, sessions: 21, views: 32, leads: 3, signups: 0, activeUsers30Minutes: 0 });
 });
+test("explicitly empty standard reports show processed zeros and keep realtime activity visible", async () => {
+  const client = fakeClient();
+  client.runReport = async () => [{ metricHeaders: [], dimensionHeaders: [], rows: [], rowCount: 0 }];
+  const service = createService({ clientProvider: () => client, now: () => new Date("2026-11-11T21:30:00Z") });
+  const report = await service.report("today");
+  assert.deepEqual(report.totals, { users: 0, sessions: 0, views: 0, leads: 0, signups: 0, activeUsers30Minutes: 2 });
+  assert.deepEqual(report.daily, [{ date: "2026-11-12", views: 0 }]);
+  assert.deepEqual(report.countries.map(({ users, sessions, paidMetaSessions }) => [users, sessions, paidMetaSessions]), [[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
+});
 test("an incomplete or inconsistent realtime report is never presented as zero activity", async () => {
   for (const response of [
     { metricHeaders: [], dimensionHeaders: [], rows: [] },
