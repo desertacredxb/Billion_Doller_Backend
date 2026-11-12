@@ -72,7 +72,9 @@ test("configured bootstrap managers get separate identities without passwords or
     } }, logs: { create: async entry => state.entries.push(entry) } });
   await run();
   assert.equal(state.row.email, "manager@example.invalid");
-  assert.equal(state.row.invitedBy, ownerId); assert.deepEqual(state.row.permissions, PERMISSIONS);
+  assert.equal(state.row.invitedBy, ownerId);
+  assert.deepEqual(state.row.permissions, PERMISSIONS.filter(permission => permission !== "website_analytics"));
+  assert.equal(state.entries[0].details.permissions.includes("website_analytics"), false);
   assert.equal(state.row.passwordHash, undefined); assert.equal(state.entries.length, 1);
   state.row.enabled = false; await run();
   assert.equal(state.row.enabled, false); assert.equal(state.entries.length, 1);

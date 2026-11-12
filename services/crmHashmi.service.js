@@ -30,15 +30,28 @@ function connectionState(env = process.env) {
   };
 }
 
-async function setAgent(id, value) {
+async function setAgent(id, value, { staff = Staff, config = settings() } = {}) {
   if (typeof value !== "string" || (value !== "" && !agentPattern.test(value))) {
     throw new CrmError(400, "Enter the numeric Hashmi agent ID.");
   }
-  await Staff.init();
+  if (value && value === config.userId) throw new CrmError(400, "Use the employee's Agent ID from Hashmi Employees.");
+  const filter = { ...staffFilter, _id: asId(id) };
+  if (value) {
+    try {
+      const indexes = await staff.listIndexes();
+      const hasMappingIndex = indexes.some(index => index.unique && index.sparse && index.key?.crmHashmiAgentId === 1 && Object.keys(index.key).length === 1);
+      if (!hasMappingIndex) {
+        await staff.collection.createIndex({ crmHashmiAgentId: 1 }, { name: "crmHashmiAgentId_1", unique: true, sparse: true });
+      }
+    } catch (error) {
+      console.error("Hashmi mapping index unavailable:", error.name || "Error", Number.isInteger(error.code) ? error.code : "");
+      throw new CrmError(503, "Hashmi mapping storage is unavailable. Please try again shortly.");
+    }
+  }
   const update = value ? { $set: { crmHashmiAgentId: value } } : { $unset: { crmHashmiAgentId: "" } };
   try {
-    const result = await Staff.updateOne({ ...staffFilter, _id: asId(id) }, update, { runValidators: true });
-    if (!result.matchedCount) throw new CrmError(404, "Active CRM agent not found.");
+    const updated = await staff.findOneAndUpdate(filter, update, { new: true, runValidators: true }).select("_id").lean();
+    if (!updated) throw new CrmError(404, "Active CRM agent not found.");
   } catch (error) {
     if (error.code === 11000) throw new CrmError(409, "That Hashmi agent ID is already mapped.");
     throw error;

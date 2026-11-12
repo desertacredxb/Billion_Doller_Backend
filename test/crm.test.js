@@ -1,7 +1,31 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { dubaiDay, planAssignments, staffScope, TARGET } = require("../services/crm.service");
-const { authorizedReport, buildCallParameters, parseReport } = require("../services/crmHashmi.service");
+const { authorizedReport, buildCallParameters, parseReport, setAgent } = require("../services/crmHashmi.service");
+
+test("Hashmi mapping verifies its unique index and updates the active CRM account", async () => {
+  const calls = [];
+  const staffId = "111111111111111111111111";
+  const staff = {
+    listIndexes: async () => [],
+    collection: { createIndex: async (...args) => calls.push(args) },
+    findOneAndUpdate: (filter, update) => {
+      assert.equal(String(filter._id), staffId);
+      assert.equal(filter.enabled, true);
+      assert.equal(filter.permissions, "crm");
+      calls.push(update);
+      return { select: () => ({ lean: async () => ({ _id: staffId }) }) };
+    },
+  };
+  const config = { userId: "123456789" };
+  await assert.rejects(() => setAgent(staffId, config.userId, { staff, config }), { status: 400 });
+  assert.equal(calls.length, 0);
+  await setAgent(staffId, "12345", { staff, config });
+  assert.deepEqual(calls, [
+    [{ crmHashmiAgentId: 1 }, { name: "crmHashmiAgentId_1", unique: true, sparse: true }],
+    { $set: { crmHashmiAgentId: "12345" } },
+  ]);
+});
 const { permissionForRequest } = require("../services/adminPolicy");
 
 test("CRM allocation covers the least-filled queue and stops at each agent's target", () => {

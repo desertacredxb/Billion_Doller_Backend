@@ -88,18 +88,20 @@ test("concurrent refreshes coalesce and refresh only after expiry; failures neve
   const broken = fakeClient({ fail: true }); const failing = createService({ clientProvider: () => broken });
   await assert.rejects(() => failing.report(7)); await assert.rejects(() => failing.report(7)); assert.equal(broken.calls.length, 16);
 });
-test("the actual HTTP route blocks anonymous, client, manager and stale sessions before reports; owner responses are no-store", async () => {
+test("the HTTP route grants analytics only to the owner and explicitly permitted managers", async () => {
   process.env.JWT_SECRET = "synthetic-analytics-test-key";
   process.env.ADMIN_OWNER_EMAILS = "owner@example.invalid";
-  const access = createAccessControl({ admins: { findOne: async f => f.authVersion === 1 ? { _id: f._id, email: f.email, enabled: true, role: "manager", permissions: ["reports"], invitedBy: "owner" } : null }, users: { findById: () => ({ select: async () => ({ _id: "client", email: "client@example.invalid", isVerified: true }) }) } });
+  const marketingEmail = "marketing@example.invalid";
+  let marketingPermissions = ["website_analytics"];
+  const access = createAccessControl({ admins: { findOne: async f => f.authVersion === 1 ? { _id: f._id, email: f.email, enabled: true, role: "manager", permissions: f.email === marketingEmail ? marketingPermissions : ["reports"], invitedBy: "owner" } : null }, users: { findById: () => ({ select: async () => ({ _id: "client", email: "client@example.invalid", isVerified: true }) }) } });
   const calls = [];
-  const app = express(); app.use("/api/analytics", createRouter({ principal: access.principal, owner: access.owner, controller: createController({ service: { report: async days => { calls.push(days); return { connected: false }; } } }) }));
+  const app = express(); app.use("/api/analytics", createRouter({ principal: access.principal, admin: access.admin, controller: createController({ service: { report: async days => { calls.push(days); return { connected: false }; } } }) }));
   const server = app.listen(0, "127.0.0.1"); await new Promise(resolve => server.once("listening", resolve));
   const url = `http://127.0.0.1:${server.address().port}/api/analytics/report`;
   const token = (email, version = 1) => jwt.sign({ kind: "admin", sub: "owner-id", email, version, iss: "bdfx-auth", aud: "bdfx-admin" }, process.env.JWT_SECRET);
   try {
     const client = jwt.sign({ id: "client", role: "owner" }, process.env.JWT_SECRET);
-    for (const [auth, status] of [[null, 401], [client, 403], [token("manager@example.invalid"), 403], [token("owner@example.invalid", 2), 401]]) {
+    for (const [auth, status] of [[null, 401], [client, 403], [token("manager@example.invalid"), 403], [token("owner@example.invalid", 2), 401], [token(marketingEmail, 2), 401]]) {
       const r = await fetch(url, { headers: auth ? { Authorization: `Bearer ${auth}` } : {} }); assert.equal(r.status, status); assert.equal(r.headers.get("cache-control"), "no-store");
     }
     assert.equal(calls.length, 0);
@@ -113,6 +115,13 @@ test("the actual HTTP route blocks anonymous, client, manager and stale sessions
       assert.deepEqual(await r.json(), { connected: false });
     }
     assert.deepEqual(calls, [28, "today", "yesterday"]);
+    const marketingHeaders = { Authorization: `Bearer ${token(marketingEmail)}` };
+    const permitted = await fetch(url + "?days=today", { headers: marketingHeaders });
+    assert.equal(permitted.status, 200);
+    assert.equal(permitted.headers.get("cache-control"), "no-store");
+    marketingPermissions = [];
+    assert.equal((await fetch(url + "?days=today", { headers: marketingHeaders })).status, 403);
+    assert.deepEqual(calls, [28, "today", "yesterday", "today"]);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 test("provider errors are redacted and not converted into misleading success cards", async () => {

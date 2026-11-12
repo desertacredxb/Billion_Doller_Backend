@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const AdminAccount = require("../models/AdminAccount");
 const AuditLog = require("../models/AuditLog");
 const { ownerEmails, normalizeEmail, PERMISSIONS } = require("./adminPolicy");
+const BOOTSTRAP_MANAGER_PERMISSIONS = PERMISSIONS.filter(permission => permission !== "website_analytics");
 
 function createBootstrap({ admins = AdminAccount, logs = AuditLog, emails = () => process.env.ADMIN_BOOTSTRAP_MANAGERS || "", owners = ownerEmails } = {}) {
   return async () => {
@@ -13,9 +14,9 @@ function createBootstrap({ admins = AdminAccount, logs = AuditLog, emails = () =
     for (const email of configured) {
       if (owners().includes(email)) continue;
       // Existing records, including disabled managers, are never re-enabled by a restart.
-      const result = await admins.updateOne({ email }, { $setOnInsert: { email, role: "manager", enabled: true, permissions: PERMISSIONS, invitedBy: ownerAccount._id, authVersion: 0 } }, { upsert: true, setDefaultsOnInsert: true });
+      const result = await admins.updateOne({ email }, { $setOnInsert: { email, role: "manager", enabled: true, permissions: BOOTSTRAP_MANAGER_PERMISSIONS, invitedBy: ownerAccount._id, authVersion: 0 } }, { upsert: true, setDefaultsOnInsert: true });
       if (result.upsertedId) await logs.create({ requestId: crypto.randomUUID(), actorId: String(ownerAccount._id), actorEmail: owner, actorName: "Owner configuration", method: "SYSTEM", resource: "/api/staff", route: "/", event: "staff.bootstrap_created", targetId: String(result.upsertedId), statusCode: 201,
-        details: { changedFields: ["email", "permissions", "enabled"], permissions: PERMISSIONS, enabled: true } });
+        details: { changedFields: ["email", "permissions", "enabled"], permissions: BOOTSTRAP_MANAGER_PERMISSIONS, enabled: true } });
     }
   };
 }

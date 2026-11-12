@@ -1,5 +1,5 @@
 const normalizeEmail = value => typeof value === "string" ? value.trim().toLowerCase() : "";
-const PERMISSIONS = ["clients", "partners", "finance", "support", "enquiries", "content", "reports", "crm"];
+const PERMISSIONS = ["clients", "partners", "finance", "support", "enquiries", "content", "reports", "crm", "website_analytics"];
 const ownerEmails = () => String(process.env.ADMIN_OWNER_EMAILS || process.env.ADMIN_EMAILS || "").split(",").map(normalizeEmail).filter(Boolean);
 function roleFor(admin) {
   if (!admin || admin.enabled === false) return null;
@@ -10,6 +10,7 @@ function roleFor(admin) {
 function permissionForRequest(req) {
   const path = String(req.originalUrl || "").split("?")[0].replace(/\/+$/, "");
   if (path === "/api/auth/admin/session" || path === "/api/operations/overview") return "session";
+  if (path === "/api/analytics/report") return "website_analytics";
   if (path.startsWith("/api/staff") || path === "/api/operations/audit") return "owner";
   const module = path.split("/")[2];
   if (module === "auth") return /bank/i.test(path) ? "finance" : "clients";
