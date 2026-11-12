@@ -158,6 +158,10 @@ async function recordReport(payload) {
   if (!report?.attempted || report.agentIds.length !== 1) return false;
   const agent = await Staff.findOne({ ...staffFilter, crmHashmiAgentId: report.agentIds[0] }).select("_id").lean();
   if (!agent) return false;
+  return recordVerifiedCall(report, agent, { markWorked: true });
+}
+
+async function recordVerifiedCall(report, agent, { markWorked = false } = {}) {
   const lead = await Lead.findOne({ assignedTo: agent._id, phone: report.phone, assignedAt: { $lte: report.occurredAt } }).select("_id").lean();
   const eventKey = "hashmi:" + report.callId;
   await ensureCrmIndexes(Call);
@@ -171,10 +175,10 @@ async function recordReport(payload) {
     // A repeated report cannot change the credited agent.
     return false;
   }
-  if (lead) {
+  if (lead && markWorked) {
     await Lead.updateOne({ _id: lead._id, assignedTo: agent._id, status: "new" }, { $set: { status: "worked" } });
   }
   return true;
 }
 
-module.exports = { connectionState, setAgent, dial, authorizedReport, recordReport, parseReport, buildCallParameters };
+module.exports = { settings, connectionState, setAgent, dial, authorizedReport, recordReport, recordVerifiedCall, parseReport, buildCallParameters };

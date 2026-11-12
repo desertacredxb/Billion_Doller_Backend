@@ -24,7 +24,8 @@ test("the CRM assistant requires BDFX website search and refuses private text be
   assert.equal(requests[0].store, false);
   assert.equal(requests[0].input, "How can a client complete verification?");
   assert.deepEqual(requests[0].tools[0].filters.allowed_domains, ["billiondollarfx.com"]);
-  assert.equal(requests[0].tool_choice, "required");
+  assert.equal(requests[0].model, "gpt-6-astra");
+  assert.equal(requests[0].tool_choice, "auto");
   assert.equal(requests[0].reasoning.effort, "low");
   assert.match(requests[0].instructions, /Do not promise approval/);
 });

@@ -57,7 +57,9 @@ function createCrmAssistant({ env = process.env, usage = createUsage({ namespace
         throw new CrmError(503, billing ? "The call assistant has reached its OpenAI quota. Ask your administrator to check API billing and limits."
           : "OpenAI is limiting requests right now. Try again shortly.");
       }
-      console.warn("CRM call assistant unavailable:", status);
+      const param = ["model", "reasoning.effort", "tools", "tools[0].type", "tools[0].filters", "tool_choice", "store"].includes(error.param) ? error.param : "";
+      const code = ["unsupported_value", "unsupported_parameter", "invalid_value", "model_not_found", "invalid_api_key"].includes(error.code) ? error.code : "";
+      console.warn("CRM call assistant unavailable:", status, code, param);
       throw new CrmError(503, "The call assistant is unavailable right now. Try again shortly.");
     }
   }
@@ -68,11 +70,11 @@ function createCrmAssistant({ env = process.env, usage = createUsage({ namespace
       if (!question || question.length > 1000) throw new CrmError(400, "Enter a question of 1 to 1000 characters.");
       if (containsPrivateDetails(question)) throw new CrmError(400, "Remove phone numbers, email addresses or private details before asking.");
       return run(async ai => {
-        const model = env.BDFX_CRM_ASSISTANT_MODEL || env.OPENAI_MODEL || "gpt-5";
+        const model = env.BDFX_CRM_ASSISTANT_MODEL || "gpt-6-astra";
         const result = await ai.responses.create({ model, instructions: INSTRUCTIONS, input: question, store: false, max_output_tokens: 900,
           tools: [{ type: "web_search", filters: { allowed_domains: [WEBSITE] }, search_context_size: "low" }],
-          tool_choice: "required",
-          ...(model === "gpt-5" ? { reasoning: { effort: "low" } } : {}) });
+          tool_choice: "auto",
+          ...(["gpt-6-astra", "gpt-5"].includes(model) ? { reasoning: { effort: "low" } } : {}) });
         const output = result.output?.filter(item => item.type === "message").flatMap(item => item.content)
           .find(item => item.type === "output_text");
         const reply = typeof output?.text === "string" ? spokenText(output.text) : "";

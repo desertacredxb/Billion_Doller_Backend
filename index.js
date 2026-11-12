@@ -108,6 +108,7 @@ const startServer = async () => {
   require("./services/blogAutomation.service").start();
   require("./services/emailMarketing.service").start();
   require("./services/crmRegistrationIntake.service").start();
+  require("./services/crmHashmiSync.service").start();
   require("./controllers/veriffController").startApprovalReconciliation();
 };
 
