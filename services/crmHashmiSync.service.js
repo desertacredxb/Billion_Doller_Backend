@@ -22,22 +22,34 @@ function callId(row) {
 }
 
 function callTime(value) {
-  if (Number.isSafeInteger(value) && value >= 1_000_000_000_000 && value <= 4_000_000_000_000) return new Date(value).toISOString();
+  const number = typeof value === "string" && /^\d{10}(?:\d{3})?$/.test(value) ? Number(value) : value;
+  if (Number.isSafeInteger(number) && number >= 1_000_000_000 && number <= 4_000_000_000) return new Date(number * 1000).toISOString();
+  if (Number.isSafeInteger(number) && number >= 1_000_000_000_000 && number <= 4_000_000_000_000) return new Date(number).toISOString();
   return value;
 }
 
-function rawReport(response, id, config) {
+function rawDetail(response) {
   const data = response?.data ?? response;
-  const raw = Array.isArray(data) && data.length === 1 ? data[0] : data;
+  return Array.isArray(data) && data.length === 1 ? data[0] : data;
+}
+
+function rawReport(response, id, config) {
+  const raw = rawDetail(response);
   if (!raw || typeof raw !== "object" || callId(raw) !== id || typeof raw.cType !== "string") return undefined;
   if (!["CTC", "QC"].includes(raw.cType)) return null;
-  return parseReport({ ...raw, callId: id, ivrSTime: callTime(raw.ivrSTime), custAnswerSTime: callTime(raw.custAnswerSTime) }, config) || undefined;
+  const masterAgent = raw.masterAgent ?? (typeof raw.mAgent === "object" ? raw.mAgent?.agentId ?? raw.mAgent?.id : raw.mAgent);
+  const time = callTime(raw.ivrSTime ?? raw.startTime ?? raw.clickTime);
+  const status = Number(raw.callStatus);
+  if (!Number.isInteger(status) || status < 1 || status > 21) return undefined;
+  const report = parseReport({ ...raw, callId: id, masterAgent, ivrSTime: time, custAnswerSTime: callTime(raw.custAnswerSTime) }, config);
+  if (!report?.agentIds.length) return undefined;
+  return report;
 }
 
 function describeFields(value) {
   const item = Array.isArray(value) ? value[0] : value;
   return item && typeof item === "object" ? Object.keys(item)
-    .filter(key => /^[a-zA-Z][a-zA-Z_0-9]{0,39}$/.test(key)).slice(0, 24).join(",") : "none";
+    .filter(key => /^[a-zA-Z][a-zA-Z_0-9]{0,39}$/.test(key)).slice(0, 100).join(",") : "none";
 }
 
 function createHashmiSync({ request = axios.post, config = settings, staff = Staff, calls = Call, save = recordVerifiedCall,
@@ -46,6 +58,7 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
   let window;
   let checked = new Set();
   let loggedScope;
+  let loggedFormat = false;
 
   async function vendor(endpoint, payload, account) {
     const response = await request(REPORTS + endpoint, { userId: account.userId, token: account.token, ...payload }, {
@@ -99,7 +112,13 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
           const detail = await vendor("detail", { clId: id, rType: "allDetail" }, account);
           const report = rawReport(detail, id, account);
           if (report === undefined) {
-            logger.warn("CRM Hashmi call details are not recognized. Fields:", describeFields(detail?.data ?? detail));
+            if (!loggedFormat) {
+              loggedFormat = true;
+              const raw = rawDetail(detail);
+              logger.warn("CRM Hashmi call details are not recognized. Fields:", describeFields(raw),
+                "Master agent fields:", describeFields(raw?.mAgent), "Call list fields:", describeFields(rows),
+                "Start time type:", typeof raw?.startTime, "Call status type:", typeof raw?.callStatus);
+            }
             throw new Error("Hashmi call detail shape is unsupported");
           }
           const agent = report?.agentIds.length === 1 && byId.get(report.agentIds[0]);

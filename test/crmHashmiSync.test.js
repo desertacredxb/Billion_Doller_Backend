@@ -7,7 +7,8 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
   const saved = [];
   const agent = { _id: "bdfx-agent", crmHashmiAgentId: "10953" };
   const reports = {
-    "connected-call": { callStatus: 3, custAnswerSTime: "2026-11-12 08:32:00", talkDuration: 32 },
+    "connected-call": { callStatus: 3, custAnswerSTime: "2026-11-12 08:32:00", talkDuration: 32,
+      masterAgent: undefined, mAgent: { agentId: 10953 }, ivrSTime: undefined, startTime: Date.parse("2026-11-12T03:01:00Z") },
     "customer-failed": { callStatus: 4, nH: ["919876543210"], talkDuration: 18 },
     "agent-only": { callStatus: 1, talkDuration: 20 },
     "different-agent": { masterAgent: "10952", callStatus: 3, custAnswerSTime: "2026-11-12 08:32:00" },
