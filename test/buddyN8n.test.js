@@ -80,3 +80,19 @@ test("report endpoint denies anonymous/wrong-key requests and never presents sto
   assert.equal(res.status, 503); assert.equal((await res.json()).code, "REPORT_UNAVAILABLE");
   assert.equal(res.headers.get("cache-control"), "no-store"); assert.equal(calls, 1);
 });
+
+test("the CRM follow-up report requires the operations credential and exposes only its report", async t => {
+  const express = require("express"), app = express();
+  const key = "z".repeat(40);
+  const report = { day: "2026-11-12", target: 300, agents: [{ name: "Agent", logged: 2, verified: 0, overdue: 1, laterToday: 0, remaining: null }] };
+  app.use(createRouter({ env: { ...env, BDFX_N8N_BUSINESS_REPORT_TOKEN: key }, crmReport: async () => report }));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise(resolve => server.once("listening", resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/crm-follow-ups`;
+  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url + "?details=true", { headers: { "X-BDFX-Business-Report-Key": key } })).status, 400);
+  const response = await fetch(url, { headers: { "X-BDFX-Business-Report-Key": key } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), report);
+});

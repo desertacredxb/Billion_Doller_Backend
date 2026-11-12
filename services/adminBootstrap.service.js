@@ -2,7 +2,7 @@ const crypto = require("node:crypto");
 const AdminAccount = require("../models/AdminAccount");
 const AuditLog = require("../models/AuditLog");
 const { ownerEmails, normalizeEmail, PERMISSIONS } = require("./adminPolicy");
-const BOOTSTRAP_MANAGER_PERMISSIONS = PERMISSIONS.filter(permission => permission !== "website_analytics");
+const BOOTSTRAP_MANAGER_PERMISSIONS = PERMISSIONS.filter(permission => !["website_analytics", "crm_view"].includes(permission));
 
 function createBootstrap({ admins = AdminAccount, logs = AuditLog, emails = () => process.env.ADMIN_BOOTSTRAP_MANAGERS || "", owners = ownerEmails } = {}) {
   return async () => {

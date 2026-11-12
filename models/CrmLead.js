@@ -4,6 +4,7 @@ const schema = new mongoose.Schema({
   leadId: { type: String, required: true, unique: true, maxlength: 100 },
   phone: { type: String, required: true, unique: true },
   name: { type: String, default: "", maxlength: 150 },
+  contactName: { type: String, maxlength: 150 },
   email: { type: String, default: "", maxlength: 254 },
   source: { type: String, default: "Upload", maxlength: 100 },
   originalAgent: { type: String, default: "", maxlength: 254 },
