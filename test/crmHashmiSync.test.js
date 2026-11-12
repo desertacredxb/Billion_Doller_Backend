@@ -25,7 +25,8 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
     request: async (url, payload) => {
       requests.push({ url, payload });
       if (url.endsWith("/list")) return { data: { data: Object.keys(reports).map(clId => ({ clId,
-        st: "Both Answered", tkTmDurAr: ["00:00:00", "00:00:32"], clSTm: Date.parse("2026-11-12T03:01:00Z"),
+        st: "Both Answered", tkTmDurAr: [{ start: "2026-11-12 08:32:00", end: "2026-11-12 08:32:20" },
+          { start: "2026-11-12 08:32:14", end: "2026-11-12 08:32:32" }], clSTm: Date.parse("2026-11-12T03:01:00Z"),
       })) } };
       const callId = payload.clId;
       return { data: { data: { callId, userId: "provider-account", cType: "CTC", cNumber: "919876543210",
