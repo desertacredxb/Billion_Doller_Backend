@@ -22,7 +22,9 @@ function createAccessControl({ users = User, accounts = Account, tickets = Ticke
         const permissions = role === "owner" ? PERMISSIONS : (admin.permissions || []).filter(value => PERMISSIONS.includes(value));
         req.principal = { id: String(admin._id), email: admin.email, fullName: admin.fullName || (role === "owner" ? "BDFX Owner" : "BDFX Manager"), isAdmin: true, adminRole: role, permissions };
         const required = permissionForRequest(req);
-        if (role !== "owner" && required !== "session" && !permissions.includes(required)) return deny(res);
+        const crmRead = (required === "crm_view" && permissions.includes("crm")) ||
+          (required === "crm_team" && (permissions.includes("crm") || permissions.includes("crm_view")));
+        if (role !== "owner" && required !== "session" && !permissions.includes(required) && !crmRead) return deny(res);
       } else {
         const id = token.id || token.userId;
         if (typeof id !== "string" || !id) return deny(res, 401);

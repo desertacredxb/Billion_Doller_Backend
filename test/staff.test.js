@@ -73,9 +73,35 @@ test("configured bootstrap managers get separate identities without passwords or
   await run();
   assert.equal(state.row.email, "manager@example.invalid");
   assert.equal(state.row.invitedBy, ownerId);
-  assert.deepEqual(state.row.permissions, PERMISSIONS.filter(permission => permission !== "website_analytics"));
+  assert.deepEqual(state.row.permissions, PERMISSIONS.filter(permission => !["website_analytics", "crm_view", "crm_team"].includes(permission)));
   assert.equal(state.entries[0].details.permissions.includes("website_analytics"), false);
   assert.equal(state.row.passwordHash, undefined); assert.equal(state.entries.length, 1);
   state.row.enabled = false; await run();
   assert.equal(state.row.enabled, false); assert.equal(state.entries.length, 1);
+});
+
+test("a report-only team leader can view team metrics without accessing lead records", async () => {
+  const leader = accessFor({ ...manager(), permissions: ["crm_team"] });
+  let allowed = false;
+  await leader.principal(managerRequest("/api/crm/overview", { method: "GET" }), response(), () => { allowed = true; });
+  assert.equal(allowed, true);
+  const denied = response();
+  await leader.principal(managerRequest("/api/crm/leads", { method: "GET" }), denied, () => assert.fail("team leader read contact records"));
+  assert.equal(denied.code, 403);
+});
+
+test("CRM view-only staff can read the team records but cannot change or dial leads", async () => {
+  const lead = "333333333333333333333333";
+  const viewer = accessFor({ ...manager(), permissions: ["crm_view"] });
+  for (const path of ["/api/crm/overview", "/api/crm/leads?view=do_not_call", `/api/crm/leads/${lead}/history`]) {
+    let allowed = false;
+    await viewer.principal(managerRequest(path, { method: "GET" }), response(), () => { allowed = true; });
+    assert.equal(allowed, true, path);
+  }
+  for (const [method, path] of [["POST", "/api/crm/distribute"], ["POST", "/api/crm/dial-by-number"], ["POST", "/api/crm/assistant"],
+    ["POST", "/api/crm/assistant/transcribe"], ["PATCH", `/api/crm/leads/${lead}/name`], ["POST", `/api/crm/leads/${lead}/outcome`]]) {
+    const res = response();
+    await viewer.principal(managerRequest(path, { method }), res, () => assert.fail(`viewer could write ${path}`));
+    assert.equal(res.code, 403, path);
+  }
 });

@@ -1,5 +1,5 @@
 const normalizeEmail = value => typeof value === "string" ? value.trim().toLowerCase() : "";
-const PERMISSIONS = ["clients", "partners", "finance", "support", "enquiries", "content", "reports", "crm", "website_analytics"];
+const PERMISSIONS = ["clients", "partners", "finance", "support", "enquiries", "content", "reports", "crm", "website_analytics", "crm_view", "crm_team"];
 const ownerEmails = () => String(process.env.ADMIN_OWNER_EMAILS || process.env.ADMIN_EMAILS || "").split(",").map(normalizeEmail).filter(Boolean);
 function roleFor(admin) {
   if (!admin || admin.enabled === false) return null;
@@ -11,6 +11,8 @@ function permissionForRequest(req) {
   const path = String(req.originalUrl || "").split("?")[0].replace(/\/+$/, "");
   if (path === "/api/auth/admin/session" || path === "/api/operations/overview") return "session";
   if (path === "/api/analytics/report") return "website_analytics";
+  if (["GET", "HEAD"].includes(req.method) && path === "/api/crm/overview") return "crm_team";
+  if (["GET", "HEAD"].includes(req.method) && /^\/api\/crm\/(?:overview|leads(?:\/[a-f\d]{24}\/history)?)$/i.test(path)) return "crm_view";
   if (path.startsWith("/api/staff") || path === "/api/operations/audit") return "owner";
   const module = path.split("/")[2];
   if (module === "auth") return /bank/i.test(path) ? "finance" : "clients";

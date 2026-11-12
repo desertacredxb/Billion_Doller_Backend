@@ -16,8 +16,10 @@ const OUTCOMES = ["no_answer", "busy", "wrong_number", "number_not_in_use", "con
 const CLOSED = new Set(["wrong_number", "number_not_in_use", "not_interested", "do_not_call"]);
 const PURCHASED_SOURCE = /^(COMEXFOREX|purchased data)$/i;
 const staffFilter = { enabled: true, role: "manager", invitedBy: { $ne: null }, permissions: "crm" };
+const hashmiAgentPattern = /^[1-9]\d{0,11}$/;
+const contactable = { lastOutcome: { $ne: "do_not_call" } };
 const unworkedFilter = { status: "new", accountOpened: { $ne: true } };
-const bankFilter = { assignedTo: null, assignmentPending: false, ...unworkedFilter };
+const bankFilter = { assignedTo: null, assignmentPending: false, ...unworkedFilter, ...contactable };
 const objectIdPattern = /^[a-f\d]{24}$/i;
 const requestIdPattern = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const indexReadiness = new WeakMap();
@@ -53,19 +55,24 @@ function dubaiDay(date, now = new Date()) {
 }
 
 function staffScope(principal) {
-  return principal.adminRole === "owner" ? {} : { assignedTo: asId(principal.id) };
+  return canViewTeam(principal) ? {} : { assignedTo: asId(principal.id) };
+}
+
+function canViewTeam(principal) {
+  return principal.adminRole === "owner" || (principal.permissions?.includes("crm_view") && !principal.permissions.includes("crm"));
 }
 
 function readyFilter(now) {
-  return { $or: [unworkedFilter, { status: "follow_up", followUpAt: { $lte: now } }] };
+  return { ...contactable, $or: [unworkedFilter, { status: "follow_up", followUpAt: { $lte: now } }] };
 }
 
 function pageNumber(value) {
   return Math.min(1_000_000, Math.max(1, Number.parseInt(value, 10) || 1));
 }
 
-function activeStaff() {
-  return Staff.find(staffFilter).select("_id fullName email crmHashmiAgentId").sort({ fullName: 1, _id: 1 }).lean();
+function activeStaff(mappedOnly = false) {
+  const filter = mappedOnly ? { ...staffFilter, crmHashmiAgentId: hashmiAgentPattern } : staffFilter;
+  return Staff.find(filter).select("_id fullName email crmHashmiAgentId").sort({ fullName: 1, _id: 1 }).lean();
 }
 
 function staffKeys(staff) {
@@ -82,7 +89,7 @@ function formatLead(lead) {
   return {
     id: String(lead._id),
     leadId: lead.leadId,
-    name: lead.registrationName || lead.name,
+    name: lead.contactName || lead.client?.fullName || lead.registrationName || lead.name,
     phone: lead.phone,
     email: lead.email,
     source: lead.source,
@@ -146,7 +153,7 @@ async function importLeads(rows) {
   if (!Array.isArray(rows) || rows.length < 1 || rows.length > 100) {
     throw new CrmError(400, "Upload up to 100 lead rows per request.");
   }
-  const agents = staffKeys(await activeStaff());
+  const agents = staffKeys(await activeStaff(true));
   const explicitIds = rows.map(row => clean(row?.clientId, 100)).filter(value => objectIdPattern.test(value));
   const clients = explicitIds.length
     ? await User.find({ _id: { $in: explicitIds }, isVerified: true }).select("phone").lean()
@@ -174,7 +181,8 @@ async function importLeads(rows) {
       continue;
     }
     const originalAgent = clean(row?.creditedAgent, 254).toLowerCase();
-    const agent = agents.get(originalAgent);
+    const doNotCall = row?.doNotCall === true;
+    const agent = doNotCall ? null : agents.get(originalAgent);
     const clientId = clean(row?.clientId, 100);
     const assignedDay = clean(row?.assignedDate, 25);
     let assignedAt = agent ? now : null;
@@ -198,10 +206,10 @@ async function importLeads(rows) {
         originalAgent,
         assignedTo: agent?._id || null,
         assignedAt,
-        assignmentPending: Boolean(originalAgent && !agent),
+        assignmentPending: Boolean(!doNotCall && originalAgent && !agent),
         clientId: clientPhone.get(clientId) === phone ? clientId : null,
-        status: row?.doNotCall === true ? "closed" : "new",
-        lastOutcome: row?.doNotCall === true ? "do_not_call" : undefined,
+        status: doNotCall ? "closed" : "new",
+        lastOutcome: doNotCall ? "do_not_call" : undefined,
         createdAt: now,
         updatedAt: now,
       } },
@@ -229,7 +237,8 @@ function leadOutcomeUpdate(event) {
   };
   return {
     filter: { _id: event.lead, ...keepsOptOut },
-    update: { $set: { status, followUpAt: event.followUpAt, lastOutcome: event.outcome, lastNote: event.note, lastOutcomeAt: event.occurredAt } },
+    update: { $set: { status, followUpAt: event.followUpAt, lastOutcome: event.outcome, lastNote: event.note, lastOutcomeAt: event.occurredAt,
+      ...(event.outcome === "do_not_call" ? { assignmentPending: false } : {}) } },
   };
 }
 
@@ -291,6 +300,7 @@ async function progress(ids, date = dubaiDay(), now = new Date()) {
         verified: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "hashmi"] }, "$attempted"] }, 1, 0] } },
         connected: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "hashmi"] }, "$connected"] }, 1, 0] } },
         logged: { $sum: { $cond: [{ $eq: ["$kind", "outcome"] }, 1, 0] } },
+        lastActivityAt: { $max: "$occurredAt" },
         talkSeconds: { $sum: { $cond: [{ $eq: ["$kind", "hashmi"] }, "$talkSeconds", 0] } },
       } },
     ]),
@@ -299,8 +309,8 @@ async function progress(ids, date = dubaiDay(), now = new Date()) {
   const byCall = new Map(counts.map(item => [String(item._id), item]));
   return new Map(ids.map(id => {
     const key = String(id);
-    const { verified = 0, connected = 0, logged = 0, talkSeconds = 0 } = byCall.get(key) || {};
-    return [key, { ready: byQueue.get(key) || 0, verified, connected, logged, talkSeconds }];
+    const { verified = 0, connected = 0, logged = 0, talkSeconds = 0, lastActivityAt = null } = byCall.get(key) || {};
+    return [key, { ready: byQueue.get(key) || 0, verified, connected, logged, talkSeconds, lastActivityAt }];
   }));
 }
 
@@ -331,12 +341,12 @@ async function distribute() {
     throw error;
   }
   try {
-    const staff = await activeStaff();
+    const staff = await activeStaff(true);
     if (!staff.length) return { assigned: 0 };
     const keys = staffKeys(staff);
     const aliasUpdates = [...keys].flatMap(([key, agent]) => agent ? [{
       updateMany: {
-        filter: { assignedTo: null, assignmentPending: true, originalAgent: key },
+        filter: { assignedTo: null, assignmentPending: true, originalAgent: key, ...contactable },
         update: [{ $set: { assignedTo: agent._id, assignmentPending: false, assignedAt: { $ifNull: ["$assignedAt", now] } } }],
       },
     }] : []);
@@ -359,13 +369,16 @@ async function distribute() {
 async function overview(principal, day) {
   const date = dubaiDay(day);
   const owner = principal.adminRole === "owner";
-  const staff = owner ? await activeStaff() : await Staff.find(staffFilter).where("_id").equals(principal.id)
+  const team = canViewTeam(principal) || (principal.permissions?.includes("crm_team") && !principal.permissions.includes("crm"));
+  const staff = team ? await activeStaff() : await Staff.find(staffFilter).where("_id").equals(principal.id)
     .select("_id fullName crmHashmiAgentId").lean();
-  const [stats, bank, pending] = await Promise.all([
+  const [stats, bank, pending, followUps] = await Promise.all([
     progress(staff.map(agent => agent._id), date),
-    owner ? Lead.countDocuments(bankFilter) : null,
-    owner ? Lead.countDocuments({ assignmentPending: true }) : null,
+    team ? Lead.countDocuments(bankFilter) : null,
+    team ? Lead.countDocuments({ assignmentPending: true, ...contactable }) : null,
+    team ? countFollowUps(staff.map(agent => agent._id), date, new Date()) : [],
   ]);
+  const due = new Map(followUps.map(row => [String(row._id), row]));
   return {
     day: date.day,
     target: TARGET,
@@ -375,22 +388,51 @@ async function overview(principal, day) {
     agents: staff.map(agent => ({
       id: String(agent._id),
       name: agent.fullName || agent.email,
-      hashmiId: agent.crmHashmiAgentId || "",
+      hashmiId: owner || !team ? agent.crmHashmiAgentId || "" : "",
+      dialerMapped: hashmiAgentPattern.test(agent.crmHashmiAgentId || ""),
+      overdue: due.get(String(agent._id))?.overdue || 0,
       ...stats.get(String(agent._id)),
     })),
   };
+}
+
+function countFollowUps(ids, date, now) {
+  return Lead.aggregate([
+    { $match: { assignedTo: { $in: ids }, status: "follow_up", followUpAt: { $type: "date" }, ...contactable } },
+    { $group: { _id: "$assignedTo",
+      overdue: { $sum: { $cond: [{ $lte: ["$followUpAt", now] }, 1, 0] } },
+      laterToday: { $sum: { $cond: [{ $and: [{ $gt: ["$followUpAt", now] }, { $lt: ["$followUpAt", date.end] }] }, 1, 0] } },
+    } },
+  ]);
+}
+
+async function followUpReport(now = new Date()) {
+  const date = dubaiDay(undefined, now);
+  const staff = await activeStaff(true);
+  const ids = staff.map(agent => agent._id);
+  const [stats, followUps] = await Promise.all([
+    progress(ids, date, now),
+    countFollowUps(ids, date, now),
+  ]);
+  const due = new Map(followUps.map(row => [String(row._id), row]));
+  return { day: date.day, checkedAt: now.toISOString(), target: TARGET, agents: staff.map(agent => {
+    const id = String(agent._id);
+    const { verified, logged } = stats.get(id);
+    return { name: agent.fullName || "CRM caller", verified, logged, remaining: verified || !logged ? Math.max(0, TARGET - verified) : null,
+      overdue: due.get(id)?.overdue || 0, laterToday: due.get(id)?.laterToday || 0 };
+  }) };
 }
 
 function searchFilter(value) {
   const keyword = clean(value, 80);
   if (!keyword) return {};
   const escaped = keyword.replace(/[.*+?^\u0024{}()|[\]\\]/g, "\\$&");
-  return { $or: ["name", "registrationName", "phone", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
+  return { $or: ["contactName", "name", "registrationName", "phone", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
 }
 
 function leadFilter(principal, query) {
   const scope = staffScope(principal);
-  if (principal.adminRole === "owner" && query.agent) scope.assignedTo = asId(query.agent);
+  if (canViewTeam(principal) && query.agent) scope.assignedTo = asId(query.agent);
   return { $and: [scope, searchFilter(query.search)] };
 }
 
@@ -406,6 +448,7 @@ async function listLeads(principal, query) {
     purchased: { source: PURCHASED_SOURCE },
     registrations: { registeredAt: { $type: "date" } },
     number_not_in_use: { status: "closed", lastOutcome: "number_not_in_use" },
+    do_not_call: { lastOutcome: "do_not_call" },
   };
   if (Object.hasOwn(list, query.view)) filter.$and.push(list[query.view]);
   const [rows, total] = await Promise.all([
@@ -459,6 +502,23 @@ async function listClients(principal, query) {
   return { rows, total: result.total[0]?.count || 0, page, limit };
 }
 
+async function renameLead(principal, leadId, value) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name || name.length > 150) throw new CrmError(400, "Enter a lead name of 1 to 150 characters.");
+  const scope = principal.adminRole === "owner" ? {} : { assignedTo: asId(principal.id) };
+  const result = await Lead.updateOne({ _id: asId(leadId), ...scope }, { $set: { contactName: name } }, { runValidators: true });
+  if (!result.matchedCount) throw new CrmError(404, "Lead not found.");
+  return { name };
+}
+
+async function assignedLeadByPhone(principal, value) {
+  const phone = identity.normalizePhone(clean(value, 50));
+  if (!phone) throw new CrmError(400, "Enter a valid phone number with country code.");
+  const lead = await Lead.findOne({ phone, assignedTo: asId(principal.id) }).select("_id").lean();
+  if (!lead) throw new CrmError(404, "This phone number is not assigned to you in CRM.");
+  return String(lead._id);
+}
+
 async function recordOutcome(principal, leadId, body) {
   const agent = asId(principal.id);
   const id = asId(leadId);
@@ -470,7 +530,8 @@ async function recordOutcome(principal, leadId, body) {
   if (rawCallback && (!followUpAt || CLOSED.has(outcome))) {
     throw new CrmError(400, "Choose a callback date for an open lead.");
   }
-  const current = await Lead.findOne({ _id: id, assignedTo: agent }).select("lastOutcome").lean();
+  const scope = outcome === "do_not_call" && principal.adminRole === "owner" ? {} : { assignedTo: agent };
+  const current = await Lead.findOne({ _id: id, ...scope }).select("lastOutcome").lean();
   if (!current) throw new CrmError(404, "Assigned lead not found.");
   if (current.lastOutcome === "do_not_call" && outcome !== "do_not_call") {
     throw new CrmError(409, "This lead is marked Do not call.");
@@ -492,7 +553,8 @@ async function recordOutcome(principal, leadId, body) {
     throw new CrmError(409, "This call entry already belongs to another lead.");
   }
   const leadUpdate = leadOutcomeUpdate(event);
-  await Lead.updateOne({ ...leadUpdate.filter, assignedTo: agent }, leadUpdate.update);
+  const updated = await Lead.updateOne({ ...leadUpdate.filter, ...scope }, leadUpdate.update);
+  if (event.outcome === "do_not_call" && updated?.matchedCount === 0) throw new CrmError(404, "Lead not found.");
   return { saved: true, status: leadUpdate.update.$set.status };
 }
 
@@ -502,5 +564,5 @@ async function history(principal, id) {
   return Call.find({ lead: lead._id }).select("kind occurredAt outcome note followUpAt attempted connected talkSeconds").sort({ occurredAt: -1 }).limit(50).lean();
 }
 
-module.exports = { TARGET, CrmError, staffFilter, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
-  distribute, overview, listLeads, listClients, recordOutcome, history, planAssignments };
+module.exports = { TARGET, CrmError, staffFilter, hashmiAgentPattern, contactable, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
+  distribute, overview, followUpReport, listLeads, listClients, renameLead, assignedLeadByPhone, recordOutcome, history, planAssignments };

@@ -1,10 +1,14 @@
 const express = require("express");
+const multer = require("multer");
 const auth = require("../middleware/authMiddleware");
 const access = require("../middleware/accessControl");
 const crm = require("../services/crm.service");
 const hashmi = require("../services/crmHashmi.service");
+const { AUDIO_LIMIT, createCrmAssistant } = require("../services/crmAssistant.service");
 
 const router = express.Router();
+const assistant = createCrmAssistant();
+const uploadQuestion = multer({ storage: multer.memoryStorage(), limits: { fileSize: AUDIO_LIMIT, files: 1, fields: 0 } }).single("audio");
 
 const run = handler => async (req, res, next) => {
   try { await handler(req, res); }
@@ -27,6 +31,12 @@ router.post("/hashmi/report", run(async (req, res) => {
 
 router.use(auth, access.principal, access.admin);
 
+router.post("/assistant", run(async (req, res) => res.json(await assistant.ask(req.body?.question))));
+router.post("/assistant/transcribe", (req, res, next) => uploadQuestion(req, res, error => {
+  if (error) return res.status(400).json({ message: "Record a short voice question or type it instead." });
+  next();
+}), run(async (req, res) => res.json(await assistant.transcribe(req.file))));
+
 router.get("/overview", run(async (req, res) => {
   const report = await crm.overview(req.principal, req.query.day);
   res.json({ ...report, ...hashmi.connectionState() });
@@ -36,6 +46,13 @@ router.get("/leads", run(async (req, res) => {
   res.json(await read(req.principal, req.query));
 }));
 router.get("/leads/:id/history", run(async (req, res) => res.json(await crm.history(req.principal, req.params.id))));
+
+router.patch("/leads/:id/name", run(async (req, res) => {
+  const result = await crm.renameLead(req.principal, req.params.id, req.body?.name);
+  req.auditEvent = "crm:lead-name-edited";
+  req.auditDetails = { leadId: req.params.id, changedFields: ["name"] };
+  res.json(result);
+}));
 
 router.post("/import", access.owner, run(async (req, res) => {
   const summary = await crm.importLeads(req.body?.rows);
@@ -60,11 +77,19 @@ router.patch("/team/:id/hashmi", access.owner, run(async (req, res) => {
 }));
 router.post("/leads/:id/outcome", run(async (req, res) => {
   const result = await crm.recordOutcome(req.principal, req.params.id, req.body);
+  if (req.body.outcome === "do_not_call") {
+    req.auditEvent = "crm:do-not-call";
+    req.auditDetails = { leadId: req.params.id };
+  }
   const distribution = await crm.distribute();
   res.json({ ...result, refreshQueue: !distribution.busy });
 }));
 router.post("/leads/:id/dial", run(async (req, res) => {
   res.json(await hashmi.dial(req.principal, req.params.id, req.body?.requestId));
+}));
+router.post("/dial-by-number", run(async (req, res) => {
+  const lead = await crm.assignedLeadByPhone(req.principal, req.body?.phone);
+  res.json(await hashmi.dial(req.principal, lead, req.body?.requestId));
 }));
 
 module.exports = router;

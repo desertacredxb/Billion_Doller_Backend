@@ -4,10 +4,9 @@ const Lead = require("../models/CrmLead");
 const Call = require("../models/CrmCall");
 const Staff = require("../models/AdminAccount");
 const identity = require("../utils/registrationIdentity");
-const { CrmError, asId, assertRequestId, ensureCrmIndexes, staffFilter } = require("./crm.service");
+const { CrmError, asId, assertRequestId, ensureCrmIndexes, staffFilter, hashmiAgentPattern: agentPattern, contactable } = require("./crm.service");
 
 const CLICK_TO_CALL = "https://v4-api.deepcall.com/api/v3/clickToCall/para";
-const agentPattern = /^[1-9]\d{0,11}$/;
 const callPattern = /^[a-z\d_-]{1,120}$/i;
 const quickCallCustomerLeg = new Set([3, 4, 5, 6, 8, 9, 14, 15, 16, 18, 19]);
 
@@ -76,15 +75,16 @@ async function dial(principal, leadId, key, request = axios.post) {
   if (!agentPattern.test(agent?.crmHashmiAgentId || "")) throw new CrmError(400, "Ask the owner to map your Hashmi agent ID.");
   const now = new Date();
   const lead = await Lead.findOneAndUpdate({
-    _id: id, assignedTo, status: { $ne: "closed" }, "dialRequest.key": { $ne: key },
+    _id: id, assignedTo, status: { $ne: "closed" }, ...contactable, "dialRequest.key": { $ne: key },
     $or: [
       { "dialRequest.state": { $ne: "pending" } },
       { "dialRequest.startedAt": { $lt: new Date(+now - 45_000) } },
     ],
   }, { $set: { dialRequest: { key, state: "pending", startedAt: now } } }, { new: true }).lean();
   if (!lead) {
-    const current = await Lead.findOne({ _id: id, assignedTo }).select("dialRequest status").lean();
+    const current = await Lead.findOne({ _id: id, assignedTo }).select("dialRequest status lastOutcome").lean();
     if (!current) throw new CrmError(404, "Assigned lead not found.");
+    if (current.lastOutcome === "do_not_call") throw new CrmError(409, "This lead is marked Do not call back.");
     if (current.status === "closed") throw new CrmError(409, "This lead is closed.");
     if (current.dialRequest?.key === key) return { state: current.dialRequest.state, mode: config.mode };
     throw new CrmError(409, "A Hashmi request is already in progress for this lead.");

@@ -1,9 +1,12 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createIntake } = require("../services/crmRegistrationIntake.service");
-const { listLeads, recordOutcome, syncRegisteredLeads } = require("../services/crm.service");
+const { assignedLeadByPhone, distribute, importLeads, listLeads, recordOutcome, renameLead, syncRegisteredLeads } = require("../services/crm.service");
+const { dial } = require("../services/crmHashmi.service");
 const Lead = require("../models/CrmLead");
 const Call = require("../models/CrmCall");
+const Staff = require("../models/AdminAccount");
+const AssignmentLock = require("../models/CrmAssignmentLock");
 
 const at = new Date("2026-11-12T10:00:00Z");
 const agent = "64a18b33dd4fb15a2b01c001";
@@ -86,5 +89,73 @@ test("number not in use closes the lead and preserves the caller's note", async 
   const principal = { id: agent };
   assert.deepEqual(await recordOutcome(principal, leadId, { ...body, outcome: "number_not_in_use" }), { saved: true, status: "closed" });
   await assert.rejects(recordOutcome(principal, leadId, { ...body, outcome: "connected" }), { status: 409 });
-  assert.equal(update.mock.callCount(), 1);
+  assert.deepEqual(await recordOutcome(principal, leadId, { ...body, outcome: "do_not_call", requestId: "7b204a2c-f26d-4510-a3f3-2d1f4506b9e1" }), { saved: true, status: "closed" });
+  assert.equal(update.mock.calls[1].arguments[1].$set.assignmentPending, false);
+  assert.equal(lastOutcome, "do_not_call");
+});
+
+test("CRM names and direct phone lookups are scoped to the caller's assigned leads", async t => {
+  const principal = { id: agent, adminRole: "manager", permissions: ["crm"] };
+  t.mock.method(Lead, "updateOne", async (filter, changes) => {
+    assert.equal(String(filter.assignedTo), agent);
+    assert.deepEqual(changes.$set, { contactName: "Corrected lead name" });
+    return { matchedCount: String(filter._id) === leadId ? 1 : 0 };
+  });
+  t.mock.method(Lead, "findOne", filter => ({ select: () => ({ lean: async () => {
+    assert.equal(String(filter.assignedTo), agent);
+    return filter.phone === "+12025550101" ? { _id: leadId } : null;
+  } }) }));
+  assert.deepEqual(await renameLead(principal, leadId, " Corrected lead name "), { name: "Corrected lead name" });
+  await assert.rejects(renameLead(principal, person, "Corrected lead name"), { status: 404 });
+  assert.equal(await assignedLeadByPhone(principal, "+1 202-555-0101"), leadId);
+  await assert.rejects(assignedLeadByPhone(principal, "+12025550102"), { status: 404 });
+});
+
+test("assignment requires a mapped CRM caller and never assigns imported opt-outs", async t => {
+  const staff = [{ _id: agent, fullName: "Caller", crmHashmiAgentId: "10953" }];
+  const queries = [];
+  t.mock.method(Staff, "find", filter => {
+    assert.equal(filter.permissions, "crm");
+    assert.equal(filter.crmHashmiAgentId.test(""), false);
+    assert.equal(filter.crmHashmiAgentId.test("10953"), true);
+    return { select: () => ({ sort: () => ({ lean: async () => staff }) }) };
+  });
+  t.mock.method(AssignmentLock, "updateOne", async () => {});
+  t.mock.method(AssignmentLock, "deleteOne", async () => {});
+  t.mock.method(Lead, "bulkWrite", async ([operation]) => {
+    if (operation.updateMany) {
+      assert.deepEqual(operation.updateMany.filter.lastOutcome, { $ne: "do_not_call" });
+      return { modifiedCount: 0 };
+    }
+    queries.push(operation.updateOne.update.$setOnInsert);
+    return { upsertedCount: 1 };
+  });
+  t.mock.method(Lead, "aggregate", async () => [{ _id: agent, ready: 300 }]);
+  t.mock.method(Call, "aggregate", async () => []);
+  assert.deepEqual(await distribute(), { assigned: 0 });
+  await importLeads([{ phone: "+12025550101", creditedAgent: "Caller", doNotCall: true }]);
+  await importLeads([{ phone: "+12025550102", creditedAgent: "Unmapped caller" }]);
+  assert.equal(queries[0].assignedTo, null);
+  assert.equal(queries[0].assignmentPending, false);
+  assert.equal(queries[0].lastOutcome, "do_not_call");
+  assert.equal(queries[1].assignedTo, null);
+  assert.equal(queries[1].assignmentPending, true);
+});
+
+test("an opted-out lead cannot reach Hashmi even if its old status is still new", async t => {
+  const env = process.env;
+  t.mock.method(Staff, "findOne", () => ({ select: () => ({ lean: async () => ({ crmHashmiAgentId: "10953" }) }) }));
+  t.mock.method(Lead, "findOneAndUpdate", filter => {
+    assert.deepEqual(filter.lastOutcome, { $ne: "do_not_call" });
+    return { lean: async () => null };
+  });
+  t.mock.method(Lead, "findOne", () => ({ select: () => ({ lean: async () => ({ status: "new", lastOutcome: "do_not_call" }) }) }));
+  const previous = [env.BDFX_HASHMI_USER_ID, env.BDFX_HASHMI_API_TOKEN];
+  env.BDFX_HASHMI_USER_ID = "fixture";
+  env.BDFX_HASHMI_API_TOKEN = "fixture";
+  t.after(() => ["BDFX_HASHMI_USER_ID", "BDFX_HASHMI_API_TOKEN"].forEach((name, index) => {
+    if (previous[index] === undefined) delete env[name];
+    else env[name] = previous[index];
+  }));
+  await assert.rejects(dial({ id: agent }, leadId, "198e1ff4-df44-4044-a322-11f8786ec761", () => assert.fail("Hashmi was called")), { status: 409 });
 });
