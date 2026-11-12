@@ -11,6 +11,7 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
     "customer-failed": { callStatus: 4, nH: ["919876543210"], talkDuration: 18 },
     "agent-only": { callStatus: 1, talkDuration: 20 },
     "different-agent": { masterAgent: "10952", callStatus: 3, custAnswerSTime: "2026-11-12 08:32:00" },
+    "connected-duration": { callStatus: 3, duration: { talk: 22_500, ivr: 41_000 } },
   };
   const sync = createHashmiSync({
     config: () => ({ userId: "provider-account", token: "test-token", mode: "live" }),
@@ -25,8 +26,8 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
     request: async (url, payload) => {
       requests.push({ url, payload });
       if (url.endsWith("/list")) return { data: { data: Object.keys(reports).map(clId => ({ clId,
-        st: "Both Answered", tkTmDurAr: [{ start: "2026-11-12 08:32:00", end: "2026-11-12 08:32:20" },
-          { start: "2026-11-12 08:32:14", end: "2026-11-12 08:32:32" }], clSTm: Date.parse("2026-11-12T03:01:00Z"),
+        st: "Both Answered", tkTmDurAr: clId === "connected-duration" ? [] : [{ start: "08:32:00", end: "08:32:20" },
+          { start: "08:32:14", end: "08:32:32" }], clSTm: Date.parse("2026-11-12T03:01:00Z"), clETm: Date.parse("2026-11-12T03:01:41Z"),
       })) } };
       const callId = payload.clId;
       return { data: { data: { callId, userId: "provider-account", cType: "CTC", cNumber: "919876543210",
@@ -36,9 +37,9 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
   await sync.tick();
   await sync.tick();
   assert.deepEqual(requests[0].payload.filter, { agtIds: ["10953"], dtGte: "2026-11-12 01:15:00", dtLte: "2026-11-12 21:30:00" });
-  assert.equal(requests.filter(request => request.url.endsWith("/detail")).length, 4);
+  assert.equal(requests.filter(request => request.url.endsWith("/detail")).length, 5);
   assert.deepEqual(saved.map(({ report, staffMember }) => [report.callId, staffMember._id, report.connected, report.talkSeconds]), [
-    ["connected-call", "bdfx-agent", true, 32], ["customer-failed", "bdfx-agent", false, 0],
+    ["connected-call", "bdfx-agent", true, 32], ["customer-failed", "bdfx-agent", false, 0], ["connected-duration", "bdfx-agent", true, 22],
   ]);
 });
 
