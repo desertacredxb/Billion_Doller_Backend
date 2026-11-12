@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { createHash } = require("node:crypto");
 const Call = require("../models/CrmCall");
 const Staff = require("../models/AdminAccount");
 const { dubaiDay, staffFilter, hashmiAgentPattern } = require("./crm.service");
@@ -85,6 +86,16 @@ function listTalkSeconds(value, offset) {
   return positive.length === 1 ? positive[0] : positive.length === 0 && durations.length ? 0 : undefined;
 }
 
+function durationDiagnostics(raw, row, callId, offset) {
+  const sample = createHash("sha256").update(callId).digest("hex").slice(0, 12);
+  const numeric = value => Number.isFinite(value) && value >= 0 && value <= 86_400_000 ? value : null;
+  const shape = value => typeof value === "string" && /^[\dTtZz:+ .\/-]+(?:\s*(?:am|pm))?$/i.test(value) ? value.replace(/\d/g, "#") : typeof value;
+  const start = providerTimestamp(row.clSTm, offset);
+  const end = providerTimestamp(row.clETm, offset);
+  return { sample, talk: numeric(raw?.duration?.talk), ivr: numeric(raw?.duration?.ivr), elapsed: start !== null && end !== null ? numeric(end - start) : null,
+    interval: [shape(row.tkTmDurAr?.[0]?.start), shape(row.tkTmDurAr?.[0]?.end)] };
+}
+
 function rawTalkSeconds(duration, row, offset) {
   if (typeof duration?.talk === "string" && duration.talk.includes(":")) return seconds(duration.talk);
   const talk = Number(duration?.talk);
@@ -159,7 +170,7 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
   let checked = new Set();
   let loggedScope;
   let loggedFormat = false;
-  let loggedDuration = false;
+  let durationSamples = 0;
 
   async function vendor(endpoint, payload, account) {
     const response = await request(REPORTS + endpoint, { userId: account.userId, token: account.token, ...payload }, {
@@ -206,7 +217,7 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
       }
       const pending = ids.filter(id => !checked.has(id));
       const existing = pending.length ? await calls.distinct("providerCallId", { kind: "hashmi", providerCallId: { $in: pending },
-        $or: [{ connected: { $ne: true } }, { talkSeconds: { $gt: 0 } }] }) : [];
+        $or: [{ hashmiExportStatus: { $exists: true } }, { attempted: true, connected: { $ne: true } }, { talkSeconds: { $gt: 0 } }] }) : [];
       for (const id of existing) checked.add(id);
       const queue = pending.filter(id => !checked.has(id));
       let saved = 0;
@@ -232,11 +243,9 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
           const agent = report?.agentIds.length === 1 && byId.get(report.agentIds[0]);
           if (agent && report.attempted && +report.occurredAt >= +since && +report.occurredAt <= +at) {
             if (await save(report, agent)) saved++;
-            if (report.connected && !loggedDuration) {
-              loggedDuration = true;
-              logger.log("CRM Hashmi connected duration check:", report.talkSeconds, "seconds; list field", describeValue(row.tkTmDurAr),
-                "interval start/end", describeValue(row.tkTmDurAr?.[0]?.start), describeValue(row.tkTmDurAr?.[0]?.end),
-                "duration fields", describeValue(rawDetail(detail)?.duration?.talk), describeValue(rawDetail(detail)?.duration?.ivr));
+            if (report.connected && durationSamples < 3) {
+              durationSamples++;
+              logger.log("CRM Hashmi connected duration check:", report.talkSeconds, JSON.stringify(durationDiagnostics(rawDetail(detail), row, id, account.offset)));
             }
           }
           checked.add(id);

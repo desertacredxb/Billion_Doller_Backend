@@ -4,6 +4,7 @@ const auth = require("../middleware/authMiddleware");
 const access = require("../middleware/accessControl");
 const crm = require("../services/crm.service");
 const hashmi = require("../services/crmHashmi.service");
+const { importHashmiRows } = require("../services/crmHashmiImport.service");
 const { AUDIO_LIMIT, createCrmAssistant } = require("../services/crmAssistant.service");
 
 const router = express.Router();
@@ -64,6 +65,12 @@ router.post("/import/outcomes", access.owner, run(async (req, res) => {
   const summary = await crm.importOutcomes(req.body?.rows);
   req.auditEvent = "crm:import-outcomes";
   req.auditDetails = { imported: summary.imported, duplicate: summary.duplicates, rejected: summary.rejected.length };
+  res.json(summary);
+}));
+router.post("/import/hashmi", access.owner, run(async (req, res) => {
+  const summary = await importHashmiRows(req.body?.rows);
+  req.auditEvent = "crm:import-hashmi";
+  req.auditDetails = { added: summary.added, updated: summary.updated, leadsAdded: summary.leadsAdded, rejected: summary.rejected.length };
   res.json(summary);
 }));
 router.post("/distribute", run(async (req, res) => {
