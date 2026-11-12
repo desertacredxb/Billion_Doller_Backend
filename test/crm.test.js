@@ -1,7 +1,43 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { dubaiDay, planAssignments, staffScope, TARGET } = require("../services/crm.service");
+const { dubaiDay, importLeads, planAssignments, staffScope, TARGET } = require("../services/crm.service");
 const { authorizedReport, buildCallParameters, parseReport, setAgent } = require("../services/crmHashmi.service");
+const Lead = require("../models/CrmLead");
+const Staff = require("../models/AdminAccount");
+
+test("lead imports recover from early model initialization failure and retry index creation before writing", async t => {
+  const indexes = [];
+  const saved = new Set();
+  const init = t.mock.method(Lead, "init", async () => { throw new TypeError("Cached early initialization failure"); });
+  const staffQuery = { select: () => staffQuery, sort: () => staffQuery, lean: async () => [] };
+  t.mock.method(Staff, "find", () => staffQuery);
+  let failFirstIndex = true;
+  t.mock.method(Lead.collection, "createIndex", async (keys, options) => {
+    if (failFirstIndex) {
+      failFirstIndex = false;
+      throw new Error("Temporary index creation failure");
+    }
+    indexes.push({ keys, unique: options.unique === true });
+  });
+  const write = t.mock.method(Lead.collection, "bulkWrite", async operations => {
+    assert.ok(indexes.some(index => index.keys.phone === 1 && index.unique));
+    assert.ok(indexes.some(index => index.keys.leadId === 1 && index.unique));
+    const before = saved.size;
+    for (const { updateOne } of operations) {
+      assert.equal(updateOne.upsert, true);
+      assert.equal(updateOne.update.$setOnInsert.phone, updateOne.filter.phone);
+      saved.add(updateOne.filter.phone);
+    }
+    return { upsertedCount: saved.size - before };
+  });
+  const rows = [{ phone: "+12025550101", source: "Import test" }];
+  await assert.rejects(() => importLeads(rows), /Temporary index creation failure/);
+  assert.equal(write.mock.callCount(), 0);
+  assert.deepEqual(await importLeads(rows), { imported: 1, duplicates: 0, rejected: [] });
+  assert.deepEqual(await importLeads(rows), { imported: 0, duplicates: 1, rejected: [] });
+  assert.equal(indexes.length, Lead.schema.indexes().length);
+  assert.equal(init.mock.callCount(), 0);
+});
 
 test("Hashmi mapping verifies its unique index and updates the active CRM account", async () => {
   const calls = [];

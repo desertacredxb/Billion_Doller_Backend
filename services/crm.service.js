@@ -18,6 +18,7 @@ const staffFilter = { enabled: true, role: "manager", invitedBy: { $ne: null }, 
 const bankFilter = { assignedTo: null, assignmentPending: false, status: "new" };
 const objectIdPattern = /^[a-f\d]{24}$/i;
 const requestIdPattern = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+const indexReadiness = new WeakMap();
 
 class CrmError extends Error {
   constructor(status, message) {
@@ -95,8 +96,24 @@ function formatLead(lead) {
   };
 }
 
+function ensureCrmIndexes(model) {
+  if (!indexReadiness.has(model)) {
+    // Model.init() can retain an auto-create failure from before MongoDB connects.
+    const ready = (async () => {
+      for (const [keys, options] of model.schema.indexes()) {
+        await model.collection.createIndex(keys, options);
+      }
+    })().catch(error => {
+      indexReadiness.delete(model);
+      throw error;
+    });
+    indexReadiness.set(model, ready);
+  }
+  return indexReadiness.get(model);
+}
+
 async function insertNew(model, operations) {
-  await model.init();
+  await ensureCrmIndexes(model);
   try {
     return (await model.bulkWrite(operations, { ordered: false })).upsertedCount;
   } catch (error) {
@@ -431,7 +448,7 @@ async function recordOutcome(principal, leadId, body) {
   }
   const key = "outcome:" + body.requestId;
   const fields = { kind: "outcome", agent, lead: id, occurredAt: new Date(), outcome, note: clean(body.note, 1500), followUpAt };
-  await Call.init();
+  await ensureCrmIndexes(Call);
   let event;
   try {
     event = await Call.findOneAndUpdate({ eventKey: key }, { $setOnInsert: fields }, { upsert: true, new: true }).lean();
@@ -453,5 +470,5 @@ async function history(principal, id) {
   return Call.find({ lead: lead._id }).select("kind occurredAt outcome note followUpAt attempted connected talkSeconds").sort({ occurredAt: -1 }).limit(50).lean();
 }
 
-module.exports = { TARGET, CrmError, staffFilter, asId, assertRequestId, dubaiDay, staffScope, importLeads, importOutcomes,
+module.exports = { TARGET, CrmError, staffFilter, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes,
   distribute, overview, listLeads, listClients, recordOutcome, history, planAssignments };
