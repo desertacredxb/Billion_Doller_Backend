@@ -6,5 +6,7 @@ const router = express.Router();
 router.use(auth, access.principal, access.owner);
 router.get("/", controller.list);
 router.post("/", controller.create);
+router.get("/crm-drafts", controller.listCrmDrafts);
+router.post("/crm-drafts", controller.stageCrmDrafts);
 router.patch("/:id", controller.update);
 module.exports = router;
