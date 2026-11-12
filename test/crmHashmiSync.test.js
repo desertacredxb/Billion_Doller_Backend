@@ -7,8 +7,7 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
   const saved = [];
   const agent = { _id: "bdfx-agent", crmHashmiAgentId: "10953" };
   const reports = {
-    "connected-call": { callStatus: 3, custAnswerSTime: "2026-11-12 08:32:00", talkDuration: 32,
-      masterAgent: undefined, mAgent: { agentId: 10953 }, ivrSTime: undefined, startTime: Date.parse("2026-11-12T03:01:00Z") },
+    "connected-call": { masterAgent: undefined, mAgent: { agentId: 10953 }, ivrSTime: undefined, startTime: {} },
     "customer-failed": { callStatus: 4, nH: ["919876543210"], talkDuration: 18 },
     "agent-only": { callStatus: 1, talkDuration: 20 },
     "different-agent": { masterAgent: "10952", callStatus: 3, custAnswerSTime: "2026-11-12 08:32:00" },
@@ -25,7 +24,9 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
     logger: { log() {}, warn: (...args) => assert.fail(args.join(" ")) },
     request: async (url, payload) => {
       requests.push({ url, payload });
-      if (url.endsWith("/list")) return { data: { data: Object.keys(reports).map(callId => ({ callId })) } };
+      if (url.endsWith("/list")) return { data: { data: Object.keys(reports).map(clId => ({ clId,
+        st: "Both Answered", tkTmDurAr: ["00:00:32"], clSTm: Date.parse("2026-11-12T03:01:00Z"),
+      })) } };
       const callId = payload.clId;
       return { data: { data: { callId, userId: "provider-account", cType: "CTC", cNumber: "919876543210",
         masterAgent: "10953", ivrSTime: "2026-11-12 08:31:00", ...reports[callId] } } };
