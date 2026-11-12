@@ -12,10 +12,12 @@ const identity = require("../utils/registrationIdentity");
 const TARGET = 300;
 const DAY_MS = 86_400_000;
 const DUBAI_OFFSET = 4 * 3_600_000;
-const OUTCOMES = ["no_answer", "busy", "wrong_number", "connected", "not_interested", "qualified", "do_not_call"];
-const CLOSED = new Set(["wrong_number", "not_interested", "do_not_call"]);
+const OUTCOMES = ["no_answer", "busy", "wrong_number", "number_not_in_use", "connected", "not_interested", "qualified", "do_not_call"];
+const CLOSED = new Set(["wrong_number", "number_not_in_use", "not_interested", "do_not_call"]);
+const PURCHASED_SOURCE = /^(COMEXFOREX|purchased data)$/i;
 const staffFilter = { enabled: true, role: "manager", invitedBy: { $ne: null }, permissions: "crm" };
-const bankFilter = { assignedTo: null, assignmentPending: false, status: "new" };
+const unworkedFilter = { status: "new", accountOpened: { $ne: true } };
+const bankFilter = { assignedTo: null, assignmentPending: false, ...unworkedFilter };
 const objectIdPattern = /^[a-f\d]{24}$/i;
 const requestIdPattern = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const indexReadiness = new WeakMap();
@@ -55,7 +57,7 @@ function staffScope(principal) {
 }
 
 function readyFilter(now) {
-  return { $or: [{ status: "new" }, { status: "follow_up", followUpAt: { $lte: now } }] };
+  return { $or: [unworkedFilter, { status: "follow_up", followUpAt: { $lte: now } }] };
 }
 
 function pageNumber(value) {
@@ -80,7 +82,7 @@ function formatLead(lead) {
   return {
     id: String(lead._id),
     leadId: lead.leadId,
-    name: lead.name,
+    name: lead.registrationName || lead.name,
     phone: lead.phone,
     email: lead.email,
     source: lead.source,
@@ -92,6 +94,8 @@ function formatLead(lead) {
     followUpAt: lead.followUpAt,
     outcome: lead.lastOutcome,
     note: lead.lastNote,
+    registeredAt: lead.registeredAt,
+    accountOpened: lead.accountOpened === true,
     lastCallId: lead.dialRequest?.callId,
   };
 }
@@ -120,6 +124,22 @@ async function insertNew(model, operations) {
     if (!error.writeErrors?.length || error.writeErrors.some(item => item.code !== 11000) || !error.result) throw error;
     return error.result.upsertedCount;
   }
+}
+
+async function syncRegisteredLeads(registrations) {
+  if (!registrations.length) return 0;
+  const now = new Date();
+  return insertNew(Lead, registrations.map(({ userId, phone, name, registeredAt, accountOpened }) => ({
+    updateOne: {
+      filter: { phone, registrationUserId: { $in: [null, userId] } },
+      update: {
+        $setOnInsert: { leadId: "BDFX-" + randomUUID(), phone, name: clean(name, 150), source: "Website registration", createdAt: now, updatedAt: now },
+        $set: { registrationUserId: userId, registrationName: clean(name, 150), registeredAt, accountOpened },
+      },
+      upsert: true,
+      timestamps: false,
+    },
+  })));
 }
 
 async function importLeads(rows) {
@@ -204,7 +224,7 @@ function parseTime(value) {
 function leadOutcomeUpdate(event) {
   const status = CLOSED.has(event.outcome) ? "closed" : event.followUpAt ? "follow_up" : event.outcome === "qualified" ? "qualified" : "worked";
   const keepsOptOut = event.outcome === "do_not_call" ? {} : {
-    lastOutcome: { $ne: "do_not_call" },
+    lastOutcome: { $nin: event.outcome === "number_not_in_use" ? ["do_not_call"] : ["do_not_call", "number_not_in_use"] },
     $or: [{ lastOutcomeAt: null }, { lastOutcomeAt: { $lte: event.occurredAt } }],
   };
   return {
@@ -324,7 +344,7 @@ async function distribute() {
     const stats = await progress(staff.map(agent => agent._id), dubaiDay(undefined, now), now);
     const capacity = [...stats.values()].reduce((sum, item) => sum + Math.max(0, TARGET - item.ready - item.verified), 0);
     if (!capacity) return { assigned: credited };
-    const available = await Lead.find(bankFilter).sort({ createdAt: 1, _id: 1 }).limit(capacity).select("_id").lean();
+    const available = await Lead.find(bankFilter).sort({ registeredAt: -1, createdAt: 1, _id: 1 }).limit(capacity).select("_id").lean();
     const plan = planAssignments(staff, stats, available);
     if (!plan.length) return { assigned: credited };
     const result = await Lead.bulkWrite(plan.map(({ lead, agent }) => ({
@@ -365,7 +385,7 @@ function searchFilter(value) {
   const keyword = clean(value, 80);
   if (!keyword) return {};
   const escaped = keyword.replace(/[.*+?^\u0024{}()|[\]\\]/g, "\\$&");
-  return { $or: ["name", "phone", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
+  return { $or: ["name", "registrationName", "phone", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
 }
 
 function leadFilter(principal, query) {
@@ -378,9 +398,18 @@ async function listLeads(principal, query) {
   const page = pageNumber(query.page);
   const limit = 50;
   const filter = leadFilter(principal, query);
-  if (query.view === "queue") filter.$and.push(readyFilter(new Date()));
+  const list = {
+    queue: readyFilter(new Date()),
+    follow_ups: { status: "follow_up" },
+    interested: { lastOutcome: "qualified", status: { $ne: "closed" }, accountOpened: { $ne: true } },
+    account_opened: { accountOpened: true },
+    purchased: { source: PURCHASED_SOURCE },
+    registrations: { registeredAt: { $type: "date" } },
+    number_not_in_use: { status: "closed", lastOutcome: "number_not_in_use" },
+  };
+  if (Object.hasOwn(list, query.view)) filter.$and.push(list[query.view]);
   const [rows, total] = await Promise.all([
-    Lead.find(filter).sort({ status: 1, followUpAt: 1, createdAt: 1, _id: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+    Lead.find(filter).sort({ status: 1, followUpAt: 1, registeredAt: -1, createdAt: 1, _id: 1 }).skip((page - 1) * limit).limit(limit).lean(),
     Lead.countDocuments(filter),
   ]);
   return { rows: rows.map(formatLead), page, limit, total };
@@ -446,6 +475,9 @@ async function recordOutcome(principal, leadId, body) {
   if (current.lastOutcome === "do_not_call" && outcome !== "do_not_call") {
     throw new CrmError(409, "This lead is marked Do not call.");
   }
+  if (current.lastOutcome === "number_not_in_use" && !["number_not_in_use", "do_not_call"].includes(outcome)) {
+    throw new CrmError(409, "This lead is marked Number not in use.");
+  }
   const key = "outcome:" + body.requestId;
   const fields = { kind: "outcome", agent, lead: id, occurredAt: new Date(), outcome, note: clean(body.note, 1500), followUpAt };
   await ensureCrmIndexes(Call);
@@ -470,5 +502,5 @@ async function history(principal, id) {
   return Call.find({ lead: lead._id }).select("kind occurredAt outcome note followUpAt attempted connected talkSeconds").sort({ occurredAt: -1 }).limit(50).lean();
 }
 
-module.exports = { TARGET, CrmError, staffFilter, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes,
+module.exports = { TARGET, CrmError, staffFilter, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
   distribute, overview, listLeads, listClients, recordOutcome, history, planAssignments };

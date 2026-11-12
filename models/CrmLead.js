@@ -11,6 +11,10 @@ const schema = new mongoose.Schema({
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount", default: null },
   assignedAt: { type: Date, default: null },
   clientId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  registrationUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  registrationName: { type: String, maxlength: 150 },
+  registeredAt: Date,
+  accountOpened: { type: Boolean, default: false },
   status: { type: String, enum: ["new", "follow_up", "worked", "qualified", "closed"], default: "new" },
   followUpAt: { type: Date, default: null },
   lastOutcome: String,
@@ -27,5 +31,6 @@ const schema = new mongoose.Schema({
 
 schema.index({ assignedTo: 1, status: 1, followUpAt: 1, createdAt: 1 });
 schema.index({ assignmentPending: 1, assignedTo: 1, status: 1, createdAt: 1 });
+schema.index({ assignmentPending: 1, assignedTo: 1, status: 1, registeredAt: -1, createdAt: 1, _id: 1 });
 
 module.exports = mongoose.model("CrmLead", schema);
