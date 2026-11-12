@@ -4,7 +4,7 @@ const Lead = require("../models/CrmLead");
 const Call = require("../models/CrmCall");
 const Staff = require("../models/AdminAccount");
 const identity = require("../utils/registrationIdentity");
-const { CrmError, asId, assertRequestId, staffFilter } = require("./crm.service");
+const { CrmError, asId, assertRequestId, ensureCrmIndexes, staffFilter } = require("./crm.service");
 
 const CLICK_TO_CALL = "https://v4-api.deepcall.com/api/v3/clickToCall/para";
 const agentPattern = /^[1-9]\d{0,11}$/;
@@ -160,7 +160,7 @@ async function recordReport(payload) {
   if (!agent) return false;
   const lead = await Lead.findOne({ assignedTo: agent._id, phone: report.phone, assignedAt: { $lte: report.occurredAt } }).select("_id").lean();
   const eventKey = "hashmi:" + report.callId;
-  await Call.init();
+  await ensureCrmIndexes(Call);
   try {
     await Call.updateOne({ eventKey, agent: agent._id }, {
       $setOnInsert: { kind: "hashmi", agent: agent._id, occurredAt: report.occurredAt, providerCallId: report.callId },
