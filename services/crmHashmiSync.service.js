@@ -1,5 +1,4 @@
 const axios = require("axios");
-const { createHash } = require("node:crypto");
 const Call = require("../models/CrmCall");
 const Staff = require("../models/AdminAccount");
 const { dubaiDay, staffFilter, hashmiAgentPattern } = require("./crm.service");
@@ -60,14 +59,23 @@ function seconds(value) {
   return Number.isFinite(value) && value >= 0 && value <= 86_400 ? Math.floor(value) : undefined;
 }
 
+function clockSeconds(value) {
+  if (typeof value !== "string" || !value.includes(":")) return undefined;
+  const clock = value.trim().match(/^(\d{1,2}):([0-5]\d):([0-5]\d)\s*(am|pm)$/i);
+  if (!clock) return seconds(value);
+  const hour = Number(clock[1]);
+  if (hour < 1 || hour > 12) return undefined;
+  return (hour % 12 + (clock[4].toLowerCase() === "pm" ? 12 : 0)) * 3600 + Number(clock[2]) * 60 + Number(clock[3]);
+}
+
 function listTalkSeconds(value, offset) {
   if (!Array.isArray(value)) return seconds(value);
   const intervals = value.map(part => {
     const start = providerTimestamp(part?.start, offset);
     const end = providerTimestamp(part?.end, offset);
     if (start !== null && end !== null) return { start, end };
-    const from = typeof part?.start === "string" && part.start.includes(":") ? seconds(part.start) : undefined;
-    const to = typeof part?.end === "string" && part.end.includes(":") ? seconds(part.end) : undefined;
+    const from = clockSeconds(part?.start);
+    const to = clockSeconds(part?.end);
     if (from === undefined || to === undefined) return { start: null, end: null };
     return { start: from * 1000, end: (to < from ? to + 86_400 : to) * 1000 };
   });
@@ -84,32 +92,6 @@ function listTalkSeconds(value, offset) {
   const durations = [...new Set(value.map(seconds).filter(item => item !== undefined))];
   const positive = durations.filter(item => item > 0);
   return positive.length === 1 ? positive[0] : positive.length === 0 && durations.length ? 0 : undefined;
-}
-
-function durationDiagnostics(raw, row, callId, offset) {
-  const sample = createHash("sha256").update(callId).digest("hex").slice(0, 12);
-  const numeric = value => Number.isFinite(value) && value >= 0 && value <= 86_400_000 ? value : null;
-  const shape = value => typeof value === "string" && /^[\dTtZz:+ .\/-]+(?:\s*(?:am|pm))?$/i.test(value) ? value.replace(/\d/g, "#") : typeof value;
-  const start = providerTimestamp(row.clSTm, offset);
-  const end = providerTimestamp(row.clETm, offset);
-  return { sample, talk: numeric(raw?.duration?.talk), ivr: numeric(raw?.duration?.ivr), elapsed: start !== null && end !== null ? numeric(end - start) : null,
-    interval: [shape(row.tkTmDurAr?.[0]?.start), shape(row.tkTmDurAr?.[0]?.end)] };
-}
-
-function rawTalkSeconds(duration, row, offset) {
-  if (typeof duration?.talk === "string" && duration.talk.includes(":")) return seconds(duration.talk);
-  const talk = Number(duration?.talk);
-  const whole = Number(duration?.ivr);
-  const start = providerTimestamp(row.clSTm, offset);
-  const end = providerTimestamp(row.clETm, offset);
-  const formatted = typeof row.dur === "string" && row.dur.includes(":") ? seconds(row.dur) : undefined;
-  const elapsed = start !== null && end !== null && end > start ? end - start : formatted * 1000;
-  if (!Number.isFinite(talk) || !Number.isFinite(whole) || talk <= 0 || talk > whole || !Number.isFinite(elapsed) || elapsed <= 0) return undefined;
-  const millisecondsError = Math.abs(elapsed - whole);
-  const secondsError = Math.abs(elapsed - whole * 1000);
-  if (Math.min(millisecondsError, secondsError) > 1500) return undefined;
-  const seconds = Math.floor(secondsError < millisecondsError ? talk : talk / 1000);
-  return seconds <= 86_400 ? seconds : undefined;
 }
 
 function requestFailure(error) {
@@ -138,8 +120,8 @@ function rawReport(response, row, id, config) {
   const customerLegs = (Array.isArray(raw.nHDetail) ? raw.nHDetail : [])
     .filter(item => customer && String(item?.number ?? "").replace(/^\+/, "") === customer);
   const singleTalkTime = customerLegs.length === 1 ? seconds(customerLegs[0].talkDuration) : undefined;
-  const listedTalkTime = listTalkSeconds(row.tkTmDurAr, config.offset);
-  const durations = [listedTalkTime, seconds(raw.talkDuration), rawTalkSeconds(raw.duration, row, config.offset), singleTalkTime];
+  // Raw detail's duration.talk is already in seconds and matches the Hashmi CSV Talk Duration.
+  const durations = [seconds(raw.talkDuration), seconds(raw.duration?.talk), listTalkSeconds(row.tkTmDurAr, config.offset), singleTalkTime];
   const talkDuration = durations.find(value => value > 0) ?? durations.find(value => value === 0);
   const timeCandidates = [raw.ivrSTime, row.clSTm, raw.startTime, row.tm, raw.clickTime, raw.insertTime];
   for (const value of timeCandidates) {
@@ -170,7 +152,6 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
   let checked = new Set();
   let loggedScope;
   let loggedFormat = false;
-  let durationSamples = 0;
 
   async function vendor(endpoint, payload, account) {
     const response = await request(REPORTS + endpoint, { userId: account.userId, token: account.token, ...payload }, {
@@ -243,10 +224,6 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
           const agent = report?.agentIds.length === 1 && byId.get(report.agentIds[0]);
           if (agent && report.attempted && +report.occurredAt >= +since && +report.occurredAt <= +at) {
             if (await save(report, agent)) saved++;
-            if (report.connected && durationSamples < 3) {
-              durationSamples++;
-              logger.log("CRM Hashmi connected duration check:", report.talkSeconds, JSON.stringify(durationDiagnostics(rawDetail(detail), row, id, account.offset)));
-            }
           }
           checked.add(id);
         }));
