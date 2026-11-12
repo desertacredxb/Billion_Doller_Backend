@@ -300,6 +300,7 @@ async function progress(ids, date = dubaiDay(), now = new Date()) {
         verified: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "hashmi"] }, "$attempted"] }, 1, 0] } },
         connected: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "hashmi"] }, "$connected"] }, 1, 0] } },
         logged: { $sum: { $cond: [{ $eq: ["$kind", "outcome"] }, 1, 0] } },
+        lastActivityAt: { $max: "$occurredAt" },
         talkSeconds: { $sum: { $cond: [{ $eq: ["$kind", "hashmi"] }, "$talkSeconds", 0] } },
       } },
     ]),
@@ -308,8 +309,8 @@ async function progress(ids, date = dubaiDay(), now = new Date()) {
   const byCall = new Map(counts.map(item => [String(item._id), item]));
   return new Map(ids.map(id => {
     const key = String(id);
-    const { verified = 0, connected = 0, logged = 0, talkSeconds = 0 } = byCall.get(key) || {};
-    return [key, { ready: byQueue.get(key) || 0, verified, connected, logged, talkSeconds }];
+    const { verified = 0, connected = 0, logged = 0, talkSeconds = 0, lastActivityAt = null } = byCall.get(key) || {};
+    return [key, { ready: byQueue.get(key) || 0, verified, connected, logged, talkSeconds, lastActivityAt }];
   }));
 }
 
@@ -368,14 +369,16 @@ async function distribute() {
 async function overview(principal, day) {
   const date = dubaiDay(day);
   const owner = principal.adminRole === "owner";
-  const team = canViewTeam(principal);
+  const team = canViewTeam(principal) || (principal.permissions?.includes("crm_team") && !principal.permissions.includes("crm"));
   const staff = team ? await activeStaff() : await Staff.find(staffFilter).where("_id").equals(principal.id)
     .select("_id fullName crmHashmiAgentId").lean();
-  const [stats, bank, pending] = await Promise.all([
+  const [stats, bank, pending, followUps] = await Promise.all([
     progress(staff.map(agent => agent._id), date),
     team ? Lead.countDocuments(bankFilter) : null,
     team ? Lead.countDocuments({ assignmentPending: true, ...contactable }) : null,
+    team ? countFollowUps(staff.map(agent => agent._id), date, new Date()) : [],
   ]);
+  const due = new Map(followUps.map(row => [String(row._id), row]));
   return {
     day: date.day,
     target: TARGET,
@@ -386,9 +389,21 @@ async function overview(principal, day) {
       id: String(agent._id),
       name: agent.fullName || agent.email,
       hashmiId: owner || !team ? agent.crmHashmiAgentId || "" : "",
+      dialerMapped: hashmiAgentPattern.test(agent.crmHashmiAgentId || ""),
+      overdue: due.get(String(agent._id))?.overdue || 0,
       ...stats.get(String(agent._id)),
     })),
   };
+}
+
+function countFollowUps(ids, date, now) {
+  return Lead.aggregate([
+    { $match: { assignedTo: { $in: ids }, status: "follow_up", followUpAt: { $type: "date" }, ...contactable } },
+    { $group: { _id: "$assignedTo",
+      overdue: { $sum: { $cond: [{ $lte: ["$followUpAt", now] }, 1, 0] } },
+      laterToday: { $sum: { $cond: [{ $and: [{ $gt: ["$followUpAt", now] }, { $lt: ["$followUpAt", date.end] }] }, 1, 0] } },
+    } },
+  ]);
 }
 
 async function followUpReport(now = new Date()) {
@@ -397,13 +412,7 @@ async function followUpReport(now = new Date()) {
   const ids = staff.map(agent => agent._id);
   const [stats, followUps] = await Promise.all([
     progress(ids, date, now),
-    Lead.aggregate([
-      { $match: { assignedTo: { $in: ids }, status: "follow_up", followUpAt: { $type: "date" }, ...contactable } },
-      { $group: { _id: "$assignedTo",
-        overdue: { $sum: { $cond: [{ $lte: ["$followUpAt", now] }, 1, 0] } },
-        laterToday: { $sum: { $cond: [{ $and: [{ $gt: ["$followUpAt", now] }, { $lt: ["$followUpAt", date.end] }] }, 1, 0] } },
-      } },
-    ]),
+    countFollowUps(ids, date, now),
   ]);
   const due = new Map(followUps.map(row => [String(row._id), row]));
   return { day: date.day, checkedAt: now.toISOString(), target: TARGET, agents: staff.map(agent => {
