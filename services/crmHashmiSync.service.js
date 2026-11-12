@@ -32,6 +32,16 @@ function callTime(value) {
   return value;
 }
 
+function rowTimestamp(row, offset) {
+  for (const value of [row.clSTm, row.tm]) {
+    const time = callTime(value);
+    if (typeof time !== "string" || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(time)) continue;
+    const date = Date.parse(time.replace(" ", "T") + (/(?:Z|[+-]\d{2}:\d{2})$/.test(time) ? "" : offset));
+    if (Number.isFinite(date)) return date;
+  }
+  return null;
+}
+
 function rawDetail(response) {
   const data = response?.data ?? response;
   return Array.isArray(data) && data.length === 1 ? data[0] : data;
@@ -50,6 +60,20 @@ function seconds(value) {
   }
   if (typeof value === "string" && /^\d{1,5}$/.test(value)) value = Number(value);
   return Number.isFinite(value) && value >= 0 && value <= 86_400 ? Math.floor(value) : undefined;
+}
+
+function listTalkSeconds(value) {
+  if (!Array.isArray(value)) return seconds(value);
+  const durations = [...new Set(value.map(seconds).filter(item => item !== undefined))];
+  const positive = durations.filter(item => item > 0);
+  return positive.length === 1 ? positive[0] : positive.length === 0 && durations.length ? 0 : undefined;
+}
+
+function requestFailure(error) {
+  const code = error.providerCode || error.response?.status || error.code;
+  if (Number.isInteger(code)) return code;
+  if (["ECONNABORTED", "ECONNRESET", "ETIMEDOUT", "ERR_BAD_RESPONSE", "EAI_AGAIN"].includes(code)) return code;
+  return ["TypeError", "CastError", "ValidationError"].includes(error.name) ? error.name : "request or report format";
 }
 
 function agentId(value) {
@@ -71,8 +95,9 @@ function rawReport(response, row, id, config) {
   const customerLegs = (Array.isArray(raw.nHDetail) ? raw.nHDetail : [])
     .filter(item => customer && String(item?.number ?? "").replace(/^\+/, "") === customer);
   const singleTalkTime = customerLegs.length === 1 ? seconds(customerLegs[0].talkDuration) : undefined;
-  const listedTalkTime = Array.isArray(row.tkTmDurAr) && row.tkTmDurAr.length === 1 ? row.tkTmDurAr[0] : row.tkTmDurAr;
-  const talkDuration = seconds(raw.talkDuration) ?? singleTalkTime ?? seconds(listedTalkTime);
+  const listedTalkTime = listTalkSeconds(row.tkTmDurAr);
+  const durations = [listedTalkTime, seconds(raw.talkDuration), singleTalkTime];
+  const talkDuration = durations.find(value => value > 0) ?? durations.find(value => value === 0);
   const timeCandidates = [raw.ivrSTime, row.clSTm, raw.startTime, row.tm, raw.clickTime, raw.insertTime];
   for (const value of timeCandidates) {
     const report = parseReport({ ...raw, callId: id, masterAgent, callStatus: status, ivrSTime: callTime(value),
@@ -102,6 +127,7 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
   let checked = new Set();
   let loggedScope;
   let loggedFormat = false;
+  let loggedDuration = false;
 
   async function vendor(endpoint, payload, account) {
     const response = await request(REPORTS + endpoint, { userId: account.userId, token: account.token, ...payload }, {
@@ -136,7 +162,7 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
       const since = new Date(+start - 15 * 60_000);
       const response = await vendor("list", {
         filter: { agtIds: agentIds, dtGte: providerTime(since, account.offset), dtLte: providerTime(window.end, account.offset) },
-        sz: PAGE_SIZE, page: window.page, rcrdPg: false,
+        sz: PAGE_SIZE, page: window.timePaged ? 0 : window.page, ...(window.cursor ? { sAftr: window.cursor } : {}), rcrdPg: false,
       }, account);
       if (!Array.isArray(response?.data)) throw new Error("Hashmi report list shape is unsupported");
       const rows = response.data;
@@ -147,11 +173,13 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
         return;
       }
       const pending = ids.filter(id => !checked.has(id));
-      const existing = pending.length ? await calls.distinct("providerCallId", { kind: "hashmi", providerCallId: { $in: pending } }) : [];
+      const existing = pending.length ? await calls.distinct("providerCallId", { kind: "hashmi", providerCallId: { $in: pending },
+        $or: [{ connected: { $ne: true } }, { talkSeconds: { $gt: 0 } }] }) : [];
       for (const id of existing) checked.add(id);
       const queue = pending.filter(id => !checked.has(id));
       let saved = 0;
       let unrecognized = 0;
+      const failures = new Set();
       for (let index = 0; index < queue.length; index += DETAIL_CONCURRENCY) {
         const results = await Promise.allSettled(queue.slice(index, index + DETAIL_CONCURRENCY).map(async id => {
           const detail = await vendor("detail", { clId: id, rType: "allDetail" }, account);
@@ -172,24 +200,45 @@ function createHashmiSync({ request = axios.post, config = settings, staff = Sta
           const agent = report?.agentIds.length === 1 && byId.get(report.agentIds[0]);
           if (agent && report.attempted && +report.occurredAt >= +since && +report.occurredAt <= +at) {
             if (await save(report, agent)) saved++;
+            if (report.connected && !loggedDuration) {
+              loggedDuration = true;
+              logger.log("CRM Hashmi connected duration check:", report.talkSeconds, "seconds; list field", describeValue(row.tkTmDurAr),
+                "duration object", describeValue(rawDetail(detail)?.duration));
+            }
           }
           checked.add(id);
         }));
-        const failure = results.find(result => result.status === "rejected");
-        if (failure) throw failure.reason;
+        for (const result of results) {
+          if (result.status !== "rejected") continue;
+          const code = requestFailure(result.reason);
+          if ([401, 403, 429, 1014, 1015].includes(code)) throw result.reason;
+          failures.add(code);
+        }
       }
+      if (failures.size) logger.warn("CRM Hashmi call details will be retried:", [...failures].join(", "));
       if (saved || loggedScope !== scope) {
-        logger.log("CRM Hashmi report synced:", saved, "new verified calls from", rows.length, "scoped report rows;", unrecognized, "unrecognized.");
+        logger.log("CRM Hashmi report synced:", saved, "verified call records saved from", rows.length, "scoped report rows;", unrecognized,
+          "unrecognized; page", window.page + 1);
         loggedScope = scope;
       }
+      const next = Array.isArray(response.next) && response.next.length === 2 && CALL_ID.test(String(response.next[1])) ? response.next : null;
+      const sameCursor = next && window.cursor && String(next[0]) === String(window.cursor[0]) && next[1] === window.cursor[1];
       if (rows.length < PAGE_SIZE || window.page + 1 >= MAX_PAGES) {
         window = { scope, end: at, page: 0 };
       } else {
         window.page++;
+        window.cursor = sameCursor ? null : next;
+        if (!window.cursor) {
+          const oldest = Math.min(...rows.map(row => rowTimestamp(row, account.offset)).filter(time => time !== null));
+          if (Number.isFinite(oldest)) {
+            const second = Math.floor(oldest / 1000) * 1000;
+            window.end = new Date(second + 999 < +window.end ? second + 999 : second - 1);
+            window.timePaged = true;
+          }
+        }
       }
     } catch (error) {
-      const code = error.providerCode || error.response?.status;
-      logger.warn("CRM Hashmi report unavailable:", Number.isInteger(code) ? code : "request or report format");
+      logger.warn("CRM Hashmi report unavailable:", requestFailure(error));
     } finally {
       running = false;
     }

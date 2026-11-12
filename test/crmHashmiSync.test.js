@@ -25,7 +25,7 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
     request: async (url, payload) => {
       requests.push({ url, payload });
       if (url.endsWith("/list")) return { data: { data: Object.keys(reports).map(clId => ({ clId,
-        st: "Both Answered", tkTmDurAr: ["00:00:32"], clSTm: Date.parse("2026-11-12T03:01:00Z"),
+        st: "Both Answered", tkTmDurAr: ["00:00:00", "00:00:32"], clSTm: Date.parse("2026-11-12T03:01:00Z"),
       })) } };
       const callId = payload.clId;
       return { data: { data: { callId, userId: "provider-account", cType: "CTC", cNumber: "919876543210",
@@ -39,4 +39,25 @@ test("Hashmi report polling scopes both queries and credits to mapped BDFX agent
   assert.deepEqual(saved.map(({ report, staffMember }) => [report.callId, staffMember._id, report.connected, report.talkSeconds]), [
     ["connected-call", "bdfx-agent", true, 32], ["customer-failed", "bdfx-agent", false, 0],
   ]);
+});
+
+test("full Hashmi report pages send the provider continuation cursor", async () => {
+  const requests = [];
+  const next = [1794501000000, "last-call"];
+  const data = Array.from({ length: 100 }, (_, index) => ({ clId: "existing-" + index }));
+  const sync = createHashmiSync({
+    config: () => ({ userId: "account", token: "test-token", mode: "live" }),
+    staff: { find: () => ({ select: () => ({ lean: async () => [{ crmHashmiAgentId: "10953" }] }) }) },
+    calls: { distinct: async () => data.map(row => row.clId) },
+    logger: { log() {}, warn: (...args) => assert.fail(args.join(" ")) },
+    request: async (url, payload) => {
+      assert.match(url, /\/list$/);
+      requests.push(payload);
+      return { data: requests.length === 1 ? { data, next } : { data: [] } };
+    },
+  });
+  await sync.tick();
+  await sync.tick();
+  assert.deepEqual(requests[1].sAftr, next);
+  assert.equal(requests[1].page, 1);
 });
