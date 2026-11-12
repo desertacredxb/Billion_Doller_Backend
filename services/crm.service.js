@@ -561,7 +561,7 @@ async function recordOutcome(principal, leadId, body) {
 async function history(principal, id) {
   const lead = await Lead.findOne({ _id: asId(id), ...staffScope(principal) }).select("_id").lean();
   if (!lead) throw new CrmError(404, "Lead not found.");
-  return Call.find({ lead: lead._id }).select("kind occurredAt outcome note followUpAt attempted connected talkSeconds").sort({ occurredAt: -1 }).limit(50).lean();
+  return Call.find({ lead: lead._id }).select("kind occurredAt outcome note followUpAt attempted connected talkSeconds hashmiExportStatus").sort({ occurredAt: -1 }).limit(50).lean();
 }
 
 module.exports = { TARGET, CrmError, staffFilter, hashmiAgentPattern, contactable, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,

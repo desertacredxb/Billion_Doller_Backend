@@ -166,7 +166,7 @@ async function recordVerifiedCall(report, agent, { markWorked = false } = {}) {
   const eventKey = "hashmi:" + report.callId;
   await ensureCrmIndexes(Call);
   try {
-    await Call.updateOne({ eventKey, agent: agent._id }, {
+    await Call.updateOne({ eventKey, agent: agent._id, hashmiExportStatus: { $exists: false } }, {
       $setOnInsert: { kind: "hashmi", agent: agent._id, occurredAt: report.occurredAt, providerCallId: report.callId },
       $set: { ...(lead ? { lead: lead._id } : {}), attempted: true, connected: report.connected, talkSeconds: report.talkSeconds },
     }, { upsert: true });
