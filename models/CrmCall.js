@@ -5,6 +5,7 @@ const schema = new mongoose.Schema({
   kind: { type: String, required: true, enum: ["outcome", "hashmi", "indiavoice"] },
   providerCallId: { type: String, maxlength: 120 },
   hashmiExportStatus: String,
+  recordingUrl: { type: String, select: false, maxlength: 3000 },
   agent: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount", required: true },
   lead: { type: mongoose.Schema.Types.ObjectId, ref: "CrmLead", default: null },
   occurredAt: { type: Date, required: true },

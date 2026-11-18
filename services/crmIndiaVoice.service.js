@@ -116,10 +116,11 @@ async function recordReport(payload, offset = process.env.BDFX_INDIAVOICE_REPORT
   if (!lead) return false;
   const seconds = pickedUp ? Math.floor((end - pickedUp) / 1000) : 0;
   const reported = /^\d+$/.test(String(payload.TalkDuration ?? "")) ? Number(payload.TalkDuration) : seconds;
+  const media = pickedUp && require("./crmOwnerChannels").recordingUrl("indiavoice", payload.CallRecordingUrl);
   const eventKey = "indiavoice:" + payload.CallSid;
   await ensureCrmIndexes(Call);
   try {
-    await Call.updateOne({ eventKey, agent: agent._id, lead: lead._id }, { $setOnInsert: {
+    await Call.updateOne({ eventKey, agent: agent._id, lead: lead._id }, { ...(media ? { $set: { recordingUrl: media } } : {}), $setOnInsert: {
       eventKey, kind: "indiavoice", providerCallId: payload.CallSid, agent: agent._id, lead: lead._id,
       attempted: true, connected: Boolean(pickedUp), talkSeconds: pickedUp ? Math.min(seconds, reported) : 0, occurredAt,
     } }, { upsert: true });
