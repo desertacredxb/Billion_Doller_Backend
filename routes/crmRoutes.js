@@ -41,6 +41,7 @@ router.get("/9ance/report", indiaVoiceReport);
 router.post("/9ance/report", express.urlencoded({ extended: false, limit: "16kb", parameterLimit: 64 }), indiaVoiceReport);
 
 router.use(auth, access.principal, access.admin);
+router.use("/inbox", require("./crmInboxRoutes").router);
 
 router.post("/assistant", run(async (req, res) => res.json(await assistant.ask(req.body?.question))));
 router.post("/assistant/transcribe", (req, res, next) => uploadQuestion(req, res, error => {
