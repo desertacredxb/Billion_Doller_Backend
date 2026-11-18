@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const schema = new mongoose.Schema({
   eventKey: { type: String, required: true, unique: true, maxlength: 160 },
-  kind: { type: String, required: true, enum: ["outcome", "hashmi"] },
+  kind: { type: String, required: true, enum: ["outcome", "hashmi", "indiavoice"] },
   providerCallId: { type: String, maxlength: 120 },
   hashmiExportStatus: String,
   agent: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount", required: true },

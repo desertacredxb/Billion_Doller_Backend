@@ -4,7 +4,9 @@ const Lead = require("../models/CrmLead");
 const Call = require("../models/CrmCall");
 const Staff = require("../models/AdminAccount");
 const identity = require("../utils/registrationIdentity");
-const { CrmError, asId, assertRequestId, ensureCrmIndexes, staffFilter, hashmiAgentPattern: agentPattern, contactable } = require("./crm.service");
+const { CrmError, asId, ensureCrmIndexes, staffFilter, hashmiAgentPattern: agentPattern } = require("./crm.service");
+
+const indiaVoice = require("./crmIndiaVoice.service");
 
 const CLICK_TO_CALL = "https://v4-api.deepcall.com/api/v3/clickToCall/para";
 const callPattern = /^[a-z\d_-]{1,120}$/i;
@@ -25,6 +27,7 @@ function connectionState(env = process.env) {
   const config = settings(env);
   return {
     dialerMode: config.userId && config.token ? config.mode : "unconfigured",
+    indiaVoiceConfigured: indiaVoice.configured(),
     reportEnabled: Boolean(config.userId && config.key.length >= 32),
   };
 }
@@ -34,7 +37,7 @@ async function setAgent(id, value, { staff = Staff, config = settings() } = {}) 
     throw new CrmError(400, "Enter the numeric Hashmi agent ID.");
   }
   if (value && value === config.userId) throw new CrmError(400, "Use the employee's Agent ID from Hashmi Employees.");
-  const filter = { ...staffFilter, _id: asId(id) };
+  const filter = { ...staffFilter, _id: asId(id), ...(value ? { crmIndiaVoiceDeskphone: null } : {}) };
   if (value) {
     try {
       const indexes = await staff.listIndexes();
@@ -50,7 +53,10 @@ async function setAgent(id, value, { staff = Staff, config = settings() } = {}) 
   const update = value ? { $set: { crmHashmiAgentId: value } } : { $unset: { crmHashmiAgentId: "" } };
   try {
     const updated = await staff.findOneAndUpdate(filter, update, { new: true, runValidators: true }).select("_id").lean();
-    if (!updated) throw new CrmError(404, "Active CRM agent not found.");
+    if (!updated) {
+      if (value && await staff.exists({ ...staffFilter, _id: filter._id, crmIndiaVoiceDeskphone: { $type: "string" } })) throw new CrmError(409, "Clear the 9ance mapping before assigning Hashmi.");
+      throw new CrmError(404, "Active CRM agent not found.");
+    }
   } catch (error) {
     if (error.code === 11000) throw new CrmError(409, "That Hashmi agent ID is already mapped.");
     throw error;
@@ -65,49 +71,12 @@ function buildCallParameters(config, phone, hashmiId) {
   });
 }
 
-async function dial(principal, leadId, key, request = axios.post) {
-  assertRequestId(key);
-  const config = settings();
-  if (!config.userId || !config.token) throw new CrmError(503, "Hashmi API access is not configured.");
-  const id = asId(leadId);
-  const assignedTo = asId(principal.id);
-  const agent = await Staff.findOne({ ...staffFilter, _id: assignedTo }).select("crmHashmiAgentId").lean();
-  if (!agentPattern.test(agent?.crmHashmiAgentId || "")) throw new CrmError(400, "Ask the owner to map your Hashmi agent ID.");
-  const now = new Date();
-  const lead = await Lead.findOneAndUpdate({
-    _id: id, assignedTo, status: { $ne: "closed" }, ...contactable, "dialRequest.key": { $ne: key },
-    $or: [
-      { "dialRequest.state": { $ne: "pending" } },
-      { "dialRequest.startedAt": { $lt: new Date(+now - 45_000) } },
-    ],
-  }, { $set: { dialRequest: { key, state: "pending", startedAt: now } } }, { new: true }).lean();
-  if (!lead) {
-    const current = await Lead.findOne({ _id: id, assignedTo }).select("dialRequest status lastOutcome").lean();
-    if (!current) throw new CrmError(404, "Assigned lead not found.");
-    if (current.lastOutcome === "do_not_call") throw new CrmError(409, "This lead is marked Do not call back.");
-    if (current.status === "closed") throw new CrmError(409, "This lead is closed.");
-    if (current.dialRequest?.key === key) return { state: current.dialRequest.state, mode: config.mode };
-    throw new CrmError(409, "A Hashmi request is already in progress for this lead.");
-  }
-  let state = "unconfirmed";
-  let callId;
-  try {
-    const response = await request(CLICK_TO_CALL, buildCallParameters(config, lead.phone, agent.crmHashmiAgentId).toString(), {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 10_000, maxRedirects: 0,
-    });
-    if (response.data?.status === "success" && callPattern.test(response.data.callid || "")) {
-      callId = response.data.callid;
-      state = "accepted";
-    } else if (response.data?.status === "error") {
-      state = "rejected";
-    }
-  } catch {
-    // A timed-out response may have initiated a call. Never resend it automatically.
-  }
-  await Lead.updateOne({ _id: id, assignedTo, "dialRequest.key": key }, {
-    $set: { "dialRequest.state": state, ...(callId ? { "dialRequest.callId": callId } : {}) },
+async function requestHashmiCall(phone, agentId, config, request = axios.post) {
+  const response = await request(CLICK_TO_CALL, buildCallParameters(config, phone, agentId).toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 10_000, maxRedirects: 0,
   });
-  return { state, mode: config.mode };
+  if (response.data?.status === "success" && callPattern.test(response.data.callid || "")) return { state: "accepted", callId: response.data.callid };
+  return { state: response.data?.status === "error" ? "rejected" : "unconfirmed" };
 }
 
 function authorizedReport(key, config = settings()) {
@@ -181,4 +150,4 @@ async function recordVerifiedCall(report, agent, { markWorked = false } = {}) {
   return true;
 }
 
-module.exports = { settings, connectionState, setAgent, dial, authorizedReport, recordReport, recordVerifiedCall, parseReport, buildCallParameters };
+module.exports = { settings, connectionState, setAgent, dial: (...args) => require("./crmDial.service").dial(...args), authorizedReport, recordReport, recordVerifiedCall, parseReport, buildCallParameters, requestHashmiCall };

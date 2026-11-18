@@ -3,6 +3,8 @@ const multer = require("multer");
 const auth = require("../middleware/authMiddleware");
 const access = require("../middleware/accessControl");
 const crm = require("../services/crm.service");
+const dialer = require("../services/crmDial.service");
+const indiaVoice = require("../services/crmIndiaVoice.service");
 const hashmi = require("../services/crmHashmi.service");
 const { importHashmiRows } = require("../services/crmHashmiImport.service");
 const { AUDIO_LIMIT, createCrmAssistant } = require("../services/crmAssistant.service");
@@ -29,6 +31,14 @@ router.post("/hashmi/report", run(async (req, res) => {
   await hashmi.recordReport(req.body);
   res.type("text").send("GODBLESSYOU");
 }));
+
+const indiaVoiceReport = run(async (req, res) => {
+  if (!indiaVoice.reportAuthorized(req.query.key)) return res.sendStatus(404);
+  await indiaVoice.recordReport(req.method === "GET" ? req.query : req.body);
+  res.sendStatus(200);
+});
+router.get("/9ance/report", indiaVoiceReport);
+router.post("/9ance/report", express.urlencoded({ extended: false, limit: "16kb", parameterLimit: 64 }), indiaVoiceReport);
 
 router.use(auth, access.principal, access.admin);
 
@@ -77,6 +87,12 @@ router.post("/distribute", run(async (req, res) => {
   const result = await crm.distribute();
   res.json(req.principal.adminRole === "owner" ? result : { ready: true });
 }));
+router.patch("/team/:id/9ance", access.owner, run(async (req, res) => {
+  await indiaVoice.setAgent(req.params.id, req.body);
+  req.auditEvent = "crm:9ance-agent-mapped";
+  req.auditDetails = { agent: req.params.id };
+  res.json({ saved: true });
+}));
 router.patch("/team/:id/hashmi", access.owner, run(async (req, res) => {
   await hashmi.setAgent(req.params.id, req.body?.hashmiId);
   req.auditEvent = "crm:hashmi-agent-mapped";
@@ -92,11 +108,11 @@ router.post("/leads/:id/outcome", run(async (req, res) => {
   res.json({ ...result, refreshQueue: !distribution.busy });
 }));
 router.post("/leads/:id/dial", run(async (req, res) => {
-  res.json(await hashmi.dial(req.principal, req.params.id, req.body?.requestId));
+  res.json(await dialer.dial(req.principal, req.params.id, req.body?.requestId));
 }));
 router.post("/dial-by-number", run(async (req, res) => {
   const lead = await crm.assignedLeadByPhone(req.principal, req.body?.phone);
-  res.json(await hashmi.dial(req.principal, lead, req.body?.requestId));
+  res.json(await dialer.dial(req.principal, lead, req.body?.requestId));
 }));
 
 module.exports = router;

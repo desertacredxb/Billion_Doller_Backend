@@ -16,6 +16,7 @@ const OUTCOMES = ["no_answer", "busy", "wrong_number", "number_not_in_use", "con
 const CLOSED = new Set(["wrong_number", "number_not_in_use", "not_interested", "do_not_call"]);
 const PURCHASED_SOURCE = /^(COMEXFOREX|purchased data)$/i;
 const staffFilter = { enabled: true, role: "manager", invitedBy: { $ne: null }, permissions: "crm" };
+const { indiaVoiceConfigured } = require("./crmIndiaVoiceConfig");
 const hashmiAgentPattern = /^[1-9]\d{0,11}$/;
 const contactable = { lastOutcome: { $ne: "do_not_call" } };
 const unworkedFilter = { status: "new", accountOpened: { $ne: true } };
@@ -71,8 +72,10 @@ function pageNumber(value) {
 }
 
 function activeStaff(mappedOnly = false) {
-  const filter = mappedOnly ? { ...staffFilter, crmHashmiAgentId: hashmiAgentPattern } : staffFilter;
-  return Staff.find(filter).select("_id fullName email crmHashmiAgentId").sort({ fullName: 1, _id: 1 }).lean();
+  const eligible = [{ crmHashmiAgentId: hashmiAgentPattern }];
+  if (indiaVoiceConfigured()) eligible.push({ crmIndiaVoiceDeskphone: { $type: "string" }, crmIndiaVoiceAgentNumber: { $type: "string" } });
+  const filter = mappedOnly ? { ...staffFilter, ...(eligible.length === 1 ? eligible[0] : { $or: eligible }) } : staffFilter;
+  return Staff.find(filter).select("_id fullName email crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber").sort({ fullName: 1, _id: 1 }).lean();
 }
 
 function staffKeys(staff) {
@@ -297,11 +300,11 @@ async function progress(ids, date = dubaiDay(), now = new Date()) {
       { $match: { agent: { $in: ids }, occurredAt: { $gte: date.start, $lt: date.end } } },
       { $group: {
         _id: "$agent",
-        verified: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "hashmi"] }, "$attempted"] }, 1, 0] } },
-        connected: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "hashmi"] }, "$connected"] }, 1, 0] } },
+        verified: { $sum: { $cond: [{ $and: [{ $in: ["$kind", ["hashmi", "indiavoice"]] }, "$attempted"] }, 1, 0] } },
+        connected: { $sum: { $cond: [{ $and: [{ $in: ["$kind", ["hashmi", "indiavoice"]] }, "$connected"] }, 1, 0] } },
         logged: { $sum: { $cond: [{ $eq: ["$kind", "outcome"] }, 1, 0] } },
         lastActivityAt: { $max: "$occurredAt" },
-        talkSeconds: { $sum: { $cond: [{ $eq: ["$kind", "hashmi"] }, "$talkSeconds", 0] } },
+        talkSeconds: { $sum: { $cond: [{ $in: ["$kind", ["hashmi", "indiavoice"]] }, "$talkSeconds", 0] } },
       } },
     ]),
   ]);
@@ -371,7 +374,7 @@ async function overview(principal, day) {
   const owner = principal.adminRole === "owner";
   const team = canViewTeam(principal) || (principal.permissions?.includes("crm_team") && !principal.permissions.includes("crm"));
   const staff = team ? await activeStaff() : await Staff.find(staffFilter).where("_id").equals(principal.id)
-    .select("_id fullName crmHashmiAgentId").lean();
+    .select("_id fullName crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber").lean();
   const [stats, bank, pending, followUps] = await Promise.all([
     progress(staff.map(agent => agent._id), date),
     team ? Lead.countDocuments(bankFilter) : null,
@@ -389,7 +392,9 @@ async function overview(principal, day) {
       id: String(agent._id),
       name: agent.fullName || agent.email,
       hashmiId: owner || !team ? agent.crmHashmiAgentId || "" : "",
-      dialerMapped: hashmiAgentPattern.test(agent.crmHashmiAgentId || ""),
+      dialer: agent.crmIndiaVoiceDeskphone && !agent.crmHashmiAgentId ? "9ance" : "hashmi",
+      ...(owner ? { indiaVoiceDeskphone: agent.crmIndiaVoiceDeskphone || "", indiaVoiceAgentNumber: agent.crmIndiaVoiceAgentNumber || "" } : {}),
+      dialerMapped: hashmiAgentPattern.test(agent.crmHashmiAgentId || "") || Boolean(indiaVoiceConfigured() && agent.crmIndiaVoiceDeskphone && agent.crmIndiaVoiceAgentNumber),
       overdue: due.get(String(agent._id))?.overdue || 0,
       ...stats.get(String(agent._id)),
     })),

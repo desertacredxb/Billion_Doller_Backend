@@ -8,6 +8,8 @@ const schema = new mongoose.Schema({
   enabled: { type: Boolean, default: true },
   permissions: [{ type: String, enum: PERMISSIONS }],
   crmHashmiAgentId: { type: String, trim: true, unique: true, sparse: true },
+  crmIndiaVoiceDeskphone: { type: String, unique: true, sparse: true },
+  crmIndiaVoiceAgentNumber: { type: String, unique: true, sparse: true },
   invitedBy: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount" },
   disabledAt: Date,
   lastLoginAt: Date,

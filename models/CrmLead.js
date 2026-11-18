@@ -27,6 +27,7 @@ const schema = new mongoose.Schema({
     state: String,
     startedAt: Date,
     callId: String,
+    provider: String,
   },
 }, { timestamps: true });
 
