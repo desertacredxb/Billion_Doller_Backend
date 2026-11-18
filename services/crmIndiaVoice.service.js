@@ -45,8 +45,10 @@ async function setAgent(id, input, staff = Staff) {
 }
 
 async function requestCall(phone, agent, get = axios.get, env = process.env) {
+  // IndiaVoice registers Indian agent mobiles with the domestic trunk prefix.
+  const agentNumber = agent.crmIndiaVoiceAgentNumber;
   const params = {
-    calling_party_a: agent.crmIndiaVoiceAgentNumber.replace(/^\+/, ""),
+    calling_party_a: /^\+91[6-9]\d{9}$/.test(agentNumber) ? "0" + agentNumber.slice(3) : agentNumber.replace(/^\+/, ""),
     calling_party_b: phone.replace(/^\+/, ""),
     deskphone: agent.crmIndiaVoiceDeskphone,
     call_from_did: 1, waittime: 30,
@@ -56,8 +58,11 @@ async function requestCall(phone, agent, get = axios.get, env = process.env) {
     params, auth: { username: env.BDFX_INDIAVOICE_API_USERNAME.trim(), password: env.BDFX_INDIAVOICE_API_PASSWORD },
     timeout: 10000, maxRedirects: 0, headers: { Accept: "application/json" },
   });
-  if (data?.success === false || ["failed", "error", "rejected"].includes(data?.status)) return { state: "rejected" };
-  if (data?.success === true || data?.status === "success") {
+  const outcomes = [data?.type, data?.status];
+  if (data?.success === false || outcomes.some(value => ["failed", "error", "rejected"].includes(value))) {
+    return { state: "rejected" };
+  }
+  if (data?.success === true || outcomes.includes("success")) {
     const sid = data.CallSid || data.callid;
     return { state: "accepted", ...(typeof sid === "string" && callIdPattern.test(sid) ? { callId: sid } : {}) };
   }

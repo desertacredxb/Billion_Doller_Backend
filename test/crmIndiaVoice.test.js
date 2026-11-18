@@ -26,7 +26,7 @@ test("IndiaVoice uses Basic auth, an assigned deskphone and the selected client 
   let response = { status: "success", CallSid: "call-1" };
   const transport = async (url, options) => {
     assert.equal(url, "https://indiavoice.rpdigitalphone.com/api_v3/click_to_call_v2");
-    assert.equal(options.params.calling_party_a, "919876543210");
+    assert.equal(options.params.calling_party_a, "09876543210");
     assert.equal(options.params.calling_party_b, "12025550101");
     assert.equal(options.params.deskphone, "*12345");
     assert.equal(options.auth.username, "fixture");
@@ -35,8 +35,23 @@ test("IndiaVoice uses Basic auth, an assigned deskphone and the selected client 
   };
   const request = () => indiaVoice.requestCall("+12025550101", staff, transport, config);
   assert.deepEqual(await request(), { state: "accepted", callId: "call-1" });
+  response = { type: "success", campid: "campaign-1" };
+  assert.deepEqual(await request(), { state: "accepted" });
+  response = { type: "error", message: "Agent on break" };
+  assert.deepEqual(await request(), { state: "rejected" });
+  response = { type: "success", status: "rejected" };
+  assert.deepEqual(await request(), { state: "rejected" });
   response = "<html>Sign in</html>";
   assert.deepEqual(await request(), { state: "unconfirmed" });
+});
+
+test("IndiaVoice keeps international agent and customer numbers distinct", async () => {
+  const config = { BDFX_INDIAVOICE_API_USERNAME: "fixture", BDFX_INDIAVOICE_API_PASSWORD: "fixture" };
+  await indiaVoice.requestCall("+919876543210", { ...staff, crmIndiaVoiceAgentNumber: "+12025550101" }, async (_url, { params }) => {
+    assert.equal(params.calling_party_a, "12025550101");
+    assert.equal(params.calling_party_b, "919876543210");
+    return { data: { type: "success" } };
+  }, config);
 });
 
 test("9ance uses the shared assigned-lead lock, returns prior requests and never falls through to Hashmi", async t => {
