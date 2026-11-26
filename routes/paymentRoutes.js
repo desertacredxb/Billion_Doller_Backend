@@ -74,7 +74,7 @@ router.post("/ramee-global/idr/deposits/:orderid/refresh", access.owner, rameeGl
 // Withdrawal routes
 // ---------------------------------------------------------------------------
 
-router.post("/request", rameeGlobalLkr.requireSupportedWithdrawalCurrency, access.accountOwner(), withdrawalLimiter, createPayoutRequest);
+router.post("/request", access.accountOwner(), withdrawalLimiter, createPayoutRequest);
 router.post("/request_v2", rameeGlobalLkr.requireSupportedWithdrawalCurrency, access.accountOwner(), withdrawalLimiter, checkMargin, handleManualPaymentRequest);
 router.post("/approve/:id", access.admin, approvePayoutReq);
 router.post("/reject/:id", access.admin, rejectPayoutRequest);

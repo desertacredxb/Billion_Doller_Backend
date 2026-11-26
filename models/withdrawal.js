@@ -81,6 +81,9 @@ const withdrawalSchema = new mongoose.Schema(
 
     gatewayOrderId: { type: String, default: null }, // Stores Cregis tx_id
     rameeGlobalLkr: {
+      // Bank code and rate locked at request time (`amount` holds the LKR paid out).
+      bankCode: String,
+      lkrPerUsd: Number,
       approvedAt: Date,
       payoutId: String,
       providerStatus: { type: String, enum: ["SUCCESS", "FAILED", "REFUNDED"] },

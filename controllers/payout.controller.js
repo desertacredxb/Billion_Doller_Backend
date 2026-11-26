@@ -19,11 +19,15 @@ const {
 } = require("../config/withdrawalLimits");
 const { fetchVndPerUsd, minimumVnd, toUsd } = require("../services/floxyDeposit.service");
 const { createIdrPayoutService } = require("../services/rameeGlobalIdrPayout.service");
+const { createLkrPayoutService } = require("../services/rameeGlobalLkrPayout.service");
 const { RaamiClient } = require("../utils/raamiClient");
 
 // RameeGlobalPay IDR bank payouts (bank list, request checks, approval, callback).
 const idrPayout = createIdrPayoutService({ withdrawals: Withdrawal });
 exports.idrPayout = idrPayout;
+
+// RameeGlobalPay LKR bank payouts (request checks and approval; the callback is in rameeGlobalLkr.controller.js).
+const lkrPayout = createLkrPayoutService({ withdrawals: Withdrawal });
 
 
 // "/order/generate" is the DEPOSIT (payin) endpoint - payouts must go to the
@@ -258,6 +262,19 @@ exports.createPayoutRequest = async (req, res) => {
             }
         }
 
+        // LKR (RameeGlobalPay bank payout): LKR amount with up to two decimals, a bank
+        // code from the payout-methods list, and the USD debit locked at the env rate.
+        // Runs before the MT5 debit.
+        let lkrQuote = null;
+        if (currency === "LKR") {
+            lkrQuote = await lkrPayout.prepareRequest(req.body);
+            if (!lkrQuote.ok) {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(lkrQuote.status).json({ success: false, message: lkrQuote.message });
+            }
+        }
+
         // 2️⃣ Dynamic Currency Method Validation
         if (currency === "CRYPTO") {
             if (!walletAddress) {
@@ -381,6 +398,8 @@ exports.createPayoutRequest = async (req, res) => {
             amountUSD = vndQuote.usd;
         } else if (currency === "IDR") {
             amountUSD = idrQuote.usd;
+        } else if (currency === "LKR") {
+            amountUSD = lkrQuote.usd;
         } else {
             amountUSD = Number(numericAmount.toFixed(2));
         }
@@ -406,16 +425,19 @@ exports.createPayoutRequest = async (req, res) => {
             accountNo,
             userId: ownerAccount?.user?._id || undefined,
             currency,
-            amount: numericAmount,
+            amount: currency === "LKR" ? lkrQuote.amountLkr : numericAmount,
             amountUSD,
             note,
             status: "Pending",
-            account: currency === "VND" ? vndQuote.bank.account : currency === "IDR" ? idrQuote.account : account || "",
+            account: currency === "VND" ? vndQuote.bank.account : currency === "IDR" ? idrQuote.account : currency === "LKR" ? lkrQuote.account : account || "",
             ifsc: ifsc || "",
             upiId: upiId || "",
-            name: currency === "VND" ? vndQuote.bank.name : currency === "IDR" ? idrQuote.holder : resolvedName,
+            name: currency === "VND" ? vndQuote.bank.name : currency === "IDR" ? idrQuote.holder : currency === "LKR" ? lkrQuote.holder : resolvedName,
             mobile: resolvedMobile,
-            bankName: currency === "VND" ? vndQuote.bank.bankName : currency === "IDR" ? idrQuote.bankName : bankName || "",
+            bankName: currency === "VND" ? vndQuote.bank.bankName : currency === "IDR" ? idrQuote.bankName : currency === "LKR" ? lkrQuote.bankName : bankName || "",
+            ...(currency === "LKR" ? {
+                rameeGlobalLkr: { bankCode: lkrQuote.bankCode, lkrPerUsd: lkrQuote.lkrPerUsd },
+            } : {}),
             ...(currency === "IDR" ? {
                 rameeGlobalIdr: { bankCode: idrQuote.bankCode, idrPerUsd: idrQuote.idrPerUsd },
             } : {}),
@@ -465,6 +487,13 @@ exports.createPayoutRequest = async (req, res) => {
         <li><strong>Account Number:</strong> ${idrQuote.account}</li>
         <li><strong>Rate locked:</strong> 1 USD = IDR ${idrQuote.idrPerUsd.toLocaleString("en-US")}</li>
       `;
+        } else if (currency === "LKR") {
+            paymentDetailsHTML = `
+        <li><strong>Account Holder:</strong> ${lkrQuote.holder}</li>
+        <li><strong>Bank:</strong> ${lkrQuote.bankName} (${lkrQuote.bankCode})</li>
+        <li><strong>Account Number:</strong> ${lkrQuote.account}</li>
+        <li><strong>Rate locked:</strong> 1 USD = LKR ${lkrQuote.lkrPerUsd.toLocaleString("en-US")}</li>
+      `;
         } else if (currency === "USD") {
             paymentDetailsHTML = `
         <li><strong>Bank Name:</strong> ${bankName}</li>
@@ -485,7 +514,7 @@ exports.createPayoutRequest = async (req, res) => {
           <ul>
             <li><strong>Order ID:</strong> ${orderid}</li>
             <li><strong>Source MT5 Account:</strong> ${accountNo}</li>
-            <li><strong>Requested Amount:</strong> ${currency === "VND" ? `VND ${numericAmount.toLocaleString("en-US")}` : currency === "IDR" ? `IDR ${idrQuote.amountIdr.toLocaleString("en-US")}` : `$${numericAmount}`} (≈ $${amountUSD})</li>
+            <li><strong>Requested Amount:</strong> ${currency === "VND" ? `VND ${numericAmount.toLocaleString("en-US")}` : currency === "IDR" ? `IDR ${idrQuote.amountIdr.toLocaleString("en-US")}` : currency === "LKR" ? `LKR ${lkrQuote.amountLkr.toLocaleString("en-US")}` : `$${numericAmount}`} (≈ $${amountUSD})</li>
             <li><strong>Payment Method:</strong> ${currency}</li>
             <li><strong>Note:</strong> ${note || "N/A"}</li>
           </ul>
@@ -523,10 +552,6 @@ exports.approvePayoutReq = async (req, res) => {
         if (!withdrawal) {
             return res.status(404).json({ success: false, message: "Withdrawal request not found." });
         }
-        if (withdrawal.currency === "LKR") {
-            return res.status(503).json({ success: false, message: "LKR payout submission is unavailable." });
-        }
-
         // FIX: Must use AND (&&). Using OR (||) made this condition always evaluate to true.
         // An IDR payout whose last attempt was never confirmed stays "Processing"
         // so it can be approved again: that checks its status before re-sending.
@@ -559,8 +584,33 @@ exports.approvePayoutReq = async (req, res) => {
         // Standardize string comparison to lowercase
         const executionType = (
             processType ||
-            (withdrawal.isManual ? "manual" : currency === "CRYPTO" ? "cregis" : currency === "VND" ? "floxy" : currency === "IDR" ? "rameeglobalidr" : "rameepay")
+            (withdrawal.isManual ? "manual" : currency === "CRYPTO" ? "cregis" : currency === "VND" ? "floxy" : currency === "IDR" ? "rameeglobalidr" : currency === "LKR" ? "rameegloballkr" : "rameepay")
         ).toLowerCase();
+
+        // LKR is paid by RameeGlobalPay (or transferred manually); the other
+        // gateways can't pay a Sri Lankan bank account, and the LKR gateway only pays LKR.
+        if ((currency === "LKR") !== (executionType === "rameegloballkr") && executionType !== "manual") {
+            return res.status(400).json({
+                success: false,
+                message: currency === "LKR"
+                    ? "LKR withdrawals can only be processed with RameeGlobalPay or as a manual transfer."
+                    : "The LKR gateway only processes LKR withdrawals.",
+            });
+        }
+
+        // =========================================================================
+        // RAMEEGLOBALPAY GATEWAY (LKR bank payout) - the payout is submitted and
+        // the final result arrives on the payout callback.
+        // =========================================================================
+        if (executionType === "rameegloballkr") {
+            const result = await lkrPayout.approve(withdrawal);
+            return res.status(result.status).json({
+                success: result.ok,
+                code: result.code,
+                message: result.message,
+                data: result.data,
+            });
+        }
 
         // IDR is paid by RameeGlobalPay Global (or transferred manually); the
         // other gateways can't pay an Indonesian bank account, and the IDR
@@ -814,7 +864,7 @@ exports.approvePayoutReq = async (req, res) => {
             }
             payoutMobile = toRameeMobile(payoutMobile);
 
-            if (currency !== "CRYPTO" && payoutMobile.length !== 10) {
+            if (currency === "INR" && payoutMobile.length !== 10) {
                 return res.status(400).json({
                     success: false,
                     message: `Withdrawal has an invalid mobile number ("${mobile || ""}") - it must resolve to exactly 10 digits for RameePay. Please correct it and retry.`,
@@ -843,44 +893,8 @@ exports.approvePayoutReq = async (req, res) => {
                     //     currency: "USDTTRC20",
                     //     orderDetails: { address: "TRmobam7jxYRXE2f1vBdn8oCprxeZdSgGM" },
                     // };
-                } else if (currency === "IDR") {
-
-                    const agentCode = process.env.RAMEE_GLOBAL_IDR_AGENT_CODE;
-                    const accessKey = process.env.RAMEE_GLOBAL_IDR_ACCESS_KEY;
-                    if (!agentCode || !accessKey) {
-                        return res.status(500).json({
-                            success: false,
-                            message: "Ramee Global IDR credentials are not configured",
-                        });
-                    }
-
-                    const client = new RaamiClient("production", agentCode, accessKey);
-
-
-                    const res = await rameePay('/payout/request', {
-                        currency: 'IDR',
-                        amount: amount,
-                        orderid: String(orderid),
-                        note: (note || "IDR Withdrawal").slice(0, 20),
-                        orderDetail: {
-                            code: b,
-                            account: account,
-                        },
-                    });
-
-                    const rameeRis = await client.getPayoutMethods("IDR");
-                    if (rameeRis.success) {
-                        return res.status(200).json({
-                            success: true,
-                            status: true,
-                            data: rameeRis.data?.methods ?? rameeRis.data,
-                        });
-                    }
-                    return res.status(rameeRis.httpStatus >= 400 ? rameeRis.httpStatus : 502).json({
-                        success: false,
-                        message: rameeRis.message || "Failed to get methods",
-                    });
-                } else {
+                }
+                else {
                     // Exact field set per RameePay's "Withdrawal Account (India Only)
                     // API" doc - account, ifsc, name, mobile, amount, note, orderid.
                     // No "type" field is documented there; it was previously sent
@@ -1053,7 +1067,7 @@ exports.sendSuccessEmail = async (withdrawal) => {
         const formattedAmount =
             withdrawal.currency === "CRYPTO"
                 ? `${withdrawal.amount} ${withdrawal.cryptoSymbol || "USDT"}`
-                : withdrawal.currency === "VND" || withdrawal.currency === "IDR"
+                : withdrawal.currency === "VND" || withdrawal.currency === "IDR" || withdrawal.currency === "LKR"
                     ? `${withdrawal.currency} ${Number(withdrawal.amount).toLocaleString("en-US")}`
                     : withdrawal.currency === "INR"
                         ? `₹${withdrawal.amount}`
@@ -1151,7 +1165,7 @@ exports.rejectPayoutRequest = async (req, res) => {
           <p>Dear ${user.fullName || "Customer"},</p>
           <p>Your withdrawal request (Order ID: <b>${withdrawal.orderid
                     }</b>) has been <b>rejected</b> by the admin.</p>
-          <p>Amount Requested: ${withdrawal.currency === "VND" || withdrawal.currency === "IDR" ? `${withdrawal.currency} ${Number(withdrawal.amount).toLocaleString("en-US")}` : `₹${withdrawal.amount}`}</p>
+          <p>Amount Requested: ${withdrawal.currency === "VND" || withdrawal.currency === "IDR" || withdrawal.currency === "LKR" ? `${withdrawal.currency} ${Number(withdrawal.amount).toLocaleString("en-US")}` : `₹${withdrawal.amount}`}</p>
           <p>The amount has been refunded to your account.</p>
           <br/>
           <p>Best Regards,<br/>Support Team</p>
@@ -1179,7 +1193,14 @@ exports.rejectPayoutRequest = async (req, res) => {
 
 exports.getGlobalpayoutmethod = async (req, res) => {
     try {
-        const {currency} = req.query;
+        const { currency } = req.query;
+
+        // LKR has its own credentials and rate, so it uses the LKR payout service.
+        if (currency === "LKR") {
+            const lkr = await lkrPayout.loadMethods();
+            if (!lkr.ok) return res.status(lkr.status).json({ success: false, message: lkr.message });
+            return res.status(200).json({ success: true, status: true, data: lkr.methods, quote: await lkrPayout.quote() });
+        }
 
         const idrClient = new RaamiClient('production', process.env.RAMEE_GLOBAL_IDR_AGENT_CODE, process.env.RAMEE_GLOBAL_IDR_ACCESS_KEY);
         const loaded = await idrClient.getPayoutMethods(currency)
