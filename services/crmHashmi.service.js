@@ -137,7 +137,8 @@ async function recordVerifiedCall(report, agent) {
   try {
     await Call.updateOne({ eventKey, agent: agent._id, hashmiExportStatus: { $exists: false } }, {
       $setOnInsert: { kind: "hashmi", agent: agent._id, occurredAt: report.occurredAt, providerCallId: report.callId },
-      $set: { ...(lead ? { lead: lead._id } : {}), attempted: true, connected: report.connected, talkSeconds: report.talkSeconds },
+      $set: { ...(lead ? { lead: lead._id } : {}), attempted: true },
+      $max: { connected: report.connected, talkSeconds: report.talkSeconds },
     }, { upsert: true });
   } catch (error) {
     if (error.code !== 11000) throw error;

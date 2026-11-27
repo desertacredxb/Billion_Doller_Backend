@@ -139,7 +139,7 @@ async function insertNew(model, operations) {
 async function syncRegisteredLeads(registrations) {
   if (!registrations.length) return 0;
   const now = new Date();
-  return insertNew(Lead, registrations.map(({ userId, phone, name, registeredAt, accountOpened }) => ({
+  const inserted = await insertNew(Lead, registrations.map(({ userId, phone, name, registeredAt, accountOpened }) => ({
     updateOne: {
       filter: { phone, registrationUserId: { $in: [null, userId] } },
       update: {
@@ -150,6 +150,41 @@ async function syncRegisteredLeads(registrations) {
       timestamps: false,
     },
   })));
+  await fillMissingLeadEmails(registrations.map(row => ({ phone: row.phone, email: row.email, registrationUserId: row.userId })));
+  return inserted;
+}
+
+async function fillMissingLeadEmails(rows) {
+  const updates = rows.flatMap(({ phone, email, registrationUserId }) => {
+    const valid = identity.normalizeEmail(email);
+    if (!valid) return [];
+    return [{ updateOne: {
+      filter: { phone, email: { $in: [null, ""] }, ...(registrationUserId ? { registrationUserId } : {}) },
+      update: { $set: { email: valid } },
+    } }];
+  });
+  return updates.length ? (await Lead.bulkWrite(updates, { ordered: false })).modifiedCount : 0;
+}
+
+async function importLeadEmails(rows) {
+  if (!Array.isArray(rows) || rows.length < 1 || rows.length > 100) throw new CrmError(400, "Upload up to 100 rows per request.");
+  const rejected = [];
+  const emails = new Map();
+  const conflicts = new Set();
+  for (const [index, row] of rows.entries()) {
+    const phone = identity.normalizePhone(clean(row?.phone, 50));
+    const email = identity.normalizeEmail(row?.email);
+    const line = Number.isSafeInteger(row?.row) ? row.row : index + 2;
+    if (!row?.email) continue;
+    if (!phone || !email) { rejected.push({ row: line, reason: "Enter a valid international phone number and email." }); continue; }
+    if (emails.has(phone) && emails.get(phone) !== email) {
+      conflicts.add(phone);
+      rejected.push({ row: line, reason: "Conflicting email addresses for this phone number." });
+    } else emails.set(phone, email);
+  }
+  for (const phone of conflicts) emails.delete(phone);
+  const emailsAdded = await fillMissingLeadEmails(Array.from(emails, ([phone, email]) => ({ phone, email })));
+  return { emailsAdded, rejected };
 }
 
 async function importLeads(rows) {
@@ -166,6 +201,7 @@ async function importLeads(rows) {
   const operations = [];
   const rejected = [];
   const seen = new Set();
+  const importEmails = new Map();
   let duplicates = 0;
   for (const [index, row] of rows.entries()) {
     const line = Number.isSafeInteger(row?.row) && row.row > 0 ? row.row : index + 2;
@@ -179,7 +215,14 @@ async function importLeads(rows) {
       rejected.push({ row: line, reason: "Lead ID is too long." });
       continue;
     }
+    const rawEmail = typeof row?.email === "string" ? row.email.trim() : "";
+    const email = identity.normalizeEmail(rawEmail);
+    if (rawEmail && !email) {
+      rejected.push({ row: line, reason: "Enter a valid email address or leave it blank." });
+      continue;
+    }
     if (seen.has(phone)) {
+      if (email && !importEmails.has(phone)) importEmails.set(phone, email);
       duplicates++;
       continue;
     }
@@ -197,13 +240,14 @@ async function importLeads(rows) {
       }
     }
     seen.add(phone);
+    if (email) importEmails.set(phone, email);
     operations.push({ updateOne: {
       filter: { phone },
       update: { $setOnInsert: {
         leadId: rawLeadId || "BDFX-" + randomUUID(),
         phone,
         name: clean(row?.name, 150),
-        email: clean(row?.email, 254).toLowerCase(),
+        email: email || "",
         source: clean(row?.source, 100) || "Upload",
         lastNote: clean(row?.note, 1500),
         originalAgent,
@@ -222,7 +266,8 @@ async function importLeads(rows) {
   }
   if (!operations.length) return { imported: 0, duplicates, rejected };
   const imported = await insertNew(Lead, operations);
-  return { imported, duplicates: duplicates + operations.length - imported, rejected };
+  const emailsAdded = await fillMissingLeadEmails(Array.from(importEmails, ([phone, email]) => ({ phone, email })));
+  return { imported, duplicates: duplicates + operations.length - imported, rejected, ...(emailsAdded ? { emailsAdded } : {}) };
 }
 
 function parseTime(value) {
@@ -477,7 +522,8 @@ async function listLeads(principal, query) {
   const limit = 50;
   const filter = leadFilter(principal, query);
   const list = {
-    queue: readyFilter(new Date()),
+    queue: { assignedTo: { $ne: null }, ...readyFilter(new Date()) },
+    unassigned: bankFilter,
     follow_ups: { status: "follow_up" },
     interested: { lastOutcome: "qualified", status: { $ne: "closed" }, accountOpened: { $ne: true } },
     account_opened: { accountOpened: true },
@@ -555,6 +601,15 @@ async function assignedLeadByPhone(principal, value) {
   return String(lead._id);
 }
 
+async function setLeadEmail(principal, leadId, value) {
+  const email = identity.normalizeEmail(value);
+  if (!email) throw new CrmError(400, "Enter a valid lead email address.");
+  const scope = principal.adminRole === "owner" ? {} : { assignedTo: asId(principal.id) };
+  const result = await Lead.updateOne({ _id: asId(leadId), ...scope }, { $set: { email } }, { runValidators: true });
+  if (!result.matchedCount) throw new CrmError(404, "Lead not found.");
+  return { email };
+}
+
 async function recordOutcome(principal, leadId, body) {
   const agent = asId(principal.id);
   const id = asId(leadId);
@@ -601,4 +656,4 @@ async function history(principal, id) {
 }
 
 module.exports = { TARGET, CrmError, staffFilter, hashmiAgentPattern, contactable, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
-  reconcileAttemptedLeads, distribute, overview, followUpReport, listLeads, listClients, renameLead, assignedLeadByPhone, recordOutcome, history, planAssignments };
+  reconcileAttemptedLeads, distribute, overview, followUpReport, listLeads, listClients, renameLead, setLeadEmail, importLeadEmails, assignedLeadByPhone, recordOutcome, history, planAssignments };

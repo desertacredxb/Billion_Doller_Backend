@@ -113,19 +113,25 @@ async function recordReport(payload, offset = process.env.BDFX_INDIAVOICE_REPORT
   if ((!customerStart && !pickedUp) || (customerStart && (customerStart < occurredAt || customerStart > end)) ||
       (pickedUp && (pickedUp < (customerStart || occurredAt) || pickedUp > end))) return false;
   const lead = await Lead.findOne({ assignedTo: agent._id, phone: clientPhone, assignedAt: { $lte: occurredAt } }).select("_id").lean();
-  if (!lead) return false;
   const seconds = pickedUp ? Math.floor((end - pickedUp) / 1000) : 0;
   const reported = /^\d+$/.test(String(payload.TalkDuration ?? "")) ? Number(payload.TalkDuration) : seconds;
-  const media = pickedUp && require("./crmOwnerChannels").recordingUrl("indiavoice", payload.CallRecordingUrl);
+  const media = lead && pickedUp && require("./crmOwnerChannels").recordingUrl("indiavoice", payload.CallRecordingUrl);
   const eventKey = "indiavoice:" + payload.CallSid;
   await ensureCrmIndexes(Call);
-  try {
-    await Call.updateOne({ eventKey, agent: agent._id, lead: lead._id }, { ...(media ? { $set: { recordingUrl: media } } : {}), $setOnInsert: {
-      eventKey, kind: "indiavoice", providerCallId: payload.CallSid, agent: agent._id, lead: lead._id,
-      attempted: true, connected: Boolean(pickedUp), talkSeconds: pickedUp ? Math.min(seconds, reported) : 0, occurredAt,
-    } }, { upsert: true });
-  } catch (err) { if (err.code === 11000) return false; throw err; }
-  await Lead.updateOne({ _id: lead._id, assignedTo: agent._id, status: "new" }, { $set: { status: "worked" } });
+  const filter = { eventKey, agent: agent._id, ...(lead ? { lead: { $in: [null, lead._id] } } : {}) };
+  const update = {
+    $setOnInsert: { eventKey, kind: "indiavoice", providerCallId: payload.CallSid, agent: agent._id, attempted: true, occurredAt },
+    $max: { connected: Boolean(pickedUp), talkSeconds: pickedUp ? Math.min(seconds, reported) : 0 },
+    ...(lead ? { $set: { lead: lead._id, ...(media ? { recordingUrl: media } : {}) } } : {}),
+  };
+  try { await Call.updateOne(filter, update, { upsert: true }); }
+  catch (err) {
+    if (err.code !== 11000) throw err;
+    if (!(await Call.updateOne(filter, update)).matchedCount) return false;
+  }
+  if (lead) await Lead.updateOne({ _id: lead._id, assignedTo: agent._id, assignedAt: { $lte: occurredAt }, status: "new",
+    lastOutcome: null, followUpAt: null, accountOpened: { $ne: true },
+    $or: [{ registeredAt: null }, { registeredAt: { $lte: occurredAt } }] }, { $set: { status: "worked" } });
   return true;
 }
 

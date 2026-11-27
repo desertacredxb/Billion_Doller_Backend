@@ -73,6 +73,20 @@ router.post("/import", access.owner, run(async (req, res) => {
   req.auditDetails = { imported: summary.imported, duplicate: summary.duplicates, rejected: summary.rejected.length };
   res.json(summary);
 }));
+
+router.patch("/leads/:id/email", run(async (req, res) => {
+  const result = await crm.setLeadEmail(req.principal, req.params.id, req.body?.email);
+  req.auditEvent = "crm:lead-email-edited";
+  req.auditDetails = { leadId: req.params.id, changedFields: ["email"] };
+  res.json(result);
+}));
+
+router.post("/import/emails", access.owner, run(async (req, res) => {
+  const result = await crm.importLeadEmails(req.body?.rows);
+  req.auditEvent = "crm:email-import";
+  req.auditDetails = { emailsAdded: result.emailsAdded, rejected: result.rejected.length };
+  res.json(result);
+}));
 router.post("/import/outcomes", access.owner, run(async (req, res) => {
   const summary = await crm.importOutcomes(req.body?.rows);
   req.auditEvent = "crm:import-outcomes";
