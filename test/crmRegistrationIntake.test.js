@@ -204,3 +204,94 @@ test("an opted-out lead cannot reach Hashmi even if its old status is still new"
   }));
   await assert.rejects(dial({ id: agent }, leadId, "198e1ff4-df44-4044-a322-11f8786ec761", () => assert.fail("Hashmi was called")), { status: 409 });
 });
+
+test("agent board and its paginated stage use the same assignment scope and classification", async t => {
+  const stages = ["new", "follow_up", "worked", "qualified", "account_opened", "closed"];
+  let scope, classification;
+  t.mock.method(Lead, "aggregate", async ([match, compute, facet]) => {
+    scope = match.$match;
+    classification = compute.$set.stage;
+    const data = { counts: [{ _id: "worked", total: 53 }] };
+    for (const stage of stages) {
+      assert.deepEqual(facet.$facet[stage][0], { $match: { stage } });
+      assert.deepEqual(facet.$facet[stage].at(-1), { $limit: 4 });
+      data[stage] = stage === "worked" ? [{ _id: leadId, status: "worked" }] : [];
+    }
+    return [data];
+  });
+  const principal = { id: agent, adminRole: "manager", permissions: ["crm"] };
+  const request = { search: "example", agent: person };
+  const { lanes } = await listLeads(principal, { ...request, view: "board" });
+  assert.deepEqual(lanes.map(lane => lane.stage), stages);
+  assert.equal(lanes.find(lane => lane.stage === "worked").total, 53);
+  assert.equal(String(scope.$and[0].assignedTo), agent);
+  assert.deepEqual(scope.$and.at(-1), { assignedTo: { $ne: null } });
+  const query = { sort: () => query, skip: offset => { assert.equal(offset, 50); return query; }, limit: () => query, lean: async () => [] };
+  t.mock.method(Lead, "find", filter => {
+    assert.deepEqual(filter.$and.slice(0, -1), scope.$and);
+    assert.deepEqual(filter.$and.at(-1), { $expr: { $eq: [classification, "worked"] } });
+    return query;
+  });
+  t.mock.method(Lead, "countDocuments", async () => 53);
+  assert.equal((await listLeads(principal, { ...request, view: "board_list", stage: "worked", page: 2 })).total, 53);
+  await assert.rejects(listLeads(principal, { view: "board_list", stage: "invalid" }), { status: 400 });
+});
+
+test("six distinct call dispositions preserve notes and schedule requested callbacks without provider credit", async t => {
+  const eligible = { select: () => ({ lean: async () => ({}) }) };
+  t.mock.method(Lead, "findOne", () => eligible);
+  t.mock.method(Call.collection, "createIndex", async () => {});
+  t.mock.method(Call, "exists", async () => false);
+  t.mock.method(Call, "findOneAndUpdate", (_filter, update) => ({ lean: async () => {
+    assert.equal(update.$setOnInsert.kind, "outcome");
+    assert.equal(update.$setOnInsert.connected, undefined);
+    return update.$setOnInsert;
+  } }));
+  const write = t.mock.method(Lead, "updateOne", async () => ({ matchedCount: 1 }));
+  for (const outcome of ["ringing_but_no_response", "switched_off", "not_reachable", "call_back", "follow_up", "number_forwarded_to_voicemail"]) {
+    const scheduled = ["call_back", "follow_up"].includes(outcome);
+    const body = { outcome, note: "Test feedback", requestId: require("node:crypto").randomUUID() };
+    if (scheduled) {
+      await assert.rejects(recordOutcome({ id: agent }, leadId, body), { status: 400 });
+      await assert.rejects(recordOutcome({ id: agent }, leadId, { ...body, followUpAt: "2020-01-01T15:30:00+04:00" }), { status: 400 });
+      body.followUpAt = new Date(Date.now() + 86400000).toISOString();
+    }
+    const result = await recordOutcome({ id: agent }, leadId, body);
+    assert.equal(result.status, scheduled ? "follow_up" : "worked");
+    const saved = write.mock.calls.at(-1).arguments[1].$set;
+    assert.equal(saved.lastOutcome, outcome);
+    assert.equal(saved.lastNote, body.note);
+    assert.equal(saved.followUpAt?.toISOString() || null, body.followUpAt || null);
+  }
+});
+
+test("standalone reminders require an open assigned lead and do not record a call", async t => {
+  const { setReminder } = require("../services/crm.service");
+  const future = new Date(+at + 3600000);
+  const body = { followUpAt: future.toISOString(), previous: null };
+  const write = t.mock.method(Lead, "updateOne", async () => ({ matchedCount: 1 }));
+  const result = await setReminder({ id: agent }, leadId, body, at);
+  assert.deepEqual(result, { status: "follow_up", followUpAt: future });
+  const [filter, update] = write.mock.calls[0].arguments;
+  assert.equal(String(filter.assignedTo), agent);
+  assert.equal(filter.followUpAt, null);
+  assert.deepEqual(filter.lastOutcome.$nin, ["do_not_call", "number_not_in_use"]);
+  assert.deepEqual(update.$set, { status: "follow_up", followUpAt: future, reminderSetAt: at });
+  await assert.rejects(setReminder({ id: agent }, leadId, body, future), { status: 400 });
+});
+
+test("lead transfer is owner-only and checks both previous assignment and mapped destination", async t => {
+  const { transferLead } = require("../services/crm.service");
+  const body = { previous: person, agent };
+  await assert.rejects(transferLead({ id: person }, leadId, body), { status: 403 });
+  const q = { select: () => q, sort: () => q, lean: async () => [{ _id: agent }] };
+  t.mock.method(Staff, "find", () => q);
+  const write = t.mock.method(Lead, "updateOne", async () => ({ matchedCount: 1 }));
+  assert.deepEqual(await transferLead({ adminRole: "owner" }, leadId, body, at), { assignedTo: agent, assignmentPending: false });
+  const [filter, update] = write.mock.calls[0].arguments;
+  assert.equal(String(filter.assignedTo), person);
+  assert.equal(filter.status.$ne, "closed");
+  assert.equal(String(update.$set.assignedTo), agent);
+  assert.equal(update.$set.assignedAt, at);
+  await assert.rejects(transferLead({ adminRole: "owner" }, leadId, { previous: null, agent: person }), { status: 400 });
+});

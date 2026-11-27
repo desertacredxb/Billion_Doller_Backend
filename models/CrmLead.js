@@ -21,6 +21,7 @@ const schema = new mongoose.Schema({
   lastOutcome: String,
   lastNote: { type: String, default: "", maxlength: 1500 },
   lastOutcomeAt: Date,
+  reminderSetAt: Date,
   dialRequest: {
     _id: false,
     key: String,

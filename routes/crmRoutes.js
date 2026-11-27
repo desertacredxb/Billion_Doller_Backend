@@ -114,6 +114,18 @@ router.patch("/team/:id/hashmi", access.owner, run(async (req, res) => {
   req.auditEvent = "crm:hashmi-agent-mapped";
   res.json({ saved: true });
 }));
+router.patch("/leads/:id/assignment", access.owner, run(async (req, res) => {
+  const result = await crm.transferLead(req.principal, req.params.id, req.body);
+  req.auditEvent = "crm:lead-transferred";
+  req.auditDetails = { leadId: req.params.id, agent: result.assignedTo };
+  res.json(result);
+}));
+router.patch("/leads/:id/reminder", run(async (req, res) => {
+  const result = await crm.setReminder(req.principal, req.params.id, req.body);
+  req.auditEvent = "crm:reminder-set";
+  req.auditDetails = { leadId: req.params.id };
+  res.json(result);
+}));
 router.post("/leads/:id/outcome", run(async (req, res) => {
   const result = await crm.recordOutcome(req.principal, req.params.id, req.body);
   if (req.body.outcome === "do_not_call") {
