@@ -112,14 +112,15 @@ function parseReport(report, config) {
   const agentIds = agentPattern.test(master) ? [master] :
     [...new Set(details.map(item => String(item?.agentId || "")).filter(value => agentPattern.test(value)))];
   const history = Array.isArray(report.nH) ? report.nH : [];
-  const customerAnswered = Boolean(reportTime(report.custAnswerSTime, config.offset));
+  const customerAnsweredAt = reportTime(report.custAnswerSTime, config.offset);
+  const customerAnswered = Boolean(customerAnsweredAt);
   const status = Number(report.callStatus);
   const attempted = customerAnswered || history.some(value => vendorPhone(value) === phone) ||
     (report.cType === "QC" && quickCallCustomerLeg.has(status));
   const connected = attempted && status === 3;
   const duration = Number(report.talkDuration);
   const talkSeconds = connected && Number.isFinite(duration) ? Math.max(0, Math.floor(duration)) : 0;
-  return { callId: report.callId, agentIds, occurredAt, phone, attempted, connected, talkSeconds };
+  return { callId: report.callId, agentIds, occurredAt, phone, attempted, connected, talkSeconds, ...(customerAnsweredAt && customerAnsweredAt >= occurredAt ? { customerAnsweredAt } : {}) };
 }
 
 async function recordReport(payload) {
@@ -136,8 +137,8 @@ async function recordVerifiedCall(report, agent) {
   await ensureCrmIndexes(Call);
   try {
     await Call.updateOne({ eventKey, agent: agent._id, hashmiExportStatus: { $exists: false } }, {
-      $setOnInsert: { kind: "hashmi", agent: agent._id, occurredAt: report.occurredAt, providerCallId: report.callId },
-      $set: { ...(lead ? { lead: lead._id } : {}), attempted: true },
+      $setOnInsert: { kind: "hashmi", agent: agent._id, occurredAt: report.occurredAt, providerCallId: report.callId, customerPhone: report.phone },
+      $set: { ...(lead ? { lead: lead._id } : {}), ...(report.connected && report.customerAnsweredAt ? { customerAnsweredAt: report.customerAnsweredAt } : {}), attempted: true },
       $max: { connected: report.connected, talkSeconds: report.talkSeconds },
     }, { upsert: true });
   } catch (error) {

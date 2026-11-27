@@ -9,7 +9,8 @@ const Account = require("../models/account.model");
 const Order = require("../models/Order");
 const identity = require("../utils/registrationIdentity");
 
-const TARGET = 300;
+const { target: TARGET, confirmedCounts } = require("./crmConnected.service");
+const attendance = require("./crmAttendance.service");
 const DAY_MS = 86_400_000;
 const DUBAI_OFFSET = 4 * 3_600_000;
 const REMINDER_OUTCOMES = new Set(["call_back", "follow_up"]);
@@ -21,7 +22,8 @@ const { indiaVoiceConfigured } = require("./crmIndiaVoiceConfig");
 const hashmiAgentPattern = /^[1-9]\d{0,11}$/;
 const contactable = { lastOutcome: { $ne: "do_not_call" } };
 const unworkedFilter = { status: "new", accountOpened: { $ne: true } };
-const bankFilter = { assignedTo: null, assignmentPending: false, ...unworkedFilter, ...contactable };
+const unassignedFilter = { assignedTo: null, assignmentPending: false, ...unworkedFilter, ...contactable };
+const bankFilter = { ...unassignedFilter, manualDistributionOnly: { $ne: true } };
 const objectIdPattern = /^[a-f\d]{24}$/i;
 const requestIdPattern = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const indexReadiness = new WeakMap();
@@ -188,7 +190,7 @@ async function importLeadEmails(rows) {
   return { emailsAdded, rejected };
 }
 
-async function importLeads(rows) {
+async function importLeads(rows, reserve = false) {
   if (!Array.isArray(rows) || rows.length < 1 || rows.length > 100) {
     throw new CrmError(400, "Upload up to 100 lead rows per request.");
   }
@@ -254,6 +256,7 @@ async function importLeads(rows) {
         originalAgent,
         assignedTo: agent?._id || null,
         assignedAt,
+        ...(reserve && !originalAgent && !doNotCall ? { manualDistributionOnly: true } : {}),
         assignmentPending: Boolean(!doNotCall && originalAgent && !agent),
         clientId: clientPhone.get(clientId) === phone ? clientId : null,
         status: doNotCall ? "closed" : "new",
@@ -398,18 +401,9 @@ async function progress(ids, date = dubaiDay(), now = new Date()) {
 }
 
 function planAssignments(staff, stats, available) {
-  const slots = staff.map(agent => {
-    const { verified = 0, ready = 0 } = stats.get(String(agent._id)) || {};
-    return { agent: agent._id, covered: verified + ready };
-  });
-  const plan = [];
-  for (const lead of available) {
-    const next = slots.reduce((best, seat) => !best || seat.covered < best.covered ? seat : best, null);
-    if (!next || next.covered >= TARGET) break;
-    plan.push({ lead: lead._id, agent: next.agent });
-    next.covered++;
-  }
-  return plan;
+  // Start an empty queue with one fresh number. The daily performance target never limits supply.
+  const empty = staff.filter(agent => !(stats.get(String(agent._id))?.ready > 0));
+  return available.slice(0, empty.length).map((lead, i) => ({ lead: lead._id, agent: empty[i]._id }));
 }
 
 async function distribute() {
@@ -434,8 +428,12 @@ async function distribute() {
       },
     }] : []);
     const credited = aliasUpdates.length ? (await Lead.bulkWrite(aliasUpdates, { ordered: false })).modifiedCount : 0;
-    const stats = await progress(staff.map(agent => agent._id), dubaiDay(undefined, now), now);
-    const capacity = [...stats.values()].reduce((sum, item) => sum + Math.max(0, TARGET - item.ready - item.verified), 0);
+    const stock = await Lead.aggregate([
+      { $match: { assignedTo: { $in: staff.map(agent => agent._id) }, ...unworkedFilter, lastOutcome: null } },
+      { $group: { _id: "$assignedTo", ready: { $sum: 1 } } },
+    ]);
+    const stats = new Map(stock.map(row => [String(row._id), row]));
+    const capacity = staff.filter(agent => !stats.has(String(agent._id))).length;
     if (!capacity) return { assigned: credited };
     const available = await Lead.find(bankFilter).sort({ registeredAt: -1, createdAt: 1, _id: 1 }).limit(capacity).select("_id").lean();
     const plan = planAssignments(staff, stats, available);
@@ -455,12 +453,15 @@ async function overview(principal, day) {
   const team = canViewTeam(principal) || (principal.permissions?.includes("crm_team") && !principal.permissions.includes("crm"));
   const staff = team ? await activeStaff() : await Staff.find(staffFilter).where("_id").equals(principal.id)
     .select("_id fullName crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber").lean();
-  const [stats, bank, pending, followUps] = await Promise.all([
+  const ids = staff.map(agent => agent._id);
+  const [stats, bank, pending, followUps, pickups, shifts] = await Promise.all([
     progress(staff.map(agent => agent._id), date),
     team ? Lead.countDocuments(bankFilter) : null,
     team ? Lead.countDocuments({ assignmentPending: true, ...contactable }) : null,
-    team ? countFollowUps(staff.map(agent => agent._id), date, new Date()) : [],
+    team ? countFollowUps(ids, date, new Date()) : [],
+    confirmedCounts(date.start, date.end, ids), attendance.report(ids, date),
   ]);
+  const unique = new Map(pickups.map(row => [String(row._id.agent), row.unique]));
   const due = new Map(followUps.map(row => [String(row._id), row]));
   return {
     day: date.day,
@@ -475,6 +476,7 @@ async function overview(principal, day) {
       dialer: agent.crmIndiaVoiceDeskphone && !agent.crmHashmiAgentId ? "9ance" : "hashmi",
       ...(owner ? { indiaVoiceDeskphone: agent.crmIndiaVoiceDeskphone || "", indiaVoiceAgentNumber: agent.crmIndiaVoiceAgentNumber || "" } : {}),
       dialerMapped: hashmiAgentPattern.test(agent.crmHashmiAgentId || "") || Boolean(indiaVoiceConfigured() && agent.crmIndiaVoiceDeskphone && agent.crmIndiaVoiceAgentNumber),
+      uniqueConnected: unique.get(String(agent._id)) || 0, attendance: shifts.get(String(agent._id)) || null,
       overdue: due.get(String(agent._id))?.overdue || 0,
       ...stats.get(String(agent._id)),
     })),
@@ -495,24 +497,25 @@ async function followUpReport(now = new Date()) {
   const date = dubaiDay(undefined, now);
   const staff = await activeStaff(true);
   const ids = staff.map(agent => agent._id);
-  const [stats, followUps] = await Promise.all([
+  const [stats, followUps, pickups] = await Promise.all([
     progress(ids, date, now),
-    countFollowUps(ids, date, now),
+    countFollowUps(ids, date, now), confirmedCounts(date.start, date.end, ids),
   ]);
   const due = new Map(followUps.map(row => [String(row._id), row]));
+  const unique = new Map(pickups.map(row => [String(row._id.agent), row.unique]));
   return { day: date.day, checkedAt: now.toISOString(), target: TARGET, agents: staff.map(agent => {
     const id = String(agent._id);
     const { verified, logged } = stats.get(id);
-    return { name: agent.fullName || "CRM caller", verified, logged, remaining: verified || !logged ? Math.max(0, TARGET - verified) : null,
+    return { name: agent.fullName || "CRM caller", verified, logged, uniqueConnected: unique.get(id) || 0, remaining: Math.max(0, TARGET - (unique.get(id) || 0)),
       overdue: due.get(id)?.overdue || 0, laterToday: due.get(id)?.laterToday || 0 };
   }) };
 }
 
-function searchFilter(value) {
+function searchFilter(value, fields = ["contactName", "name", "registrationName", "phone", "email", "leadId"]) {
   const keyword = clean(value, 80);
   if (!keyword) return {};
   const escaped = keyword.replace(/[.*+?^\u0024{}()|[\]\\]/g, "\\$&");
-  return { $or: ["contactName", "name", "registrationName", "phone", "email", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
+  return { $or: fields.map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
 }
 
 function leadFilter(principal, query) {
@@ -557,9 +560,17 @@ async function listLeads(principal, query) {
       filter.$and.push({ $expr: { $eq: [pipelineStage, query.stage] } });
     }
   }
+  if (query.view === "queue" && query.queue === "fresh") filter.$and.push(unworkedFilter);
+  if (query.view === "queue" && query.queue === "callbacks") filter.$and.push({ status: "follow_up" });
+  if (typeof query.view === "string" && query.view.startsWith("outcome_")) {
+    const outcome = query.view.slice("outcome_".length);
+    if (!OUTCOMES.includes(outcome)) throw new CrmError(400, "Choose a valid call outcome.");
+    filter.$and.push({ lastOutcome: outcome });
+  }
   const list = {
+    awaiting_outcome: { status: "worked", lastOutcome: null },
     queue: { assignedTo: { $ne: null }, ...readyFilter(new Date()) },
-    unassigned: bankFilter,
+    unassigned: unassignedFilter,
     follow_ups: { status: "follow_up" },
     interested: { lastOutcome: "qualified", status: { $ne: "closed" }, accountOpened: { $ne: true } },
     account_opened: { accountOpened: true },
@@ -679,7 +690,7 @@ async function setReminder(principal, leadId, body, now = new Date()) {
   return { status: "follow_up", followUpAt };
 }
 
-async function recordOutcome(principal, leadId, body) {
+async function recordOutcome(principal, leadId, body, session) {
   const agent = asId(principal.id);
   const id = asId(leadId);
   const outcome = body?.outcome;
@@ -692,7 +703,7 @@ async function recordOutcome(principal, leadId, body) {
     throw new CrmError(400, "Choose a callback date for an open lead.");
   }
   const scope = outcome === "do_not_call" && principal.adminRole === "owner" ? {} : { assignedTo: agent };
-  const current = await Lead.findOne({ _id: id, ...scope }).select("lastOutcome").lean();
+  const current = await Lead.findOne({ _id: id, ...scope }, null, { session }).select("lastOutcome assignedTo").lean();
   if (!current) throw new CrmError(404, "Assigned lead not found.");
   if (current.lastOutcome === "do_not_call" && outcome !== "do_not_call") {
     throw new CrmError(409, "This lead is marked Do not call.");
@@ -701,24 +712,29 @@ async function recordOutcome(principal, leadId, body) {
     throw new CrmError(409, "This lead is marked Number not in use.");
   }
   const key = "outcome:" + body.requestId;
-  const fields = { kind: "outcome", agent, lead: id, occurredAt: new Date(), outcome, note: clean(body.note, 1500), followUpAt };
+  const recipient = principal.adminRole === "owner" ? current.assignedTo : agent;
+  const fields = { kind: "outcome", agent, lead: id, occurredAt: new Date(), outcome, note: clean(body.note, 1500), followUpAt,
+    ...(recipient ? { refillState: "pending", refillAgent: recipient } : {}) };
   if (REMINDER_OUTCOMES.has(outcome) && followUpAt <= fields.occurredAt &&
       !await Call.exists({ eventKey: key, lead: id, agent, followUpAt, outcome })) {
     throw new CrmError(400, "Choose a future callback time in Dubai.");
   }
-  await ensureCrmIndexes(Call);
+  if (!session) await ensureCrmIndexes(Call);
   let event;
   try {
-    event = await Call.findOneAndUpdate({ eventKey: key }, { $setOnInsert: fields }, { upsert: true, new: true }).lean();
+    event = await Call.findOneAndUpdate({ eventKey: key }, { $setOnInsert: fields }, { upsert: true, new: true, session }).lean();
   } catch (error) {
-    if (error.code !== 11000) throw error;
+    if (session || error.code !== 11000) throw error;
     event = await Call.findOne({ eventKey: key }).lean();
   }
   if (!event || String(event.agent) !== String(agent) || String(event.lead) !== String(id)) {
     throw new CrmError(409, "This call entry already belongs to another lead.");
   }
+  if (event.outcome !== outcome || event.note !== fields.note || Number(event.followUpAt) !== Number(followUpAt)) {
+    throw new CrmError(409, "This save request already recorded a different outcome.");
+  }
   const leadUpdate = leadOutcomeUpdate(event);
-  const updated = await Lead.updateOne({ ...leadUpdate.filter, ...scope }, leadUpdate.update);
+  const updated = await Lead.updateOne({ ...leadUpdate.filter, ...scope }, leadUpdate.update, { session });
   if (event.outcome === "do_not_call" && updated?.matchedCount === 0) throw new CrmError(404, "Lead not found.");
   return { saved: true, status: leadUpdate.update.$set.status };
 }
@@ -729,5 +745,5 @@ async function history(principal, id) {
   return Call.find({ lead: lead._id }).select("kind occurredAt outcome note followUpAt attempted connected talkSeconds hashmiExportStatus").sort({ occurredAt: -1 }).limit(50).lean();
 }
 
-module.exports = { TARGET, CrmError, staffFilter, hashmiAgentPattern, contactable, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
+module.exports = { activeStaff, unassignedFilter, bankFilter, formatLead, TARGET, CrmError, staffFilter, hashmiAgentPattern, contactable, asId, assertRequestId, dubaiDay, staffScope, pageNumber, searchFilter, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
   reconcileAttemptedLeads, distribute, overview, followUpReport, listLeads, listClients, renameLead, setLeadEmail, transferLead, setReminder, importLeadEmails, assignedLeadByPhone, recordOutcome, history, planAssignments };

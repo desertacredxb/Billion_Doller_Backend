@@ -64,17 +64,16 @@ test("Hashmi mapping verifies its unique index and updates the active CRM accoun
 });
 const { permissionForRequest } = require("../services/adminPolicy");
 
-test("CRM allocation covers the least-filled queue and stops at each agent's target", () => {
+test("CRM seeds an empty queue irrespective of call totals", () => {
   const staff = [{ _id: "A" }, { _id: "B" }, { _id: "C" }];
   const stats = new Map([
     ["A", { ready: 2, verified: TARGET - 2 }],
-    ["B", { ready: 0, verified: TARGET - 3 }],
+    ["B", { ready: 0, verified: TARGET + 500 }],
     ["C", { ready: 1, verified: TARGET - 3 }],
   ]);
   const available = Array.from({ length: 8 }, (_, i) => ({ _id: String(i + 1) }));
   assert.deepEqual(planAssignments(staff, stats, available), [
-    { lead: "1", agent: "B" }, { lead: "2", agent: "B" }, { lead: "3", agent: "C" },
-    { lead: "4", agent: "B" }, { lead: "5", agent: "C" },
+    { lead: "1", agent: "B" },
   ]);
   assert.deepEqual(planAssignments([], stats, available), []);
 });

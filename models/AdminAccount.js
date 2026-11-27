@@ -7,6 +7,7 @@ const schema = new mongoose.Schema({
   role: { type: String, enum: ["owner", "manager"], default: "manager" },
   enabled: { type: Boolean, default: true },
   permissions: [{ type: String, enum: PERMISSIONS }],
+  crmIbId: { type: mongoose.Schema.Types.ObjectId, ref: "IB", unique: true, sparse: true },
   crmHashmiAgentId: { type: String, trim: true, unique: true, sparse: true },
   crmIndiaVoiceDeskphone: { type: String, unique: true, sparse: true },
   crmIndiaVoiceAgentNumber: { type: String, unique: true, sparse: true },

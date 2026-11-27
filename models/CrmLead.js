@@ -8,6 +8,7 @@ const schema = new mongoose.Schema({
   email: { type: String, default: "", maxlength: 254 },
   source: { type: String, default: "Upload", maxlength: 100 },
   originalAgent: { type: String, default: "", maxlength: 254 },
+  manualDistributionOnly: Boolean,
   assignmentPending: { type: Boolean, default: false },
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount", default: null },
   assignedAt: { type: Date, default: null },

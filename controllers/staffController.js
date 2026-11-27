@@ -67,6 +67,10 @@ function createController({ admins = AdminAccount, now = () => new Date() } = {}
         else if (value.enabled === true) update.$unset.disabledAt = 1;
         const data = await admins.findOneAndUpdate({ _id: existing._id, role: "manager", email: existing.email }, update, { new: true, runValidators: true }).select("+passwordHash");
         if (!data) return res.status(404).json({ message: "Manager not found." });
+        if (existing.permissions?.includes("crm")) {
+          const cut = now();
+          await require("../models/CrmShift").updateMany({ agent: data._id, version: { $lt: data.authVersion }, end: { $gt: cut } }, { $set: { end: cut, reason: "revoked" } });
+        }
         req.auditEvent = value.enabled === false ? "staff.disabled" : "staff.updated";
         req.auditTargetId = String(data._id);
         req.auditDetails = { changedFields: Object.keys(value).filter(key => key !== "disabledAt"), ...(value.permissions ? { permissions: value.permissions } : {}), ...(Object.hasOwn(value, "enabled") ? { enabled: value.enabled } : {}) };
