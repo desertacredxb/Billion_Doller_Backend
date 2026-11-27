@@ -99,3 +99,24 @@ test("9ance records a final customer leg for the matched agent and lead, using a
   for (const value of ["wrong", undefined, ["x"]]) assert.equal(indiaVoice.reportAuthorized(value, "a".repeat(32)), false);
   assert.equal(indiaVoice.reportAuthorized("a".repeat(32), "a".repeat(32)), true);
 });
+
+test("CRM headset authorizes one assigned destination without sending a server-side call", async t => {
+  const sipUser = "test-agent";
+  t.mock.method(Staff, "findOne", () => query({ ...staff, crmIndiaVoiceSipUser: sipUser }));
+  t.mock.method(indiaVoice, "configured", () => true);
+  t.mock.method(indiaVoice, "requestCall", () => assert.fail("must not place a callback"));
+  t.mock.method(Lead, "findOneAndUpdate", filter => {
+    assert.equal(String(filter.assignedTo), id);
+    assert.equal(filter.lastOutcome.$ne, "do_not_call");
+    assert.equal(filter.status.$ne, "closed");
+    return query({ phone: "+12025550101" });
+  });
+  await assert.rejects(dial({ id }, lead, key), { status: 409 });
+  await assert.rejects(dial({ id }, lead, key, undefined, "other-agent"), { status: 409 });
+  assert.deepEqual(await dial({ id }, lead, key, undefined, sipUser), { phone: "+12025550101" });
+  Lead.findOneAndUpdate.mock.mockImplementation(() => query(null));
+  t.mock.method(Lead, "findOne", () => query({ dialRequest: { key, state: "pending" } }));
+  await assert.rejects(dial({ id }, lead, key, undefined, sipUser), { status: 409 });
+  Lead.findOne.mock.mockImplementation(() => query(null));
+  await assert.rejects(dial({ id }, lead, key, undefined, sipUser), { status: 404 });
+});

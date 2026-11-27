@@ -178,6 +178,14 @@ router.post("/leads/:id/outcome", run(async (req, res) => {
   }
   res.json(result);
 }));
+router.post("/browser-dial", run(async (req, res) => {
+  const { leadId, phone, requestId, sipUser } = req.body || {};
+  if (typeof sipUser !== "string" || !sipUser || Boolean(leadId) === Boolean(phone)) {
+    throw new crm.CrmError(400, "Select an assigned lead and connect your headset.");
+  }
+  const id = leadId || await crm.assignedLeadByPhone(req.principal, phone);
+  res.set("Cache-Control", "no-store").json(await dialer.dial(req.principal, id, requestId, undefined, sipUser));
+}));
 router.post("/leads/:id/dial", run(async (req, res) => {
   res.json(await dialer.dial(req.principal, req.params.id, req.body?.requestId));
 }));

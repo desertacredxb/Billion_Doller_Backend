@@ -1,7 +1,10 @@
 const IB = require("../models/Broker.model");
 const User = require("../models/User");
+const Order = require("../models/Order");
+const Withdrawal = require("../models/withdrawal");
+const Account = require("../models/account.model");
 const Staff = require("../models/AdminAccount");
-const { CrmError, asId, staffFilter, staffScope, pageNumber, searchFilter } = require("./crm.service");
+const { CrmError, asId, staffFilter, staffScope, dubaiDay, pageNumber, searchFilter } = require("./crm.service");
 
 const key = value => String(value || "").trim().toLowerCase();
 
@@ -21,6 +24,68 @@ function resolveLinks(agents, brokers) {
   return links;
 }
 
+function emptyActivity() {
+  return { deposits: 0, creditedUsd: 0, unpricedDeposits: 0, withdrawals: 0, paid: {} };
+}
+
+async function paymentActivity(referrals, range) {
+  const createdAt = { $gte: range.start, $lt: range.end };
+  const clientJoin = [
+    { $lookup: { from: User.collection.name, localField: "trading.user", foreignField: "_id",
+      pipeline: [{ $match: referrals }, { $project: { _id: 1 } }], as: "client" } },
+    { $unwind: "$client" },
+  ];
+  // Use the immutable order account when available. Older orders sometimes only carry the MT5 login.
+  function accountJoin(deposit) {
+    const checkOwner = deposit
+      ? { $or: [{ $eq: [{ $ifNull: ["$account", null] }, null] }, { $eq: ["$account", "$trading._id"] }] }
+      : { $or: [{ $eq: [{ $ifNull: ["$userId", null] }, null] }, { $eq: ["$userId", "$trading.user"] }] };
+    return [
+      { $set: { login: { $convert: { input: "$accountNo", to: "long", onError: null, onNull: null } } } },
+      { $lookup: { from: Account.collection.name, localField: "login", foreignField: "accountNo",
+        pipeline: [{ $match: { accountType: "LIVE", userType: { $ne: "ADMIN" } } }, { $project: { user: 1 } }], as: "trading" } },
+      { $unwind: "$trading" }, { $match: { $expr: checkOwner } }, ...clientJoin,
+    ];
+  }
+  const credited = { $gt: [{ $ifNull: ["$creditedAmount", 0] }, 0] };
+  const [deposits, withdrawals] = await Promise.all([
+    Order.aggregate([{ $match: { createdAt, $or: [{ status: "SUCCESS" }, { status: "PARTIALLY_PAID", creditedAmount: { $gt: 0 } }] } },
+      ...accountJoin(true), { $group: { _id: "$client._id", count: { $sum: 1 },
+        cents: { $sum: { $cond: [credited, { $round: [{ $multiply: ["$creditedAmount", 100] }, 0] }, 0] } },
+        missing: { $sum: { $cond: [credited, 0, 1] } } } }]).option({ maxTimeMS: 12000 }),
+    Withdrawal.aggregate([{ $match: { createdAt, status: "Completed" } }, ...accountJoin(false),
+      { $group: { _id: { user: "$client._id", currency: { $cond: [{ $eq: ["$currency", "CRYPTO"] },
+        { $ifNull: ["$cryptoSymbol", "CRYPTO"] }, { $ifNull: ["$currency", "Unknown"] }] } },
+        count: { $sum: 1 }, amount: { $sum: "$amount" } } }]).option({ maxTimeMS: 12000 }),
+  ]);
+  const clients = new Map();
+  const totals = emptyActivity();
+  function activity(id) {
+    const key = String(id);
+    if (!clients.has(key)) clients.set(key, emptyActivity());
+    return clients.get(key);
+  }
+  let totalCents = 0;
+  for (const row of deposits) {
+    const client = activity(row._id);
+    client.deposits = row.count;
+    client.creditedUsd = row.cents / 100;
+    client.unpricedDeposits = row.missing;
+    totals.deposits += row.count;
+    totalCents += row.cents;
+    totals.unpricedDeposits += row.missing;
+  }
+  totals.creditedUsd = totalCents / 100;
+  for (const row of withdrawals) {
+    const currency = /^[A-Z0-9]{2,12}$/.test(row._id.currency) ? row._id.currency : "Unknown";
+    for (const dest of [activity(row._id.user), totals]) {
+      dest.withdrawals += row.count;
+      dest.paid[currency] = (dest.paid[currency] || 0) + row.amount;
+    }
+  }
+  return { clients, totals };
+}
+
 async function listIbClients(principal, query) {
   const scope = staffScope(principal);
   const selected = scope.assignedTo || (query.agent ? asId(query.agent) : null);
@@ -34,6 +99,8 @@ async function listIbClients(principal, query) {
   const links = resolveLinks(agents, brokers).filter(({ agent }) => !selected || String(agent._id) === String(selected));
   const result = { rows: [], total: 0, page, limit, linkedAgents: links.length,
     ...(selected && principal.adminRole === "owner" ? { referralCode: links[0]?.broker.referralCode || "" } : {}) };
+  const range = query.day === undefined ? null : dubaiDay(query.day);
+  if (range) result.activity = { day: range.day, newRegistrations: 0, ...emptyActivity() };
   if (!links.length) return result;
 
   const byId = new Map(links.map(link => [String(link.broker._id), link]));
@@ -42,15 +109,19 @@ async function listIbClients(principal, query) {
   const referrals = { $or: [{ referredByIB: { $in: links.map(link => link.broker._id) } },
     { referredByIB: null, referralCode: { $in: [...byCode.keys()] } }] };
   const filter = { $and: [referrals, searchFilter(query.search, ["fullName", "email", "phone"])] };
-  const [clients, total] = await Promise.all([
+  const [clients, total, payments, newRegistrations] = await Promise.all([
     User.find(filter).select("fullName email phone createdAt isVerified referredByIB referralCode")
       .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     User.countDocuments(filter),
+    range ? paymentActivity(referrals, range) : null,
+    range ? User.countDocuments({ ...referrals, isVerified: true, createdAt: { $gte: range.start, $lt: range.end } }) : 0,
   ]);
+  if (range) result.activity = { day: range.day, newRegistrations, ...payments.totals };
   result.total = total;
   result.rows = clients.map(client => {
     const { agent } = client.referredByIB ? byId.get(String(client.referredByIB)) : byCode.get(client.referralCode);
     return { id: String(client._id), name: client.fullName, email: client.email, phone: client.phone,
+      ...(payments ? { activity: payments.clients.get(String(client._id)) || emptyActivity() } : {}),
       registeredAt: client.createdAt, verified: client.isVerified === true, agentName: agent.fullName || agent.email };
   });
   return result;
