@@ -2,7 +2,9 @@ const User = require("../models/User");
 const Account = require("../models/account.model");
 const { normalizePhone } = require("../utils/registrationIdentity");
 const { isUae } = require("../utils/veriffPolicy");
-const { syncRegisteredLeads, distribute, reconcileAttemptedLeads } = require("./crm.service");
+const { syncRegisteredLeads, reconcileAttemptedLeads } = require("./crm.service");
+
+const { distributeWithRefills } = require("./crmOutcomeRefill.service");
 
 const INTERVAL_MS = 60_000;
 const BATCH_SIZE = 100;
@@ -20,7 +22,7 @@ function registrationLead(user) {
   return { userId: user._id, name: user.fullName, phone, registeredAt, ...(user.email ? { email: user.email } : {}) };
 }
 
-function createIntake({ users = User, accounts = Account, save = syncRegisteredLeads, assign = distribute, reconcile = reconcileAttemptedLeads,
+function createIntake({ users = User, accounts = Account, save = syncRegisteredLeads, assign = distributeWithRefills, reconcile = reconcileAttemptedLeads,
   now = () => new Date(), logger = console } = {}) {
   let reconciled = false;
   let checkedAt;

@@ -3,12 +3,16 @@ const multer = require("multer");
 const auth = require("../middleware/authMiddleware");
 const access = require("../middleware/accessControl");
 const crm = require("../services/crm.service");
+const refills = require("../services/crmOutcomeRefill.service");
+const referrals = require("../services/crmIbClients.service");
 const dialer = require("../services/crmDial.service");
 const indiaVoice = require("../services/crmIndiaVoice.service");
 const hashmi = require("../services/crmHashmi.service");
 const { importHashmiRows } = require("../services/crmHashmiImport.service");
 const { AUDIO_LIMIT, createCrmAssistant } = require("../services/crmAssistant.service");
 
+const callPay = require("../services/crmCallPay.service");
+const batches = require("../services/crmDistribution.service");
 const router = express.Router();
 const assistant = createCrmAssistant();
 const uploadQuestion = multer({ storage: multer.memoryStorage(), limits: { fileSize: AUDIO_LIMIT, files: 1, fields: 0 } }).single("audio");
@@ -55,6 +59,10 @@ router.get("/overview", run(async (req, res) => {
   res.json({ ...report, ...hashmi.connectionState() });
 }));
 router.get("/leads", run(async (req, res) => {
+  if (req.query.view === "ib_clients") {
+    res.set("Cache-Control", "no-store");
+    return res.json(await referrals.listIbClients(req.principal, req.query));
+  }
   const read = req.query.view === "clients" ? crm.listClients : crm.listLeads;
   res.json(await read(req.principal, req.query));
 }));
@@ -68,7 +76,7 @@ router.patch("/leads/:id/name", run(async (req, res) => {
 }));
 
 router.post("/import", access.owner, run(async (req, res) => {
-  const summary = await crm.importLeads(req.body?.rows);
+  const summary = await crm.importLeads(req.body?.rows, req.body?.reserve === true);
   req.auditEvent = "crm:import";
   req.auditDetails = { imported: summary.imported, duplicate: summary.duplicates, rejected: summary.rejected.length };
   res.json(summary);
@@ -99,9 +107,45 @@ router.post("/import/hashmi", access.owner, run(async (req, res) => {
   req.auditDetails = { added: summary.added, updated: summary.updated, leadsAdded: summary.leadsAdded, rejected: summary.rejected.length };
   res.json(summary);
 }));
+router.post("/attendance/session", run(async (req, res) => {
+  if (req.principal.adminRole !== "manager" || !req.principal.permissions?.includes("crm")) throw new crm.CrmError(403, "CRM agent access required.");
+  await require("../services/crmAttendance.service").checkIn(req.principal.id, req.user.version, new Date(req.user.iat * 1000), new Date(req.user.exp * 1000));
+  res.json({ checkedIn: true });
+}));
+router.post("/check-out", run(async (req, res) => {
+  if (req.principal.adminRole !== "manager" || !req.principal.permissions?.includes("crm")) throw new crm.CrmError(403, "CRM agent access required.");
+  await require("../services/crmAttendance.service").checkOut(req.principal.id, req.user);
+  req.auditEvent = "crm:check-out";
+  res.json({ checkedOut: true });
+}));
+router.get("/call-pay/month", access.owner, run(async (req, res) => {
+  res.set("Cache-Control", "no-store").json(await callPay.monthly(req.query.month));
+}));
+router.get("/call-pay", access.owner, run(async (req, res) => {
+  res.set("Cache-Control", "no-store").json(await callPay.daily(req.query.day));
+}));
+router.post("/team/:id/call-pay-rate", access.owner, run(async (req, res) => {
+  const result = await callPay.saveRate(req.params.id, req.body);
+  req.auditEvent = "crm:daily-pay-rate";
+  req.auditDetails = { agent: req.params.id, effectiveFrom: req.body.effectiveFrom };
+  res.json(result);
+}));
+router.get("/distributions/sources", access.owner, run(async (_req, res) => res.json(await batches.sources())));
+router.post("/distributions", access.owner, run(async (req, res) => {
+  const result = await batches.assign(req.principal, req.body);
+  req.auditEvent = "crm:lead-distribution";
+  req.auditDetails = { assigned: result.assigned, requested: req.body.quantity };
+  res.json(result);
+}));
 router.post("/distribute", run(async (req, res) => {
-  const result = await crm.distribute();
+  const result = await refills.distributeWithRefills();
   res.json(req.principal.adminRole === "owner" ? result : { ready: true });
+}));
+router.patch("/team/:id/ib", access.owner, run(async (req, res) => {
+  await referrals.linkIb(req.params.id, req.body?.code);
+  req.auditEvent = "crm:ib-linked";
+  req.auditDetails = { agent: req.params.id };
+  res.json({ saved: true });
 }));
 router.patch("/team/:id/9ance", access.owner, run(async (req, res) => {
   await indiaVoice.setAgent(req.params.id, req.body);
@@ -127,13 +171,12 @@ router.patch("/leads/:id/reminder", run(async (req, res) => {
   res.json(result);
 }));
 router.post("/leads/:id/outcome", run(async (req, res) => {
-  const result = await crm.recordOutcome(req.principal, req.params.id, req.body);
+  const result = await refills.saveOutcome(req.principal, req.params.id, req.body);
   if (req.body.outcome === "do_not_call") {
     req.auditEvent = "crm:do-not-call";
     req.auditDetails = { leadId: req.params.id };
   }
-  const distribution = await crm.distribute();
-  res.json({ ...result, refreshQueue: !distribution.busy });
+  res.json(result);
 }));
 router.post("/browser-dial", run(async (req, res) => {
   const { leadId, phone, requestId, sipUser } = req.body || {};

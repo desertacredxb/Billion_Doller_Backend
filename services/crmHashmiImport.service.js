@@ -110,7 +110,7 @@ async function importHashmiRows(rows, { staff = Staff, leads = Lead, calls = Cal
       return [];
     }
     return [{ updateOne: { filter: { eventKey, agent }, upsert: true, update: {
-      $setOnInsert: { eventKey, kind: "hashmi", agent, occurredAt, providerCallId: callId },
+      $setOnInsert: { eventKey, kind: "hashmi", agent, occurredAt, providerCallId: callId, customerPhone: phone },
       $set: { lead, attempted, connected, talkSeconds, ...(status ? { hashmiExportStatus: status } : {}) },
     } } }];
   });

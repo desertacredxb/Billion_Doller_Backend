@@ -94,7 +94,8 @@ test("9ance records a final customer leg for the matched agent and lead, using a
   assert.equal(insert.mock.callCount(), 1);
   t.mock.method(Lead, "findOne", () => query(null));
   assert.equal(await indiaVoice.recordReport(report, "+05:30"), true);
-  assert.equal(insert.mock.calls[1].arguments[1].$set, undefined);
+  assert.equal(insert.mock.calls[1].arguments[1].$set.lead, undefined);
+  assert.equal(insert.mock.calls[1].arguments[1].$set.customerAnsweredAt.toISOString(), "2026-11-18T04:30:15.000Z");
   for (const value of ["wrong", undefined, ["x"]]) assert.equal(indiaVoice.reportAuthorized(value, "a".repeat(32)), false);
   assert.equal(indiaVoice.reportAuthorized("a".repeat(32), "a".repeat(32)), true);
 });

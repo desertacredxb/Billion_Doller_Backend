@@ -4,6 +4,8 @@ const schema = new mongoose.Schema({
   eventKey: { type: String, required: true, unique: true, maxlength: 160 },
   kind: { type: String, required: true, enum: ["outcome", "hashmi", "indiavoice"] },
   providerCallId: { type: String, maxlength: 120 },
+  customerPhone: { type: String, maxlength: 16, select: false },
+  customerAnsweredAt: Date,
   hashmiExportStatus: String,
   recordingUrl: { type: String, select: false, maxlength: 3000 },
   agent: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount", required: true },
@@ -12,11 +14,16 @@ const schema = new mongoose.Schema({
   outcome: String,
   note: { type: String, maxlength: 1500 },
   followUpAt: Date,
+  refillState: { type: String, enum: ["pending", "assigned"] },
+  refillAgent: { type: mongoose.Schema.Types.ObjectId, ref: "AdminAccount" },
+  refillLead: { type: mongoose.Schema.Types.ObjectId, ref: "CrmLead" },
   attempted: { type: Boolean, default: false },
   connected: { type: Boolean, default: false },
   talkSeconds: { type: Number, min: 0, default: 0 },
 }, { timestamps: true });
 
+schema.index({ occurredAt: 1, _id: 1 }, { partialFilterExpression: { refillState: "pending" } });
+schema.index({ customerAnsweredAt: 1 }, { sparse: true });
 schema.index({ agent: 1, occurredAt: -1 });
 schema.index({ lead: 1, occurredAt: -1 });
 

@@ -59,6 +59,10 @@ function createController({ admins = AdminAccount, send = sendEmail, randomCode 
       const role = roleFor(consumed);
       const token = jwt.sign({ kind: "admin", email: consumed.email, version: consumed.authVersion }, process.env.JWT_SECRET,
         { subject: String(consumed._id), issuer: "bdfx-auth", audience: "bdfx-admin", expiresIn: "2h" });
+      if (role === "manager" && consumed.permissions?.includes("crm")) {
+        const { iat, exp } = jwt.decode(token);
+        await require("../services/crmAttendance.service").checkIn(consumed._id, consumed.authVersion, new Date(iat * 1000), new Date(exp * 1000));
+      }
       res.set("Cache-Control", "no-store");
       req.principal = { id: String(consumed._id), email: consumed.email, isAdmin: true, adminRole: role };
       req.auditEvent = admin.resetPassword ? "admin.password_setup_or_recovery" : "admin.sign_in";

@@ -128,9 +128,9 @@ async function recordReport(payload, offset = process.env.BDFX_INDIAVOICE_REPORT
   await ensureCrmIndexes(Call);
   const filter = { eventKey, agent: agent._id, ...(lead ? { lead: { $in: [null, lead._id] } } : {}) };
   const update = {
-    $setOnInsert: { eventKey, kind: "indiavoice", providerCallId: payload.CallSid, agent: agent._id, attempted: true, occurredAt },
+    $setOnInsert: { eventKey, kind: "indiavoice", providerCallId: payload.CallSid, customerPhone: clientPhone, agent: agent._id, attempted: true, occurredAt },
     $max: { connected: Boolean(pickedUp), talkSeconds: pickedUp ? Math.min(seconds, reported) : 0 },
-    ...(lead ? { $set: { lead: lead._id, ...(media ? { recordingUrl: media } : {}) } } : {}),
+    ...((lead || pickedUp) ? { $set: { ...(lead ? { lead: lead._id } : {}), ...(pickedUp ? { customerAnsweredAt: pickedUp } : {}), ...(media ? { recordingUrl: media } : {}) } } : {}),
   };
   try { await Call.updateOne(filter, update, { upsert: true }); }
   catch (err) {
