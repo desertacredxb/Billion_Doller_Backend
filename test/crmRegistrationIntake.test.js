@@ -7,11 +7,36 @@ const Lead = require("../models/CrmLead");
 const Call = require("../models/CrmCall");
 const Staff = require("../models/AdminAccount");
 const AssignmentLock = require("../models/CrmAssignmentLock");
+const { setLeadEmail, importLeadEmails } = require("../services/crm.service");
 
 const at = new Date("2026-11-12T10:00:00Z");
 const agent = "64a18b33dd4fb15a2b01c001";
 const person = "64a18b33dd4fb15a2b01c002";
 const leadId = "64a18b33dd4fb15a2b01c003";
+
+test("editing a CRM email requires a matching lead assignment and touches only the contact email", async t => {
+  const write = t.mock.method(Lead, "updateOne", async () => ({ matchedCount: 1 }));
+  await assert.rejects(setLeadEmail({ id: agent }, leadId, "not-an-email"), { status: 400 });
+  assert.deepEqual(await setLeadEmail({ id: agent }, leadId, " Agent@Example.test "), { email: "agent@example.test" });
+  const [filter, update] = write.mock.calls[0].arguments;
+  assert.equal(String(filter.assignedTo), agent);
+  assert.deepEqual(update, { $set: { email: "agent@example.test" } });
+  write.mock.mockImplementation(async () => ({ matchedCount: 0 }));
+  await assert.rejects(setLeadEmail({ id: person }, leadId, "agent@example.test"), { status: 404 });
+});
+
+test("email-only imports skip conflicting rows and update only existing blank contacts", async t => {
+  const bulk = t.mock.method(Lead, "bulkWrite", async () => ({ modifiedCount: 1 }));
+  const result = await importLeadEmails([
+    { phone: "+12025550101", email: "alex@example.test" }, { phone: "+12025550101", email: "other@example.test" },
+    { phone: "+12025550102", email: " Contact@Example.test " }, { phone: "+12025550103", email: "" },
+  ]);
+  assert.equal(result.emailsAdded, 1);
+  assert.equal(result.rejected.length, 1);
+  assert.deepEqual(bulk.mock.calls[0].arguments[0], [{ updateOne: {
+    filter: { phone: "+12025550102", email: { $in: [null, ""] } }, update: { $set: { email: "contact@example.test" } },
+  } }]);
+});
 
 test("intake reads completed registrations, catches newly opened accounts and assigns after saving", async () => {
   const queries = [];
@@ -72,6 +97,26 @@ test("separate lists apply the caller's own assignment scope", async t => {
     { accountOpened: true }, { source: /^(COMEXFOREX|purchased data)$/i }, { registeredAt: { $type: "date" } },
     { status: "closed", lastOutcome: "number_not_in_use" },
   ]);
+});
+
+test("team Work queue excludes unassigned stock and the bank view keeps caller scope", async t => {
+  const query = { sort: () => query, skip: () => query, limit: () => query, lean: async () => [] };
+  const filters = [];
+  t.mock.method(Lead, "find", filter => { filters.push(filter); return query; });
+  t.mock.method(Lead, "countDocuments", async filter => { assert.deepEqual(filter, filters.at(-1)); return 0; });
+  const owner = { adminRole: "owner" };
+  await listLeads(owner, { view: "queue", agent });
+  await listLeads(owner, { view: "unassigned" });
+  await listLeads({ id: person, adminRole: "manager", permissions: ["crm"] }, { view: "unassigned", agent });
+  const [queue, bank, personal] = filters.map(filter => filter.$and);
+  assert.equal(String(queue[0].assignedTo), agent);
+  assert.deepEqual(queue.at(-1).assignedTo, { $ne: null });
+  assert.equal(queue.at(-1).lastOutcome.$ne, "do_not_call");
+  assert.deepEqual(queue.at(-1).$or[0], { status: "new", accountOpened: { $ne: true } });
+  assert.ok(queue.at(-1).$or[1].followUpAt.$lte instanceof Date);
+  assert.deepEqual(bank.at(-1), { assignedTo: null, assignmentPending: false, status: "new", accountOpened: { $ne: true }, lastOutcome: { $ne: "do_not_call" } });
+  assert.equal(String(personal[0].assignedTo), person);
+  assert.deepEqual(personal.at(-1), bank.at(-1));
 });
 
 test("number not in use closes the lead and preserves the caller's note", async t => {

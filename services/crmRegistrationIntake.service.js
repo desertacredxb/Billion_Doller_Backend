@@ -17,7 +17,7 @@ function registrationLead(user) {
   const phone = normalizePhone(nationalMobile ? "+91" + compact.slice(-10) : user.phone);
   const registeredAt = user.phoneVerifiedAt || user.emailVerifiedAt || user.createdAt;
   if (!phone || phone.startsWith("+971") || !(registeredAt instanceof Date) || !Number.isFinite(+registeredAt)) return null;
-  return { userId: user._id, name: user.fullName, phone, registeredAt };
+  return { userId: user._id, name: user.fullName, phone, registeredAt, ...(user.email ? { email: user.email } : {}) };
 }
 
 function createIntake({ users = User, accounts = Account, save = syncRegisteredLeads, assign = distribute, reconcile = reconcileAttemptedLeads,
@@ -38,7 +38,7 @@ function createIntake({ users = User, accounts = Account, save = syncRegisteredL
         const opened = await accounts.distinct("user", { ...liveClientAccount, createdAt: { $gte: since } });
         filter.$or = [{ updatedAt: { $gte: since } }, { _id: { $in: opened } }];
       }
-      const cursor = users.find(filter).select("_id fullName phone phoneVerifiedAt emailVerifiedAt createdAt nationality country residenceCountry")
+      const cursor = users.find(filter).select("_id fullName phone email phoneVerifiedAt emailVerifiedAt createdAt nationality country residenceCountry")
         .lean().cursor({ batchSize: BATCH_SIZE });
       let batch = [];
       let imported = 0;

@@ -82,8 +82,8 @@ test("9ance records a final customer leg for the matched agent and lead, using a
   const insert = t.mock.method(Call, "updateOne", async (filter, update) => {
     assert.equal(filter.eventKey, "indiavoice:fixture-1");
     assert.equal(update.$setOnInsert.kind, "indiavoice");
-    assert.equal(update.$setOnInsert.talkSeconds, 41);
-    assert.equal(update.$setOnInsert.connected, true);
+    assert.equal(update.$max.talkSeconds, 41);
+    assert.equal(update.$max.connected, true);
     assert.equal(update.$setOnInsert.occurredAt.toISOString(), "2026-11-18T04:30:00.000Z");
   });
   t.mock.method(Lead, "updateOne", async () => {});
@@ -92,6 +92,9 @@ test("9ance records a final customer leg for the matched agent and lead, using a
   assert.equal(await indiaVoice.recordReport({ ...report, LegB_Start_time: "", LegB_Picked_time: "" }, "+05:30"), false);
   assert.equal(await indiaVoice.recordReport(report, "+05:30"), true);
   assert.equal(insert.mock.callCount(), 1);
+  t.mock.method(Lead, "findOne", () => query(null));
+  assert.equal(await indiaVoice.recordReport(report, "+05:30"), true);
+  assert.equal(insert.mock.calls[1].arguments[1].$set, undefined);
   for (const value of ["wrong", undefined, ["x"]]) assert.equal(indiaVoice.reportAuthorized(value, "a".repeat(32)), false);
   assert.equal(indiaVoice.reportAuthorized("a".repeat(32), "a".repeat(32)), true);
 });
