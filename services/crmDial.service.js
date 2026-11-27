@@ -4,12 +4,19 @@ const hashmi = require("./crmHashmi.service");
 const indiaVoice = require("./crmIndiaVoice.service");
 const { CrmError, asId, assertRequestId, staffFilter, hashmiAgentPattern: agentPattern, contactable } = require("./crm.service");
 
-async function dial(principal, leadId, key, request) {
+async function dial(principal, leadId, key, request, browserUser) {
   assertRequestId(key);
   const id = asId(leadId);
   const assignedTo = asId(principal.id);
-  const agent = await Staff.findOne({ ...staffFilter, _id: assignedTo }).select("crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber").lean();
+  const agent = await Staff.findOne({ ...staffFilter, _id: assignedTo }).select("crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber crmIndiaVoiceSipUser").lean();
   const provider = agent?.crmIndiaVoiceDeskphone && !agent.crmHashmiAgentId ? "9ance" : "hashmi";
+  const browserCall = browserUser !== undefined;
+  if (browserCall && (provider !== "9ance" || !agent.crmIndiaVoiceSipUser || agent.crmIndiaVoiceSipUser !== browserUser)) {
+    throw new CrmError(409, "Refresh the CRM and connect your assigned 9ance headset.");
+  }
+  if (!browserCall && provider === "9ance" && agent.crmIndiaVoiceSipUser) {
+    throw new CrmError(409, "Use the headset in the CRM to call from this account.");
+  }
   const config = hashmi.settings();
   const mode = provider === "9ance" ? "live" : config.mode;
   if (provider === "9ance") {
@@ -31,9 +38,12 @@ async function dial(principal, leadId, key, request) {
     if (!current) throw new CrmError(404, "Assigned lead not found.");
     if (current.lastOutcome === "do_not_call") throw new CrmError(409, "This lead is marked Do not call back.");
     if (current.status === "closed") throw new CrmError(409, "This lead is closed.");
+    if (browserCall && current.dialRequest?.key === key) throw new CrmError(409, "This call was already requested.");
     if (current.dialRequest?.key === key) return { state: current.dialRequest.state, mode, provider: current.dialRequest.provider || "hashmi" };
     throw new CrmError(409, "A call request is already in progress for this lead.");
   }
+  // Only the browser sends the SIP INVITE. A retry must never create a second call.
+  if (browserCall) return { phone: lead.phone };
   let state = "unconfirmed";
   let callId;
   try {
