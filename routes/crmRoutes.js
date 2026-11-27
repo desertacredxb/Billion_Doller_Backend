@@ -12,6 +12,7 @@ const { importHashmiRows } = require("../services/crmHashmiImport.service");
 const { AUDIO_LIMIT, createCrmAssistant } = require("../services/crmAssistant.service");
 
 const callPay = require("../services/crmCallPay.service");
+const ibWallet = require("../services/crmIbWallet.service");
 const batches = require("../services/crmDistribution.service");
 const router = express.Router();
 const assistant = createCrmAssistant();
@@ -145,6 +146,26 @@ router.patch("/team/:id/ib", access.owner, run(async (req, res) => {
   await referrals.linkIb(req.params.id, req.body?.code);
   req.auditEvent = "crm:ib-linked";
   req.auditDetails = { agent: req.params.id };
+  res.json({ saved: true });
+}));
+router.get("/my-ib", run(async (req, res) => {
+  if (req.principal.adminRole !== "manager" || !req.principal.permissions?.includes("crm")) throw new crm.CrmError(403, "Use your CRM agent account.");
+  res.json(await ibWallet.overview(req.principal.id));
+}));
+router.post("/my-ib/transfers", run(async (req, res) => {
+  const receipt = await ibWallet.transfer(req.principal, req.body);
+  req.auditEvent = "crm:own-ib-transfer";
+  req.auditDetails = { reference: receipt.reference, state: receipt.state };
+  res.status(receipt.state === "completed" ? 200 : 202).json(receipt);
+}));
+router.get("/team/:id/ib-wallet", access.owner, run(async (req, res) => {
+  const info = await ibWallet.overview(req.params.id);
+  res.json({ belongsToAgent: info.belongsToAgent, enabled: !!info.enabled });
+}));
+router.patch("/team/:id/ib-wallet", access.owner, run(async (req, res) => {
+  await ibWallet.configure(req.params.id, req.body?.enabled);
+  req.auditEvent = "crm:ib-wallet-permission";
+  req.auditDetails = { agent: req.params.id, enabled: req.body.enabled };
   res.json({ saved: true });
 }));
 router.patch("/team/:id/9ance", access.owner, run(async (req, res) => {

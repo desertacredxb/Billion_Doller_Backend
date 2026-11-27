@@ -8,6 +8,8 @@ const schema = new mongoose.Schema({
   enabled: { type: Boolean, default: true },
   permissions: [{ type: String, enum: PERMISSIONS }],
   crmIbId: { type: mongoose.Schema.Types.ObjectId, ref: "IB", unique: true, sparse: true },
+  crmIbWallet: { type: mongoose.Schema.Types.ObjectId, ref: "IB" },
+  crmIndiaVoiceExtension: { type: String, maxlength: 17 },
   crmHashmiAgentId: { type: String, trim: true, unique: true, sparse: true },
   crmIndiaVoiceSipUser: { type: String, unique: true, sparse: true, maxlength: 80 },
   crmIndiaVoiceDeskphone: { type: String, unique: true, sparse: true },
