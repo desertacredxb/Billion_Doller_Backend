@@ -19,17 +19,25 @@ async function setAgent(id, input, staff = Staff) {
   const deskphone = input.deskphone.trim();
   const number = input.agentNumber.trim();
   const clear = !deskphone && !number;
+  const sipUser = input.sipUser;
+  if (sipUser !== undefined && (typeof sipUser !== "string" || (sipUser && (clear || !/^[a-zA-Z0-9*_.-]{1,80}$/.test(sipUser))))) {
+    throw new CrmError(400, "Enter the agent's SIP username exactly as issued by 9ance.");
+  }
   const phone = normalizePhone(number);
   if (!clear && (!deskphonePattern.test(deskphone) || !number.startsWith("+") || !phone)) {
     throw new CrmError(400, "Use the assigned deskphone and an agent number with country code.");
   }
   if (!clear) {
-    await Promise.all(["crmIndiaVoiceDeskphone", "crmIndiaVoiceAgentNumber"].map(field =>
+    await Promise.all(["crmIndiaVoiceDeskphone", "crmIndiaVoiceAgentNumber", ...(sipUser ? ["crmIndiaVoiceSipUser"] : [])].map(field =>
       staff.collection.createIndex({ [field]: 1 }, { unique: true, sparse: true })));
     filter.crmHashmiAgentId = null;
   }
-  const update = clear ? { $unset: { crmIndiaVoiceDeskphone: "", crmIndiaVoiceAgentNumber: "" } }
+  const update = clear ? { $unset: { crmIndiaVoiceDeskphone: "", crmIndiaVoiceAgentNumber: "", crmIndiaVoiceSipUser: "" } }
     : { $set: { crmIndiaVoiceDeskphone: deskphone, crmIndiaVoiceAgentNumber: phone } };
+  if (!clear && sipUser !== undefined) {
+    if (sipUser) update.$set.crmIndiaVoiceSipUser = sipUser;
+    else update.$unset = { crmIndiaVoiceSipUser: "" };
+  }
   try {
     const result = await staff.updateOne(filter, update, { runValidators: true });
     if (!result.matchedCount) {
@@ -39,7 +47,7 @@ async function setAgent(id, input, staff = Staff) {
       throw new CrmError(404, "Active CRM agent not found.");
     }
   } catch (error) {
-    if (error.code === 11000) throw new CrmError(409, "That deskphone or calling number belongs to another CRM agent.");
+    if (error.code === 11000) throw new CrmError(409, "That SIP username, deskphone or calling number belongs to another CRM agent.");
     throw error;
   }
 }
