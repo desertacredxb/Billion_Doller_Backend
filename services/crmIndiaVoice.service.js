@@ -19,6 +19,10 @@ async function setAgent(id, input, staff = Staff) {
   const deskphone = input.deskphone.trim();
   const number = input.agentNumber.trim();
   const clear = !deskphone && !number;
+  const extension = input.extension;
+  if (extension !== undefined && (typeof extension !== "string" || (extension && (clear || !deskphonePattern.test(extension))))) {
+    throw new CrmError(400, "Enter the provider-issued extension.");
+  }
   const sipUser = input.sipUser;
   if (sipUser !== undefined && (typeof sipUser !== "string" || (sipUser && (clear || !/^[a-zA-Z0-9*_.-]{1,80}$/.test(sipUser))))) {
     throw new CrmError(400, "Enter the agent's SIP username exactly as issued by 9ance.");
@@ -32,11 +36,15 @@ async function setAgent(id, input, staff = Staff) {
       staff.collection.createIndex({ [field]: 1 }, { unique: true, sparse: true })));
     filter.crmHashmiAgentId = null;
   }
-  const update = clear ? { $unset: { crmIndiaVoiceDeskphone: "", crmIndiaVoiceAgentNumber: "", crmIndiaVoiceSipUser: "" } }
+  const update = clear ? { $unset: { crmIndiaVoiceDeskphone: "", crmIndiaVoiceAgentNumber: "", crmIndiaVoiceSipUser: "", crmIndiaVoiceExtension: "" } }
     : { $set: { crmIndiaVoiceDeskphone: deskphone, crmIndiaVoiceAgentNumber: phone } };
   if (!clear && sipUser !== undefined) {
     if (sipUser) update.$set.crmIndiaVoiceSipUser = sipUser;
     else update.$unset = { crmIndiaVoiceSipUser: "" };
+  }
+  if (!clear && extension !== undefined) {
+    if (extension) update.$set.crmIndiaVoiceExtension = extension;
+    else update.$unset = { ...update.$unset, crmIndiaVoiceExtension: "" };
   }
   try {
     const result = await staff.updateOne(filter, update, { runValidators: true });

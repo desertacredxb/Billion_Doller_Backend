@@ -78,7 +78,7 @@ function activeStaff(mappedOnly = false) {
   const eligible = [{ crmHashmiAgentId: hashmiAgentPattern }];
   if (indiaVoiceConfigured()) eligible.push({ crmIndiaVoiceDeskphone: { $type: "string" }, crmIndiaVoiceAgentNumber: { $type: "string" } });
   const filter = mappedOnly ? { ...staffFilter, ...(eligible.length === 1 ? eligible[0] : { $or: eligible }) } : staffFilter;
-  return Staff.find(filter).select("_id fullName email crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber crmIndiaVoiceSipUser").sort({ fullName: 1, _id: 1 }).lean();
+  return Staff.find(filter).select("_id fullName email crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber crmIndiaVoiceSipUser crmIndiaVoiceExtension").sort({ fullName: 1, _id: 1 }).lean();
 }
 
 function staffKeys(staff) {
@@ -452,7 +452,7 @@ async function overview(principal, day) {
   const owner = principal.adminRole === "owner";
   const team = canViewTeam(principal) || (principal.permissions?.includes("crm_team") && !principal.permissions.includes("crm"));
   const staff = team ? await activeStaff() : await Staff.find(staffFilter).where("_id").equals(principal.id)
-    .select("_id fullName crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber crmIndiaVoiceSipUser").lean();
+    .select("_id fullName crmHashmiAgentId crmIndiaVoiceDeskphone crmIndiaVoiceAgentNumber crmIndiaVoiceSipUser crmIndiaVoiceExtension").lean();
   const ids = staff.map(agent => agent._id);
   const [stats, bank, pending, followUps, pickups, shifts] = await Promise.all([
     progress(staff.map(agent => agent._id), date),
@@ -475,7 +475,7 @@ async function overview(principal, day) {
       hashmiId: owner || !team ? agent.crmHashmiAgentId || "" : "",
       dialer: agent.crmIndiaVoiceDeskphone && !agent.crmHashmiAgentId ? "9ance" : "hashmi",
       ...(agent.crmIndiaVoiceSipUser && (owner || !team) ? { indiaVoiceSipUser: agent.crmIndiaVoiceSipUser } : {}),
-      ...(owner ? { indiaVoiceDeskphone: agent.crmIndiaVoiceDeskphone || "", indiaVoiceAgentNumber: agent.crmIndiaVoiceAgentNumber || "" } : {}),
+      ...(owner ? { indiaVoiceDeskphone: agent.crmIndiaVoiceDeskphone || "", indiaVoiceExtension: agent.crmIndiaVoiceExtension || "", indiaVoiceAgentNumber: agent.crmIndiaVoiceAgentNumber || "" } : {}),
       dialerMapped: hashmiAgentPattern.test(agent.crmHashmiAgentId || "") || Boolean(indiaVoiceConfigured() && agent.crmIndiaVoiceDeskphone && agent.crmIndiaVoiceAgentNumber),
       uniqueConnected: unique.get(String(agent._id)) || 0, attendance: shifts.get(String(agent._id)) || null,
       overdue: due.get(String(agent._id))?.overdue || 0,

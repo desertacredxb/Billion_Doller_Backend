@@ -8,7 +8,7 @@ function runExclusive(fn) {
   return result;
 }
 
-async function updateMT5Balance({ login, type = 2, balance, comment }) {
+async function updateMT5Balance({ login, type = 2, balance, comment, onSubmitting }) {
   return runExclusive(async () => {
     const mt5 = new MT5Request(process.env.MT5_SERVER, 1950);
 
@@ -25,6 +25,7 @@ async function updateMT5Balance({ login, type = 2, balance, comment }) {
 
     // 2. Execute Balance Update
     return new Promise((resolve, reject) => {
+      onSubmitting?.();
       mt5.TradeBalance({ login, type, balance, comment }, (error, answer) => {
         if (error) return reject(error);
         resolve(answer);

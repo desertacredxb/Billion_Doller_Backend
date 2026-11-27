@@ -36,6 +36,7 @@ test("agent IB list ignores a foreign agent filter, supports legacy referrals an
   assert.equal(data.rows[0].agentName, "A");
   assert.equal(data.rows[0].verified, false);
   assert.equal(data.referralCode, undefined);
+  assert.equal(data.myReferralCode, "OLD_A");
 });
 
 test("fresh, due and exact saved outcome lists retain the agent scope", async t => {

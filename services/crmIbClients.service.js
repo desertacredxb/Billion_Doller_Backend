@@ -99,6 +99,9 @@ async function listIbClients(principal, query) {
   const links = resolveLinks(agents, brokers).filter(({ agent }) => !selected || String(agent._id) === String(selected));
   const result = { rows: [], total: 0, page, limit, linkedAgents: links.length,
     ...(selected && principal.adminRole === "owner" ? { referralCode: links[0]?.broker.referralCode || "" } : {}) };
+  if (scope.assignedTo && principal.adminRole === "manager" && principal.permissions?.includes("crm") && links.length === 1) {
+    result.myReferralCode = links[0].broker.referralCode || "";
+  }
   const range = query.day === undefined ? null : dubaiDay(query.day);
   if (range) result.activity = { day: range.day, newRegistrations: 0, ...emptyActivity() };
   if (!links.length) return result;
