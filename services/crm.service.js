@@ -12,7 +12,8 @@ const identity = require("../utils/registrationIdentity");
 const TARGET = 300;
 const DAY_MS = 86_400_000;
 const DUBAI_OFFSET = 4 * 3_600_000;
-const OUTCOMES = ["no_answer", "busy", "wrong_number", "number_not_in_use", "connected", "not_interested", "qualified", "do_not_call"];
+const REMINDER_OUTCOMES = new Set(["call_back", "follow_up"]);
+const OUTCOMES = ["ringing_but_no_response", "switched_off", "not_reachable", "number_forwarded_to_voicemail", ...REMINDER_OUTCOMES, "no_answer", "busy", "wrong_number", "number_not_in_use", "connected", "not_interested", "qualified", "do_not_call"];
 const CLOSED = new Set(["wrong_number", "number_not_in_use", "not_interested", "do_not_call"]);
 const PURCHASED_SOURCE = /^(COMEXFOREX|purchased data)$/i;
 const staffFilter = { enabled: true, role: "manager", invitedBy: { $ne: null }, permissions: "crm" };
@@ -280,6 +281,7 @@ function parseTime(value) {
 function leadOutcomeUpdate(event) {
   const status = CLOSED.has(event.outcome) ? "closed" : event.followUpAt ? "follow_up" : event.outcome === "qualified" ? "qualified" : "worked";
   const keepsOptOut = event.outcome === "do_not_call" ? {} : {
+    ...(!CLOSED.has(event.outcome) ? { $and: [{ $or: [{ reminderSetAt: null }, { reminderSetAt: { $lte: event.occurredAt } }] }] } : {}),
     lastOutcome: { $nin: event.outcome === "number_not_in_use" ? ["do_not_call"] : ["do_not_call", "number_not_in_use"] },
     $or: [{ lastOutcomeAt: null }, { lastOutcomeAt: { $lte: event.occurredAt } }],
   };
@@ -307,7 +309,9 @@ async function importOutcomes(rows) {
     const lead = leads.get(clean(row?.leadId, 100));
     const agent = names.get(clean(row?.caller, 254).toLowerCase())?._id;
     const occurredAt = parseTime(row?.occurredAt);
-    const outcome = row?.outcome;
+    const rawOutcome = clean(row?.outcome, 60).toLowerCase().replace(/[\s-]+/g, "_");
+    const aliases = { switch_off: "switched_off", number_forwarded_to_voice_mail: "number_forwarded_to_voicemail" };
+    const outcome = Object.hasOwn(aliases, rawOutcome) ? aliases[rawOutcome] : rawOutcome;
     const followUpAt = row?.followUpAt && !CLOSED.has(outcome) ? parseTime(row.followUpAt) : null;
     if (!lead || !agent || !occurredAt || !OUTCOMES.includes(outcome) || (row.followUpAt && !CLOSED.has(outcome) && !followUpAt)) {
       rejected.push({ row: line, reason: "Match the Lead ID and CRM caller and check the call time, outcome and callback date." });
@@ -508,7 +512,7 @@ function searchFilter(value) {
   const keyword = clean(value, 80);
   if (!keyword) return {};
   const escaped = keyword.replace(/[.*+?^\u0024{}()|[\]\\]/g, "\\$&");
-  return { $or: ["contactName", "name", "registrationName", "phone", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
+  return { $or: ["contactName", "name", "registrationName", "phone", "email", "leadId"].map(key => ({ [key]: { $regex: escaped, $options: "i" } })) };
 }
 
 function leadFilter(principal, query) {
@@ -517,10 +521,42 @@ function leadFilter(principal, query) {
   return { $and: [scope, searchFilter(query.search)] };
 }
 
+const pipelineStages = ["new", "follow_up", "worked", "qualified", "account_opened", "closed"];
+const pipelineStage = { $switch: {
+  branches: [
+    { case: { $in: ["$lastOutcome", ["do_not_call", "number_not_in_use"]] }, then: "closed" },
+    { case: { $eq: ["$status", "closed"] }, then: "closed" },
+    { case: { $eq: ["$status", "follow_up"] }, then: "follow_up" },
+    { case: { $eq: ["$accountOpened", true] }, then: "account_opened" },
+    { case: { $or: [{ $eq: ["$status", "qualified"] }, { $eq: ["$lastOutcome", "qualified"] }] }, then: "qualified" },
+    { case: { $eq: ["$status", "worked"] }, then: "worked" },
+  ],
+  default: "new",
+} };
+const boardSort = { followUpAt: 1, registeredAt: -1, createdAt: 1, _id: 1 };
+
+async function leadBoard(filter) {
+  const facets = { counts: [{ $group: { _id: "$stage", total: { $sum: 1 } } }] };
+  for (const stage of pipelineStages) {
+    facets[stage] = [{ $match: { stage } }, { $sort: boardSort }, { $limit: 4 }];
+  }
+  const [result] = await Lead.aggregate([{ $match: filter }, { $set: { stage: pipelineStage } }, { $facet: facets }]);
+  const counts = new Map(result.counts.map(row => [row._id, row.total]));
+  return { lanes: pipelineStages.map(stage => ({ stage, total: counts.get(stage) || 0, rows: result[stage].map(formatLead) })) };
+}
+
 async function listLeads(principal, query) {
   const page = pageNumber(query.page);
   const limit = 50;
   const filter = leadFilter(principal, query);
+  if (query.view === "board" || query.view === "board_list") {
+    filter.$and.push({ assignedTo: { $ne: null } });
+    if (query.view === "board") return leadBoard(filter);
+    if (query.stage) {
+      if (!pipelineStages.includes(query.stage)) throw new CrmError(400, "Choose a lead stage.");
+      filter.$and.push({ $expr: { $eq: [pipelineStage, query.stage] } });
+    }
+  }
   const list = {
     queue: { assignedTo: { $ne: null }, ...readyFilter(new Date()) },
     unassigned: bankFilter,
@@ -610,6 +646,39 @@ async function setLeadEmail(principal, leadId, value) {
   return { email };
 }
 
+async function transferLead(principal, leadId, body, now = new Date()) {
+  if (principal.adminRole !== "owner") throw new CrmError(403, "Owner access required.");
+  const id = asId(leadId);
+  const agent = asId(body?.agent);
+  const previous = body?.previous == null ? null : asId(body.previous);
+  if (String(previous) === String(agent)) throw new CrmError(400, "Choose a different agent.");
+  const eligible = await activeStaff(true);
+  if (!eligible.some(staff => String(staff._id) === String(agent))) throw new CrmError(400, "Choose an active agent with a mapped dialer.");
+  const available = { _id: id, status: { $ne: "closed" }, lastOutcome: { $nin: ["do_not_call", "number_not_in_use"] } };
+  const updated = await Lead.updateOne({ ...available, assignedTo: previous,
+    $or: [{ "dialRequest.state": { $ne: "pending" } }, { "dialRequest.startedAt": { $lt: new Date(+now - 45000) } }] },
+    { $set: { assignedTo: agent, assignedAt: now, assignmentPending: false }, $unset: { dialRequest: "" } });
+  if (!updated.matchedCount && !await Lead.exists({ ...available, assignedTo: agent })) {
+    throw new CrmError(409, "The assignment changed or the lead is busy. Reopen it before transferring.");
+  }
+  return { assignedTo: String(agent), assignmentPending: false };
+}
+
+async function setReminder(principal, leadId, body, now = new Date()) {
+  const followUpAt = parseTime(body?.followUpAt);
+  if (!followUpAt || followUpAt <= now) throw new CrmError(400, "Choose a future reminder time.");
+  const previous = body?.previous == null ? null : parseTime(body.previous);
+  if (body?.previous != null && !previous) throw new CrmError(400, "Invalid previous reminder.");
+  const scope = { _id: asId(leadId), assignedTo: asId(principal.id), status: { $ne: "closed" },
+    lastOutcome: { $nin: ["do_not_call", "number_not_in_use"] } };
+  const result = await Lead.updateOne({ ...scope, followUpAt: previous },
+    { $set: { status: "follow_up", followUpAt, reminderSetAt: now } });
+  if (!result.matchedCount && !await Lead.exists({ ...scope, status: "follow_up", followUpAt })) {
+    throw new CrmError(409, "The lead or reminder has changed. Reopen the lead to see its current details.");
+  }
+  return { status: "follow_up", followUpAt };
+}
+
 async function recordOutcome(principal, leadId, body) {
   const agent = asId(principal.id);
   const id = asId(leadId);
@@ -618,6 +687,7 @@ async function recordOutcome(principal, leadId, body) {
   assertRequestId(body.requestId);
   const rawCallback = clean(body.followUpAt, 40);
   const followUpAt = rawCallback ? parseTime(rawCallback) : null;
+  if (REMINDER_OUTCOMES.has(outcome) && !followUpAt) throw new CrmError(400, "Choose a callback date and time.");
   if (rawCallback && (!followUpAt || CLOSED.has(outcome))) {
     throw new CrmError(400, "Choose a callback date for an open lead.");
   }
@@ -632,6 +702,10 @@ async function recordOutcome(principal, leadId, body) {
   }
   const key = "outcome:" + body.requestId;
   const fields = { kind: "outcome", agent, lead: id, occurredAt: new Date(), outcome, note: clean(body.note, 1500), followUpAt };
+  if (REMINDER_OUTCOMES.has(outcome) && followUpAt <= fields.occurredAt &&
+      !await Call.exists({ eventKey: key, lead: id, agent, followUpAt, outcome })) {
+    throw new CrmError(400, "Choose a future callback time in Dubai.");
+  }
   await ensureCrmIndexes(Call);
   let event;
   try {
@@ -656,4 +730,4 @@ async function history(principal, id) {
 }
 
 module.exports = { TARGET, CrmError, staffFilter, hashmiAgentPattern, contactable, asId, assertRequestId, dubaiDay, staffScope, ensureCrmIndexes, importLeads, importOutcomes, syncRegisteredLeads,
-  reconcileAttemptedLeads, distribute, overview, followUpReport, listLeads, listClients, renameLead, setLeadEmail, importLeadEmails, assignedLeadByPhone, recordOutcome, history, planAssignments };
+  reconcileAttemptedLeads, distribute, overview, followUpReport, listLeads, listClients, renameLead, setLeadEmail, transferLead, setReminder, importLeadEmails, assignedLeadByPhone, recordOutcome, history, planAssignments };
