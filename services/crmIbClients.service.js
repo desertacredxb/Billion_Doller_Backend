@@ -4,6 +4,7 @@ const Order = require("../models/Order");
 const Withdrawal = require("../models/withdrawal");
 const Account = require("../models/account.model");
 const Staff = require("../models/AdminAccount");
+const ibWallet = require("./crmIbWallet.service");
 const { CrmError, asId, staffFilter, staffScope, dubaiDay, pageNumber, searchFilter } = require("./crm.service");
 
 const key = value => String(value || "").trim().toLowerCase();
@@ -101,6 +102,10 @@ async function listIbClients(principal, query) {
     ...(selected && principal.adminRole === "owner" ? { referralCode: links[0]?.broker.referralCode || "" } : {}) };
   if (scope.assignedTo && principal.adminRole === "manager" && principal.permissions?.includes("crm") && links.length === 1) {
     result.myReferralCode = links[0].broker.referralCode || "";
+    if (links[0].agent.crmIbId) {
+      const own = await ibWallet.identity(principal.id);
+      result.ownDashboard = !!own && String(own.broker._id) === String(links[0].broker._id);
+    }
   }
   const range = query.day === undefined ? null : dubaiDay(query.day);
   if (range) result.activity = { day: range.day, newRegistrations: 0, ...emptyActivity() };
@@ -112,9 +117,11 @@ async function listIbClients(principal, query) {
   const referrals = { $or: [{ referredByIB: { $in: links.map(link => link.broker._id) } },
     { referredByIB: null, referralCode: { $in: [...byCode.keys()] } }] };
   const filter = { $and: [referrals, searchFilter(query.search, ["fullName", "email", "phone"])] };
+  const clientPage = User.find(filter).select("fullName email phone createdAt isVerified referredByIB referralCode")
+    .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit);
+  if (result.ownDashboard) clientPage.select("isKycVerified").populate({ path: "accounts", select: "accountNo user" });
   const [clients, total, payments, newRegistrations] = await Promise.all([
-    User.find(filter).select("fullName email phone createdAt isVerified referredByIB referralCode")
-      .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    clientPage.lean(),
     User.countDocuments(filter),
     range ? paymentActivity(referrals, range) : null,
     range ? User.countDocuments({ ...referrals, isVerified: true, createdAt: { $gte: range.start, $lt: range.end } }) : 0,
@@ -124,6 +131,8 @@ async function listIbClients(principal, query) {
   result.rows = clients.map(client => {
     const { agent } = client.referredByIB ? byId.get(String(client.referredByIB)) : byCode.get(client.referralCode);
     return { id: String(client._id), name: client.fullName, email: client.email, phone: client.phone,
+      ...(result.ownDashboard ? { isKycVerified: client.isKycVerified === true,
+        tradingAccounts: (client.accounts || []).map(account => account.accountNo) } : {}),
       ...(payments ? { activity: payments.clients.get(String(client._id)) || emptyActivity() } : {}),
       registeredAt: client.createdAt, verified: client.isVerified === true, agentName: agent.fullName || agent.email };
   });
