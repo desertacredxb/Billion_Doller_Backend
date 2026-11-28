@@ -115,4 +115,4 @@ async function transfer(principal, input) {
   return summary(completed);
 }
 
-module.exports = { overview, configure, transfer };
+module.exports = { identity, overview, configure, transfer };

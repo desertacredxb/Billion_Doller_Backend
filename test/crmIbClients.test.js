@@ -4,6 +4,7 @@ const Staff = require("../models/AdminAccount");
 const IB = require("../models/Broker.model");
 const User = require("../models/User");
 const Lead = require("../models/CrmLead");
+const ibWallet = require("../services/crmIbWallet.service");
 const { listIbClients, resolveLinks } = require("../services/crmIbClients.service");
 const { listLeads } = require("../services/crm.service");
 
@@ -37,6 +38,44 @@ test("agent IB list ignores a foreign agent filter, supports legacy referrals an
   assert.equal(data.rows[0].verified, false);
   assert.equal(data.referralCode, undefined);
   assert.equal(data.myReferralCode, "OLD_A");
+  assert.equal(data.rows[0].tradingAccounts, undefined);
+});
+
+test("only the agent's own confirmed IB link exposes the portal KYC status and MT5 numbers", async t => {
+  const agent = { ...agents[0], crmIbId: brokers[0]._id };
+  t.mock.method(Staff, "find", () => query([agent, agents[1]]));
+  t.mock.method(IB, "find", () => query(brokers));
+  t.mock.method(User, "countDocuments", async () => 1);
+  let populated = 0;
+  t.mock.method(User, "find", filter => {
+    assert.deepEqual(filter.$and[0].$or[0].referredByIB.$in, [agent.crmIbId]);
+    const result = query([{ _id: "client", referredByIB: agent.crmIbId, isVerified: true, isKycVerified: false,
+      accounts: [{ accountNo: 12345, privateField: "omit" }, { accountNo: 12346 }] }]);
+    result.populate = fields => {
+      assert.deepEqual(fields, { path: "accounts", select: "accountNo user" });
+      populated++;
+      return result;
+    };
+    return result;
+  });
+  let confirmed = { broker: brokers[0] };
+  const identity = t.mock.method(ibWallet, "identity", async id => { assert.equal(id, a); return confirmed; });
+  const principal = { id: a, adminRole: "manager", permissions: ["crm"] };
+  const [row] = (await listIbClients(principal, { agent: b })).rows;
+  assert.equal(row.verified, true);
+  assert.equal(row.isKycVerified, false);
+  assert.deepEqual(row.tradingAccounts, [12345, 12346]);
+  assert.equal(row.accounts, undefined);
+  for (confirmed of [null, { broker: brokers[1] }]) {
+    const report = await listIbClients(principal, {});
+    assert.equal(report.ownDashboard, false);
+    assert.equal(report.rows[0].tradingAccounts, undefined);
+    assert.equal(report.rows[0].isKycVerified, undefined);
+  }
+  const team = await listIbClients({ id: b, adminRole: "manager", permissions: ["crm_view"] }, { agent: a });
+  assert.equal(team.rows[0].tradingAccounts, undefined);
+  assert.equal(identity.mock.callCount(), 3);
+  assert.equal(populated, 1);
 });
 
 test("fresh, due and exact saved outcome lists retain the agent scope", async t => {
